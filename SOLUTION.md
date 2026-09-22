@@ -382,6 +382,7 @@ flowchart TD
 - 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时 fail-open。
 - 观察与判定不读会话持久化文件，只依赖事件流与投影。
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、session/event、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
+- 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（approval/commands/typert/settings）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
 
 ## 运行时、并发与失败语义
 
