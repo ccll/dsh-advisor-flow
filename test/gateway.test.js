@@ -113,3 +113,81 @@ test('R-02-001/AC-02 gateway set 缺 patch 或异常载荷返回结构化错误�
     const junk = await gateway['advisor-flow/set'](null);
     assert.equal(junk.ok, false);
 });
+
+test('R-02-001/AC-01 持久写：set 成功时经写缝落 settings.yaml（merge 语义，仅写 advisor-flow 键）', async () => {
+    // 内存桩模拟 settings.yaml 文档：writer 只动 advisor-flow 顶层键
+    const doc = { other: { keep: true }, 'advisor-flow': structuredClone(BASE) };
+    const writes = [];
+    const { gateway } = makeGateway();
+    const withPersist = createConfigGateway({
+        getRawConfig: () => structuredClone(BASE),
+        applyResolved: () => {},
+        persist: async (raw) => {
+            writes.push(JSON.parse(JSON.stringify(raw)));
+            doc['advisor-flow'] = raw; // merge 语义：只覆盖本命名空间键
+        },
+    });
+    const result = await withPersist['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, true);
+    assert.equal(result.notice, '已保存并持久化到 settings.yaml。');
+    // 写回内容 = 合并后的 RAW 命名空间（JSON 序列化断言）
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].advisor.model, 'm2');
+    assert.equal(writes[0].advisor.provider, 'p');
+    assert.equal(writes[0].gates.plan.policy, 'review');
+    // 其他顶层键未被触碰（merge 语义由缝承载）
+    assert.equal(doc.other.keep, true);
+});
+
+test('R-02-001/AC-01 持久写缝缺失：保存保持运行时态，一次性显性化 + degradations 标注', async () => {
+    const degradations = [];
+    const { gateway } = createGatewayFixture({ persist: undefined, onPersistenceFailure: (reason) => degradations.push(reason) });
+    const result = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm9' } } } });
+    assert.equal(result.ok, true); // 运行时应用成功
+    assert.equal(result.persisted, false);
+    assert.equal(result.notice, '已保存到当前运行时；宿主重启后失效，持久化随后续版本提供。');
+    assert.deepEqual(degradations, ['settings-writer-seam-missing']);
+});
+
+test('R-02-001/AC-01 持久写抛错：运行时保存不回滚，失败显性化并标注 degradations', async () => {
+    const degradations = [];
+    const { gateway } = createGatewayFixture({
+        persist: async () => {
+            throw new Error('yaml write failed');
+        },
+        onPersistenceFailure: (reason) => degradations.push(reason),
+    });
+    const result = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm9' } } } });
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, false);
+    assert.match(result.persistError, /yaml write failed/);
+    assert.deepEqual(degradations, ['persist-write-failed']);
+});
+
+test('R-02-001/AC-01 非法 patch 不触发持久写', async () => {
+    const writes = [];
+    const { gateway } = createGatewayFixture({
+        persist: async (raw) => writes.push(raw),
+    });
+    const result = await gateway['advisor-flow/set']({ args: { patch: { advisor: { maxTokens: 'bad' } } } });
+    assert.equal(result.ok, false);
+    assert.equal(writes.length, 0);
+});
+
+/** gateway fixture with explicit persist/onPersistenceFailure injection. */
+function createGatewayFixture({ persist, onPersistenceFailure } = {}) {
+    let raw = structuredClone(BASE);
+    const applied = [];
+    const gateway = createConfigGateway({
+        getRawConfig: () => raw,
+        applyResolved: (resolved, nextRaw) => {
+            applied.push(nextRaw);
+            raw = nextRaw;
+        },
+        persist,
+        onPersistenceFailure,
+        logger: { warn() {}, error() {}, info() {} },
+    });
+    return { gateway, applied };
+}

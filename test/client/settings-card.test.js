@@ -27,7 +27,7 @@ const RAW = {
 };
 
 /** Host-side gateway handlers shared with test/gateway.test.js semantics. */
-function gatewayHandlers(rawRef) {
+function gatewayHandlers(rawRef, persist) {
     // 引入宿主实现本身，保证卡片测试与宿主语义零漂移
     return import('../../lib/gateway.js').then(({ createConfigGateway }) => {
         const gateway = createConfigGateway({
@@ -35,15 +35,16 @@ function gatewayHandlers(rawRef) {
             applyResolved: (resolved, nextRaw) => {
                 rawRef.current = nextRaw;
             },
+            persist,
         });
         return gateway;
     });
 }
 
-function makeCard({ raw = structuredClone(RAW) } = {}) {
+function makeCard({ raw = structuredClone(RAW), persist } = {}) {
     const rawRef = { current: structuredClone(raw) };
     const degradations = { askPolicy: 'approver-seam-missing' };
-    let gatewayPromise = gatewayHandlers(rawRef);
+    const gatewayPromise = gatewayHandlers(rawRef, persist);
     const handlers = {};
     const rpc = makeRpc({
         handlers: new Proxy({}, {
@@ -233,4 +234,29 @@ test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（�
     // 新编辑使旧回执失效
     controller.setField('advisor.provider', 'p2');
     assert.equal(controller.getState().savedNotice, undefined);
+});
+
+test('R-02-001/AC-01 保存回执双形态：写缝可得时「已保存并持久化」', async () => {
+    const writes = [];
+    const { controller, container } = await renderedCard({
+        persist: async (raw) => writes.push(raw),
+    });
+    controller.setField('advisor.model', 'm2');
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, true);
+    assert.match(result.notice, /已保存并持久化/);
+    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    assert.ok(notices[0].textContent.includes('持久化'));
+    assert.equal(writes.length, 1);
+});
+
+test('R-02-001/AC-01 保存回执双形态：写缝缺失时「仅运行时态」提示仍在', async () => {
+    const { controller } = await renderedCard({ persist: undefined });
+    controller.setField('advisor.model', 'm2');
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, false);
+    assert.match(result.notice, /当前运行时/);
+    assert.match(result.notice, /重启后失效/);
 });

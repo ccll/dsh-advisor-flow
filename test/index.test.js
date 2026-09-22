@@ -302,3 +302,36 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
     assert.equal(after.config.customKey.keep, true);
     assert.equal(after.config.advisor.model, 'm');
 });
+
+test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
+    const writes = [];
+    const llm = createFakeLlm([answer('ok')]);
+    const { ctx, registered } = makeCtx({ llm });
+    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    ctx.settings = { update: async (namespace, raw) => writes.push({ namespace, raw }) };
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
+        privacy: { history: 'off' },
+    });
+    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+    const result = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, true);
+    assert.match(result.notice, /已保存并持久化/);
+    // merge 语义：只写 advisor-flow 命名空间键，raw 为合并后的完整命名空间
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].namespace, 'advisor-flow');
+    assert.equal(writes[0].raw.advisor.model, 'm2');
+    assert.equal(writes[0].raw.advisor.maxTokens, 4096); // 兄弟键保留
+    assert.equal(writes[0].raw.privacy.history, 'off');
+    // 无持久化降级标注
+    assert.equal(services.status.snapshot().degradations.persistence, undefined);
+});
+
+test('R-02-001/AC-01 持久写缝缺失：一次性 error + degradations.persistence 标注', async () => {
+    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    assert.equal(services.status.snapshot().degradations.persistence, 'settings-writer-seam-missing');
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1); // 一次性
+});
