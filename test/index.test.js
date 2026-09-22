@@ -714,6 +714,9 @@ test('settings 服务缺 installSection 能力：section 缺失显性化（联�
 });
 
 test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带 {global:true}（全局可达性回归钉住）', () => {
+    // 断言强度边界：makeCtx 桩不模拟 cordis carrier scope 派发语义——本测试
+    // 只钉「注册形态必须带 {global:true}」（防全局性回归的机械可测征兆），
+    // 真实全局可达性由 staging/生产实测双轨承载（T-005 冒烟）。
     const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
     apply(ctx, { enabled: false });
     // 工具事件以 agent scope 为 carrier 派发（dsh-tools scopeTarget 实证），
