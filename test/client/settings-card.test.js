@@ -127,6 +127,14 @@ function findAll(node, predicate, out = []) {
     return out;
 }
 const byTag = (node, tag) => findAll(node, (candidate) => candidate.tag === tag);
+const findById = (node, id) => findAll(node, (candidate) => candidate.attrs.id === id)[0];
+
+/** 展开卡片（点击 header——默认折叠是 T-006 ①；error 强制展开不受此控）。 */
+function expandCard(container) {
+    const header = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_header'));
+    assert.ok(header, 'header 折叠按钮存在');
+    header.listeners.click[0]();
+}
 
 async function renderedCard(options = {}) {
     const { controller, rpc, rawRef } = makeCard(options);
@@ -138,24 +146,47 @@ async function renderedCard(options = {}) {
     return { controller, container, card, dom, rpc, rawRef };
 }
 
-test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单', async () => {
+test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（默认折叠 → 展开可见）', async () => {
     const { container, rpc } = await renderedCard();
     // 渲染首帧与显式 load 各触发一次读回；自有通道 = advisor-flow/get|set +
     // 模型目录（llm/listProviders、session/modelCatalog——目录失败回退为手
     // 动输入，见目录用例）。
     assert.ok(rpc.calls.length >= 1);
     assert.ok(rpc.calls.every((call) => /^(advisor-flow\/(get|set)|llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
+    // 默认折叠（T-006 ①）：header 存在、aria-expanded=false、无表单体
     const html = JSON.stringify(container);
     assert.ok(html.includes('Advisor Flow'));
-    assert.ok(html.includes('advisor provider'));
-    assert.ok(html.includes('启用 Advisor Flow'));
-    assert.ok(html.includes('密钥脱敏'));
-    assert.ok(html.includes('plan 门')); // 四门矩阵逐门渲染
-    assert.ok(html.includes('completion 门'));
+    assert.ok(html.includes('每次关键动作前由独立顾问模型评审并注入建议'));
+    const header = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_header'));
+    assert.equal(header.attrs['aria-expanded'], 'false');
+    assert.equal(byTag(container, 'fieldset').length, 0); // 折叠态无表单体
+    assert.ok(!html.includes('已折叠——点击头部展开配置')); // T-006 ②：无提示行
+    // chevron 为内联 SVG（T-006 ③）
+    const chevron = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_chevron'))[0];
+    assert.ok(chevron, 'chevron 容器存在');
+    assert.equal(byTag(chevron, 'svg').length, 1);
+    const path = byTag(chevron, 'path')[0];
+    assert.equal(path.attrs.d, 'M3 4.5L6 7.5L9 4.5'); // dsh-advisor 同款路径
+
+    // 展开（T-006 ④）：表单层级齐全（refresh 重建 DOM——重新查询节点）
+    expandCard(container);
+    const headerOpen = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_header'));
+    assert.equal(headerOpen.attrs['aria-expanded'], 'true');
+    assert.equal(byTag(headerOpen, 'svg').length, 1); // 展开态同款 SVG（旋转切换）
+    const htmlOpen = JSON.stringify(container);
+    assert.ok(htmlOpen.includes('advisor provider'));
+    assert.ok(htmlOpen.includes('启用 Advisor Flow'));
+    assert.ok(htmlOpen.includes('密钥脱敏'));
+    assert.ok(htmlOpen.includes('plan 门')); // 四门矩阵逐门渲染
+    assert.ok(htmlOpen.includes('completion 门'));
+    // footer 右对齐按钮组
+    assert.ok(htmlOpen.includes('advisor-flow-save'));
+    assert.ok(htmlOpen.includes('advisor-flow-discard'));
 });
 
 test('R-02-001/AC-01 卡片编辑经 set 保存成功：patch 提交、raw 吸收、表单回显新值', async () => {
     const { controller, container, rpc } = await renderedCard();
+    expandCard(container);
     controller.setField('advisor.model', 'm2');
     controller.setField('enabled', true);
     const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
@@ -175,6 +206,7 @@ test('R-02-001/AC-03 enabled 且缺 provider/model 时保存被阻断：不发�
     const { controller, container, rpc } = await renderedCard({
         raw: { enabled: true, advisor: { provider: 'p' } },
     });
+    expandCard(container);
     controller.setField('privacy.redactSecrets', false); // 触发一个无关键编辑
     const state = controller.getState();
     assert.match(state.validationError, /缺少 advisor\.model/);
@@ -201,6 +233,7 @@ test('R-02-001/AC-03 宿主拒绝保存时错误可见且表单保留（patch �
     const container = dom.createElement('div');
     renderSettingsCard({ document: dom, container, controller });
     await controller.load();
+    expandCard(container);
     controller.setField('advisor.model', 'm9');
     const result = await controller.save();
     assert.equal(result.ok, false);
@@ -220,27 +253,28 @@ test('R-02-001/AC-01 discard 放弃修改：patch 清空且无 gateway 写入', 
     assert.equal(rpc.calls.filter((call) => call.method === 'advisor-flow/set').length, 1);
 });
 
-test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径', async () => {
+test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径（checkboxRow 兄弟结构）', async () => {
     const { controller, container } = await renderedCard();
-    const checkboxes = byTag(container, 'input').filter((node) => node.attrs.type === 'checkbox');
-    const labels = byTag(container, 'label');
-    const enabledLabel = labels.find((node) => node.children.some((child) => child.tag === 'span' && child.textContent === '启用 Advisor Flow'));
-    assert.ok(enabledLabel, 'enabled 复选框的标签存在');
-    const enabledBox = enabledLabel.children.find((child) => child.tag === 'input');
+    expandCard(container);
+    // checkboxRow 兄弟结构（对齐 dsh-advisor）：label(htmlFor) 与 input 分立
+    const enabledBox = findById(container, 'advisor-enabled');
+    assert.ok(enabledBox, 'enabled 复选框存在（id 定位）');
     enabledBox.listeners.change[0]({ target: { checked: false } });
     assert.equal(controller.getState().patch.enabled, false);
-    // 门策略下拉：按门行定位（effort 选择器排在门矩阵之前，不能按序号取）
-    const gateRows = findAll(container, (node) => node.attrs['data-gate'] === 'plan');
-    const planSelect = byTag(gateRows[0], 'select')[0];
+    // 门策略下拉：id 定位（fieldset+legend 内）
+    const planSelect = findById(container, 'advisor-gate-plan-policy');
     assert.ok(planSelect, 'plan 门策略下拉存在');
     planSelect.listeners.change[0]({ target: { value: 'block' } });
     assert.equal(controller.getState().patch.gates.plan.policy, 'block');
-    const selects = byTag(container, 'select');
-    assert.ok(selects.length >= 7); // effort + 四门策略 + privacy history + repoContext
+    // 隐私档位下拉 id 定位
+    const historySelect = findById(container, 'advisor-privacy-history');
+    historySelect.listeners.change[0]({ target: { value: 'off' } });
+    assert.equal(controller.getState().patch.privacy.history, 'off');
 });
 
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
     const { controller, container } = await renderedCard();
+    expandCard(container);
     controller.setField('advisor.model', 'm2');
     const result = await controller.save();
     assert.equal(result.ok, true);
@@ -260,6 +294,7 @@ test('R-02-001/AC-01 保存回执双形态：写缝可得时「已保存并持�
     const { controller, container } = await renderedCard({
         persist: async (raw) => writes.push(raw),
     });
+    expandCard(container);
     controller.setField('advisor.model', 'm2');
     const result = await controller.save();
     assert.equal(result.ok, true);
@@ -296,6 +331,7 @@ test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，�
     const container = dom.createElement('div');
     renderSettingsCard({ document: dom, container, controller });
     await controller.load();
+    expandCard(container);
     controller.setField('advisor.model', 'm9');
     const result = await controller.save();
     assert.equal(result.ok, true);
@@ -312,6 +348,7 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     const { controller, container, rpc } = await renderedCard({
         persist: async (raw) => writes.push(raw),
     });
+    expandCard(container);
     // 渲染含 effort 字段与回退提示
     const html = JSON.stringify(container);
     assert.ok(html.includes('advisor reasoningEffort'));
@@ -321,10 +358,9 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     assert.ok(html.includes('关闭 (off)'));
     assert.ok(html.includes('模型不支持的档位将回退模型默认'));
 
-    // 选择档位 → 经 setField 进入 patch → save 往返保留
-    const labels = byTag(container, 'label');
-    const effortLabel = labels.find((node) => node.children.some((child) => child.tag === 'span' && child.textContent === 'advisor reasoningEffort'));
-    const effortSelect = effortLabel.children.find((child) => child.tag === 'select');
+    // 选择档位 → 经 setField 进入 patch → save 往返保留（id 定位）
+    const effortSelect = findById(container, 'advisor-reasoning-effort');
+    assert.ok(effortSelect, 'effort 下拉存在');
     effortSelect.listeners.change[0]({ target: { value: 'high' } });
     assert.equal(controller.getState().patch.advisor.reasoningEffort, 'high');
     const result = await controller.save();
@@ -417,6 +453,7 @@ test('R-02-001/AC-01 目录驱动三级联动：provider/model 下拉来自目�
     });
     assert.equal(controller.getState().catalogReady, true);
     assert.equal(controller.getState().degradations?.catalog, undefined);
+    expandCard(container);
     const html = JSON.stringify(container);
     assert.ok(html.includes('OpenAI (CPA)'));
     assert.ok(html.includes('GPT X')); // model 下拉来自所选 provider 的 groups.models
@@ -463,6 +500,7 @@ test('R-02-001/AC-01 null effort 保留：选「跟随模型默认」写 null �
 test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、effort 硬编码档位、降级一次性显性', async () => {
     const warns = [];
     const { controller, container } = await renderedCard({}); // 无目录桩 → 拉取失败
+    expandCard(container);
     const state = controller.getState();
     assert.equal(state.catalogReady, false);
     assert.equal(state.catalogDegraded, true);
