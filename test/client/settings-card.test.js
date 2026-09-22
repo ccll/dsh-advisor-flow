@@ -213,11 +213,14 @@ test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径', as
     const enabledBox = enabledLabel.children.find((child) => child.tag === 'input');
     enabledBox.listeners.change[0]({ target: { checked: false } });
     assert.equal(controller.getState().patch.enabled, false);
-    // 门策略下拉
-    const selects = byTag(container, 'select');
-    assert.ok(selects.length >= 5); // 四门策略 + privacy history + repoContext
-    selects[0].listeners.change[0]({ target: { value: 'block' } });
+    // 门策略下拉：按门行定位（effort 选择器排在门矩阵之前，不能按序号取）
+    const gateRows = findAll(container, (node) => node.attrs['data-gate'] === 'plan');
+    const planSelect = byTag(gateRows[0], 'select')[0];
+    assert.ok(planSelect, 'plan 门策略下拉存在');
+    planSelect.listeners.change[0]({ target: { value: 'block' } });
     assert.equal(controller.getState().patch.gates.plan.policy, 'block');
+    const selects = byTag(container, 'select');
+    assert.ok(selects.length >= 7); // effort + 四门策略 + privacy history + repoContext
 });
 
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
@@ -226,11 +229,11 @@ test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（�
     const result = await controller.save();
     assert.equal(result.ok, true);
     assert.match(result.notice, /当前运行时/);
-    assert.match(result.notice, /重启后失效/);
+    assert.match(result.notice, /重启后修改会丢失/);
     // 渲染可见
     const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
     assert.equal(notices.length, 1);
-    assert.ok(notices[0].textContent.includes('重启后失效'));
+    assert.ok(notices[0].textContent.includes('重启后修改会丢失'));
     // 新编辑使旧回执失效
     controller.setField('advisor.provider', 'p2');
     assert.equal(controller.getState().savedNotice, undefined);
@@ -258,7 +261,7 @@ test('R-02-001/AC-01 保存回执双形态：写缝缺失时「仅运行时态�
     assert.equal(result.ok, true);
     assert.equal(result.persisted, false);
     assert.match(result.notice, /当前运行时/);
-    assert.match(result.notice, /重启后失效/);
+    assert.match(result.notice, /重启后修改会丢失/);
 });
 
 test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，不误读为功能缺失）', async () => {
@@ -286,4 +289,37 @@ test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，�
     assert.equal(controller.getState().persistError, 'Error: yaml write failed');
     const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
     assert.ok(notices[0].textContent.includes('原因：'));
+});
+
+test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch、save 往返保留', async () => {
+    const writes = [];
+    const { controller, container, rpc } = await renderedCard({
+        persist: async (raw) => writes.push(raw),
+    });
+    // 渲染含 effort 字段与回退提示
+    const html = JSON.stringify(container);
+    assert.ok(html.includes('advisor reasoningEffort'));
+    assert.ok(html.includes('不指定（跟随模型默认）'));
+    assert.ok(html.includes('低 (low)'));
+    assert.ok(html.includes('最大 (max)'));
+    assert.ok(html.includes('关闭 (off)'));
+    assert.ok(html.includes('模型不支持的档位将回退模型默认'));
+
+    // 选择档位 → 经 setField 进入 patch → save 往返保留
+    const labels = byTag(container, 'label');
+    const effortLabel = labels.find((node) => node.children.some((child) => child.tag === 'span' && child.textContent === 'advisor reasoningEffort'));
+    const effortSelect = effortLabel.children.find((child) => child.tag === 'select');
+    effortSelect.listeners.change[0]({ target: { value: 'high' } });
+    assert.equal(controller.getState().patch.advisor.reasoningEffort, 'high');
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
+    assert.equal(setCall.payload.args.patch.advisor.reasoningEffort, 'high');
+    const written = writes[0];
+    assert.equal(written.advisor.reasoningEffort, 'high'); // 写回内容保留档位
+
+    // 选回「不指定」→ 空值语义（undefined = 跟随模型默认，非法值校验不拒）
+    effortSelect.listeners.change[0]({ target: { value: '' } });
+    assert.equal(controller.getState().patch.advisor.reasoningEffort, undefined);
+    assert.equal(controller.validate(), undefined); // 空值不触发非空字符串拒绝
 });

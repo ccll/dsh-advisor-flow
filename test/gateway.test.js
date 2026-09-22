@@ -146,7 +146,7 @@ test('R-02-001/AC-01 持久写缝缺失：保存保持运行时态，一次性�
     const result = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm9' } } } });
     assert.equal(result.ok, true); // 运行时应用成功
     assert.equal(result.persisted, false);
-    assert.equal(result.notice, '已保存到当前运行时；宿主重启后失效（持久写缝未接入或未联调验证）。');
+    assert.equal(result.notice, '已保存到当前运行时；持久化尚未启用，重启后修改会丢失。');
     assert.deepEqual(degradations, ['settings-writer-seam-missing']);
 });
 
@@ -254,7 +254,7 @@ test('R-02-001/AC-01 回执三态：persisted / 写失败专属文案 / 缺失�
     notices.push((await missingSeam['advisor-flow/set']({ args: { patch: { advisor: { model: 'm4' } } } })).notice);
     assert.deepEqual(
         [...new Set(notices)],
-        ['已保存并持久化到 settings.yaml。', '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。', '已保存到当前运行时；宿主重启后失效（持久写缝未接入或未联调验证）。'],
+        ['已保存并持久化到 settings.yaml。', '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。', '已保存到当前运行时；持久化尚未启用，重启后修改会丢失。'],
     );
 });
 
