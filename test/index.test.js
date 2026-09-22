@@ -712,3 +712,17 @@ test('settings 服务缺 installSection 能力：section 缺失显性化（联�
     assert.equal(services.status.snapshot().degradations.settingsSection, 'install-section-missing');
     assert.ok(logs.error.some((message) => message.includes('settings section 未注册')));
 });
+
+test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带 {global:true}（全局可达性回归钉住）', () => {
+    const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
+    apply(ctx, { enabled: false });
+    // 工具事件以 agent scope 为 carrier 派发（dsh-tools scopeTarget 实证），
+    // 裸监听收不到子代理/会话 scope 的调用——T-005 实测第六发现（门在真实
+    // 会话零触发）的根因即缺 {global:true}；dsh-tools 自带 invariant 监听
+    // tools/* 事件亦用 {global:true}。此断言拦截该全局性回归。
+    for (const toolEvent of ['tools/pre-execute', 'tools/result']) {
+        const registration = subscriptions.find((entry) => entry.event === toolEvent);
+        assert.ok(registration, `${toolEvent} 监听已注册`);
+        assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
+    }
+});
