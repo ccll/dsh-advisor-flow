@@ -129,3 +129,29 @@ test('R-01-004/AC-01 同工具两次不同执行（不同标识）均正常计�
     observer.onEvent({ type: 'tool/result', session: 's2', tool: 'bash', ok: false, execId: 'exec-A' });
     assert.equal(observer.failureStreak('s2', 'bash'), 1);
 });
+
+test('R-01-004/AC-01 result 事件只带无关 id 字段时落共享桶，不产生孤桶（窄版会话解析钉住）', () => {
+    const { observer } = makeObserver();
+    // result 事件的 id 字段是执行标识而非会话：窄版解析不得以它开孤桶
+    observer.onEvent({ type: 'tool/result', id: 'exec-9', tool: 'bash', ok: false });
+    assert.equal(observer.failureStreak('default', 'bash'), 1); // 落 default 共享桶，计数照常
+    assert.equal(observer.failureStreak('exec-9', 'bash'), 0); // 无以执行 id 命名的孤桶
+    // 带 sessionId 的正常事件仍按会话归桶
+    observer.onEvent({ type: 'tool/result', sessionId: 's1', tool: 'bash', ok: false, id: 'exec-9' });
+    assert.equal(observer.failureStreak('s1', 'bash'), 1);
+});
+
+test('R-02-005 sessionOf 宽窄两种形态：字符串直传、载体 id 兜底、result 窄版不吞裸 id', async () => {
+    const { sessionOf, sessionOfEvent } = await import('../lib/util.js');
+    // 字符串直传（session/disposed 可能以纯字符串 id 直传）
+    assert.equal(sessionOf('s1'), 's1');
+    assert.equal(sessionOfEvent('s1'), 's1');
+    // 载体对象 id 兜底仅限宽版
+    assert.equal(sessionOf({ id: 's1' }), 's1');
+    assert.equal(sessionOfEvent({ id: 's1' }), 'default'); // 窄版不看裸 id
+    // result 事件只带无关 id 字段 → 共享桶（失败门不静默失明）
+    const { observer } = makeObserver();
+    observer.onEvent({ type: 'tool/result', id: 'exec-9', tool: 'bash', ok: false });
+    assert.equal(observer.failureStreak('default', 'bash'), 1);
+    assert.equal(observer.failureStreak('exec-9', 'bash'), 0);
+});

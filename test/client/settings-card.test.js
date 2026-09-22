@@ -218,3 +218,19 @@ test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径', as
     selects[0].listeners.change[0]({ target: { value: 'block' } });
     assert.equal(controller.getState().patch.gates.plan.policy, 'block');
 });
+
+test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
+    const { controller, container } = await renderedCard();
+    controller.setField('advisor.model', 'm2');
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    assert.match(result.notice, /当前运行时/);
+    assert.match(result.notice, /重启后失效/);
+    // 渲染可见
+    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    assert.equal(notices.length, 1);
+    assert.ok(notices[0].textContent.includes('重启后失效'));
+    // 新编辑使旧回执失效
+    controller.setField('advisor.provider', 'p2');
+    assert.equal(controller.getState().savedNotice, undefined);
+});
