@@ -44,8 +44,8 @@ id: T-001
 |---|---|---|
 | 成功 | 适用：咨询往返与用量记录 | `test/consultation.test.js::R-01-001/AC-01`、`test/usage.test.js::R-02-002/AC-01` |
 | 异常 | 适用：失败分类、超时、禁用态诊断 | `test/consultation.test.js::R-01-001/AC-02`、`test/consultation.test.js::R-02-005/AC-01` |
-| 边界配置 | 适用：未知键、缺模型、档位边界 | `test/config.test.js::R-02-001/AC-01..03`、`test/redact.test.js::R-02-004/AC-03` |
-| 副作用 | 适用：台账落盘需可回放 | `test/usage.test.js::R-02-002/AC-02..03` |
+| 边界配置 | 适用：未知键、缺模型、档位边界 | `test/config.test.js::R-02-001/AC-01`、`test/config.test.js::R-02-001/AC-02`、`test/config.test.js::R-02-001/AC-03`、`test/redact.test.js::R-02-004/AC-03` |
+| 副作用 | 适用：台账落盘需可回放 | `test/usage.test.js::R-02-002/AC-02`、`test/usage.test.js::R-02-002/AC-03` |
 | 跨实现 | 不适用：单一实现 | — |
 
 ## 终态与证据
