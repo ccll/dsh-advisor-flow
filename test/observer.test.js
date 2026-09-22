@@ -86,3 +86,27 @@ test('R-02-005 观察器容错：垃圾事件与内部异常不外抛、不断�
     assert.equal(breaking.onEvent({ type: 'tool/result', session: 's', tool: 't', ok: false }), undefined);
     assert.equal(logs.error.length, 1);
 });
+
+test('R-01-004/AC-01 双缝去重：同一执行结果经两缝先后投递只计一次', () => {
+    const { observer } = makeObserver();
+    // 生命周期缝（tools/result）与 session/event 缝携带同一执行标识
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'exec-1' });
+    observer.onEvent({ type: 'result', session: 's1', tool: 'bash', ok: false, execId: 'exec-1' });
+    assert.equal(observer.failureStreak('s1', 'bash'), 1);
+    // 同一执行标识的后续投递（含矛盾的成功报告）都被去重：首报定成败
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: true, execId: 'exec-1' });
+    assert.equal(observer.failureStreak('s1', 'bash'), 1);
+    // 新执行的真正成功照常清零
+    observer.onEvent({ type: 'result', session: 's1', tool: 'bash', ok: true, execId: 'exec-2' });
+    assert.equal(observer.failureStreak('s1', 'bash'), 0);
+});
+
+test('R-01-004/AC-01 仅单缝投递时正常计数（两种实测结论下都稳健）', () => {
+    const { observer } = makeObserver();
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'e1' });
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'e2' });
+    assert.equal(observer.failureStreak('s1', 'bash'), 2);
+    // 无执行标识的事件保守逐次计数（宁可阈值偏差一格，不可让失败门失去输入）
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false });
+    assert.equal(observer.failureStreak('s1', 'bash'), 3);
+});

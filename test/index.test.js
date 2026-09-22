@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
 import { createFakeLlm, answer } from './helpers.js';
 
-function makeCtx({ withTools = true, withEvents = true, llm } = {}) {
+function makeCtx({ withTools = true, withEvents = true, llm, approvals } = {}) {
     const registered = [];
     const subscriptions = [];
     const logs = { error: [], warn: [], info: [] };
@@ -20,6 +20,7 @@ function makeCtx({ withTools = true, withEvents = true, llm } = {}) {
                 on: (event, handler, options) => subscriptions.push({ event, handler, options }),
             }
             : {}),
+        ...(approvals ? { approvals } : {}),
         ...(withTools ? { tools: { register: (tool) => registered.push(tool) } } : {}),
     };
     return { ctx, registered, subscriptions, logs };
@@ -34,8 +35,8 @@ test('工具注册缝缺失时启动期 logger.error 显性化并 fail loud（�
     const { ctx, registered, logs } = makeCtx({ withTools: false, llm: createFakeLlm([]) });
     assert.throws(() => apply(ctx, entryConfig), /工具注册缝缺失/);
     assert.equal(registered.length, 0);
-    assert.equal(logs.error.length, 1);
-    assert.match(logs.error[0], /advisor-flow/);
+    assert.equal(logs.error.filter((message) => message.includes('工具注册缝')).length, 1);
+    assert.ok(logs.error.some((message) => message.includes('advisor-flow')));
 });
 
 test('注册缝调用抛错同样 fail loud，不静默降级', () => {
@@ -44,7 +45,7 @@ test('注册缝调用抛错同样 fail loud，不静默降级', () => {
         throw new Error('registry broken');
     };
     assert.throws(() => apply(ctx, entryConfig), /registry broken/);
-    assert.match(logs.error[0], /注册失败/);
+    assert.ok(logs.error.some((message) => message.includes('注册失败')));
 });
 
 test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面可咨询可配置', async () => {
@@ -131,4 +132,84 @@ test('R-02-003/AC-02 状态快照读活配置：applyConfig 后门配置即时�
     assert.equal(snapshot.enabled, true);
     assert.equal(snapshot.advisor.model, 'm2');
     assert.equal(snapshot.gates.plan.enabled, true);
+});
+
+test('session/event 接线：stepped turn 与压缩事件转调 delivery 冷却与重置（事件形状为联调验证项，不锚定 AC）', async () => {
+    const llm = createFakeLlm([answer('意见。'), answer('意见2。')]);
+    const { ctx, subscriptions } = makeCtx({ llm });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { plan: { enabled: true, policy: 'review' } },
+    });
+    const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
+    assert.equal(sessionEvent.options?.global, true);
+
+    // blocker 命中 → gate 送达（steer，冷却武装）
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute');
+    const agent = { id: 's1', inject() {}, steer() {} };
+    services.delivery.registerAgent(agent);
+    await preExecute.handler({ tool: 'exit_plan_mode', args: {}, session: 's1' }, () => ({ kind: 'allow' }));
+    // 用 blocker 咨询结果武装冷却
+    const llmPrograms = llm.calls.length;
+    assert.ok(llmPrograms >= 1);
+    // 直接驱动送达以武装冷却（避免依赖顾问 severity）
+    services.delivery.deliver('s1', { adviceId: 'adv-x', severity: 'blocker', text: 't' });
+    assert.equal(services.delivery.status().cooldowns.s1, 2);
+    // stepped turn 完成 → 冷却倒数
+    sessionEvent.handler({ id: 's1' }, { type: 'turn/end' });
+    assert.equal(services.delivery.status().cooldowns.s1, 1);
+    // 压缩事件 → 冷却与观察状态重置
+    sessionEvent.handler({ id: 's1' }, { type: 'session/compact' });
+    assert.equal(services.delivery.status().cooldowns.s1, undefined);
+    // 未知类型被忽略（不抛出、不误触发）
+    sessionEvent.handler({ id: 's1' }, { type: 'whatever/new' });
+    assert.equal(services.delivery.status().cooldowns.s1, undefined);
+});
+
+test('双缝观测保留：tools/result 与 session/event 均投喂观察器，执行标识去重（缝取舍归联调，不锚定 AC）', async () => {
+    const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
+    const toolsResult = subscriptions.find((s) => s.event === 'tools/result');
+    assert.ok(toolsResult, '生命周期 tools/result 缝必须保留投喂');
+    assert.ok(sessionEvent, 'session/event 缝必须投喂');
+    // 两缝投递同一执行 → 失败计数只 +1
+    toolsResult.handler({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'x1' });
+    sessionEvent.handler({ id: 's1' }, { type: 'tool/result', tool: 'bash', ok: false, execId: 'x1' });
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 1);
+    // 仅单缝（session/event）继续投递 → 正常累加
+    sessionEvent.handler({ id: 's1' }, { type: 'tool/result', tool: 'bash', ok: false, execId: 'x2' });
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 2);
+});
+
+test('approver 缝缺失显性化：一次性 error + 状态快照 degraded 标注（不锚定 AC）', () => {
+    const { ctx, logs: captured } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    assert.ok(captured.error.some((message) => message.includes('人工审批缝不可得')));
+    assert.equal(captured.error.filter((message) => message.includes('人工审批缝不可得')).length, 1); // 仅一次性
+    assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
+});
+
+test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人工决定（拒绝 → deny）', async () => {
+    const decisions = [];
+    const { ctx, subscriptions } = makeCtx({
+        llm: createFakeLlm([answer('重复执行存在风险。')]),
+        approvals: { request: async (request) => {
+            decisions.push(request);
+            return false;
+        } },
+    });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { loop: { enabled: true, policy: 'ask', threshold: 1 } },
+    });
+    assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 缝可得 → 不降级
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'deny');
+    assert.ok(decision.reason.includes('人工拒绝'));
+    assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
+    assert.equal(decisions[0].gate, 'loop');
 });

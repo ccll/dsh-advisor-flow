@@ -15,6 +15,7 @@ function makeGate({
     delivery = () => 'inject',
     observer = createSessionObserver({ logger: { info() {}, error() {} } }),
     consultImpl,
+    stopSession,
 } = {}) {
     const logs = { error: [], info: [] };
     const logger = {
@@ -47,6 +48,7 @@ function makeGate({
             return delivery(sessionId, advice);
         },
         policyLookup: (gateKind) => gates[gateKind],
+        stopSession,
         approver,
         logger,
     });
@@ -159,25 +161,44 @@ test('R-01-004/AC-02 失败门 block 策略且评审存在 blocker 意见时该�
     assert.equal(nextCalls.length, 0);
 });
 
-test('R-01-004/AC-03 block-session 策略停止会话执行并记录意见汇总，且该处置只在此门发生', async () => {
+test('R-01-004/AC-03 block-session 策略保证路径为 deny(reason)，会话停止经注入钩子并留痕', async () => {
+    // 钩子已接入：命中时调用 stopSession（带上下文），并留痕 sessionStopped
+    const stops = [];
     const { engine, observer, logs } = makeGate({
         gates: { failure: { enabled: true, policy: 'block-session', threshold: 1 } },
         results: [{ ok: true, adviceId: 'adv-3', severity: 'blocker', text: '连续失败且存在数据损坏风险，停止会话。' }],
+        stopSession: (context) => stops.push(context),
     });
     observer.recordResult('s1', 'bash', false);
     const decision = await engine.handlePreExecute({ tool: 'bash', args: {}, session: 's1' }, allow);
     assert.equal(decision.kind, 'deny');
-    assert.equal(decision.stopSession, true);
+    assert.ok(decision.reason.includes('停止会话'));
+    assert.equal(decision.stopSession, undefined); // 字段超出已验证契约，不再外露
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0].sessionId, 's1');
+    assert.equal(stops[0].adviceId, 'adv-3');
     assert.ok(logs.error.some((entry) => entry.message.includes('block-session') && entry.fields.summary.includes('停止会话')));
 
-    // 对照：其他门的 block 策略绝不产生 stopSession
+    // 钩子缺失：deny 兜底照常，且「会话停止未执行」显性化（不静默）
+    const withoutHook = makeGate({
+        gates: { failure: { enabled: true, policy: 'block-session', threshold: 1 } },
+        results: [{ ok: true, adviceId: 'adv-3b', severity: 'blocker', text: '停止会话。' }],
+    });
+    withoutHook.observer.recordResult('s1', 'bash', false);
+    const fallback = await withoutHook.engine.handlePreExecute({ tool: 'bash', args: {}, session: 's1' }, allow);
+    assert.equal(fallback.kind, 'deny');
+    assert.ok(withoutHook.logs.error.some((entry) => entry.message.includes('会话停止未执行')));
+
+    // 对照：其他门的 block 策略绝不触发会话停止钩子
+    const stopsOther = [];
     const other = makeGate({
         gates: { plan: { enabled: true, policy: 'block' } },
         results: [{ ok: true, adviceId: 'adv-4', severity: 'blocker', text: '阻止。' }],
+        stopSession: (context) => stopsOther.push(context),
     });
     const planDecision = await other.engine.handlePreExecute({ tool: 'exit_plan_mode', args: {}, session: 's1' }, allow);
     assert.equal(planDecision.kind, 'deny');
-    assert.equal(planDecision.stopSession, undefined);
+    assert.equal(stopsOther.length, 0); // 该处置只在此门命中时发生
 });
 
 test('R-01-005/AC-01 等价调用重复达到阈值时，该次调用执行前被拦截', async () => {
@@ -419,4 +440,27 @@ test('R-01-003/AC-02 deny 原因摘要有界且 adviceSummary 折叠空白', () 
     const summary = adviceSummary({ text: long });
     assert.ok(summary.length <= 200);
     assert.ok(summary.endsWith('…'));
+});
+
+test('next() 派发错误透传：nextSettled 后的异常原样上抛（waterfall 契约），不吞错', async () => {
+    const { engine } = makeGate({
+        gates: { plan: { enabled: true, policy: 'review' } },
+        results: [{ ok: true, adviceId: 'adv-1', severity: 'nit', text: 'ok' }],
+    });
+    const boom = new Error('downstream exploded');
+    await assert.rejects(
+        engine.handlePreExecute({ tool: 'exit_plan_mode', args: {}, session: 's1' }, () => {
+            throw boom;
+        }),
+        (error) => error === boom, // 同一错误对象原样透传
+    );
+    // 对照：门自身逻辑的错误仍 fail-open 放行，不上抛
+    const failing = makeGate({
+        gates: { plan: { enabled: true, policy: 'review' } },
+        consultImpl: () => {
+            throw new Error('gate-side failure');
+        },
+    });
+    const decision = await failing.engine.handlePreExecute({ tool: 'exit_plan_mode', args: {}, session: 's1' }, allow);
+    assert.equal(decision.kind, 'allow');
 });

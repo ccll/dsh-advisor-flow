@@ -32,22 +32,26 @@ test('R-01-003/AC-03 review 意见经送达到达会话：nit 走 inject 非唤�
     assert.ok(calls[0].message.source.summary.length <= 120);
 });
 
-test('R-01-003/AC-03 concern/blocker 走 steer 唤醒通道；immuneTurns 冷却内降级 inject', () => {
+test('R-01-003/AC-03 冷却窗口内仅压制同级 interrupting；不同级照常唤醒送达', () => {
     const { agent, calls } = makeAgent();
     const delivery = createAdviceDelivery({ immuneTurns: 2 });
     delivery.registerAgent(agent);
 
     assert.equal(delivery.deliver('s1', advice({ severity: 'concern' })), 'steer');
-    // 冷却窗口内：interrupting 降级为 inject
-    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'inject');
-    // 一个 stepped turn 完成后仍在冷却内
-    delivery.onSteppedTurnEnd('s1');
+    // 冷却窗口内：同级 concern 降级为 inject（「不再送同级」）
+    assert.equal(delivery.deliver('s1', advice({ severity: 'concern' })), 'inject');
+    // 窗口内不同级 blocker：照常唤醒送达，并以 blocker 重新武装冷却
+    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'steer');
+    // 窗口内同级 blocker 降级
     assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'inject');
     // 冷却耗尽后恢复 steer
     delivery.onSteppedTurnEnd('s1');
+    delivery.onSteppedTurnEnd('s1');
     assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'steer');
-    assert.equal(calls.filter((c) => c.channel === 'steer').length, 2);
+    assert.equal(calls.filter((c) => c.channel === 'steer').length, 3);
     assert.equal(calls.filter((c) => c.channel === 'inject').length, 2);
+    // nit 永远 inject，不受冷却影响
+    assert.equal(delivery.deliver('s1', advice({ severity: 'nit' })), 'inject');
 });
 
 test('R-01-003/AC-03 无 agent 的会话意见被丢弃并留 warn，不抛出', () => {
