@@ -287,9 +287,9 @@ flowchart TD
   - `/advisor gates`：门配置与阈值只读回读。
   - `/advisor on|off`：会话级临时开关，不写持久配置。
 - **设置命名空间** `advisor-flow`（settings.yaml 顶层键）：
-  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`
+  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`、`advisor.retryAttempts`（瞬态重试次数，默认 1）
   - `gates.plan|failure|loop|completion`：各含 `enabled`、`policy(review|ask|block)`、阈值（failure/loop 另有 `threshold`，failure 另有 `policy(block|block-session)`）
-  - `privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)`、`privacy.fileContent(默认 false)`、`privacy.redactSecrets`
+  - `privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)`、`privacy.toolResultMaxBytes`（capped 档字节上限）、`privacy.fileContent(默认 false)`、`privacy.redactSecrets`
   - `budget.maxPerSession`（0 = 不限）
   - 未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
 - **注入消息格式**：`[advisor:{severity}] <摘要>`；意见正文附 adviceId 引用。
