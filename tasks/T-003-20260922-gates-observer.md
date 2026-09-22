@@ -5,7 +5,7 @@ id: T-003
 ---
 # 门控服务与会话观察
 
-状态: active
+状态: completed
 关联: R-01-003、R-01-004、R-01-005、R-01-006（四门）、R-02-005/AC-02（门 fail-open）；关联决策 C-001、C-002
 风险等级: high
 
@@ -45,3 +45,16 @@ id: T-003
 | 跨实现 | 不适用：单一实现 | — |
 
 ## 终态与证据
+
+- 实现: lib/observer.js（GateState：失败计数/循环等价表/压缩重置/容错）、lib/gates/{plan,loop,failure,completion,index,judges}.js（四门纯函数判定 + pre-execute 处理器：门序首中即审、review/ask/block/block-session 处置、命中后计数重置、ask_advisor 豁免、fail-open 全分支、next() 透传）、lib/delivery.js（severity→inject/steer、immuneTurns 同级冷却）、lib/index.js 接线（classifySessionEvent 单源、approver 探测显性化、会话停止注入钩子、fail-loud 缝纪律）。
+- 测试: `node --test` 95/95 全绿（含 2f31926 补强）；test-anchored 29/30（仅 R-01-002/AC-02 留命令面）；lint warnings 无 unknown anchor。
+- SOLUTION 对照: 双轴复审逐项核对一致；门内联等待（C-001）全分支无 stall 经 Standards 轴核实。
+- commit: 5f00334
+- commit: c692de7
+- commit: 2f31926
+- review:
+  - 审核方: 双轴独立评审——Standards 轴代理 eb77d407-3912-4c16-86c8-da1c1997a42d、Spec 轴代理 8f19eb7a-2266-4fb4-9220-ef1f316e1ba8（同 T-001 审核方），code-review skill 流程
+  - 目的理解: 四门前置拦截是本移植核心价值，high 风险任务；约束 = SOLUTION 门控/观察/送达契约、DOMAIN 非阻断不变量、C-001 内联等待语义、R-01-003..006 与 R-02-005/AC-02 验收点；reviewer 开审前已据 map 建立该理解
+  - 执行方式: code-review skill 双轴并行子代理；Standards 基线 = AGENTS/CONVENTIONS/handoff 硬约束 + Fowler 清单 + T-003 设计要求；Spec 基线 = 任务书 + SOLUTION 时序 + PRD/DOMAIN；范围 63bfec6..2f31926
+  - 问题与修复: 首轮 Standards 1 高（immuneTurns 接线缺失致冷却永不递减）+ 2 中（next() 吞错、双缝双计）+ 3 坏味道，Spec 2 中（approver 缝未接、冷却不推进）+ 5 项核验——经 c692de7 修复；复审 6 项全部确认解决，双轴新增轻微项（fail-open 放行形态、JSDoc 失实、首报定成败一致性）已移交 T-002 清单随下一实现任务收敛；advisor 注入三次纠偏（去重键共享标识、三号 stub 防过宽键、键宽语义实测项），全部落入实现或 T-002 清单
+  - 复审结论: 双轴终确认均通过，无阻塞未决事项；事件形状/缝契约/成败判定一致性的运行时实测归 T-002 联调清单
