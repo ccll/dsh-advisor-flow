@@ -62,9 +62,14 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
         }
     }
 
+    const providedEntries = []; // reflect.provide 注册记录（cordis Service 基类路径）
     const target = {
         logger: () => logger,
         root: { get: (service) => (service === 'llm' ? llm : undefined) },
+        reflect: { provide: (name, service) => {
+            providedEntries.push({ name, service });
+            provide(name, service);
+        } },
         ...(withEvents
             ? {
                 on: (event, handler, options) => subscriptions.push({ event, handler, options }),
@@ -132,7 +137,18 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
         }
         runChild(child);
     };
-    return { ctx, registered, subscriptions, activated, unactivated, logs, provide, llm };
+    function providedService(name) {
+        return [...providedEntries].reverse().find((entry) => entry.name === name)?.service;
+    }
+    return { ctx, registered, subscriptions, activated, unactivated, logs, provide, llm, providedService, settle };
+}
+
+
+/** 等待动态 import（typert-gateway）解析与子上下文异步清理完成。 */
+async function settle(turns = 8) {
+    for (let i = 0; i < turns; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
 }
 
 const entryConfig = {
@@ -376,7 +392,7 @@ test('commands 条件子上下文激活：命令经注册表缝挂载并可执�
 test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于后续咨询', async () => {
     const gatewayEndpoints = [];
     const llm = createFakeLlm([answer('一。'), answer('二。')]);
-    const { ctx, registered: tools } = makeCtx({
+    const { ctx, registered: tools, providedService } = makeCtx({
         llm,
         typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
     });
@@ -384,13 +400,12 @@ test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于�
         enabled: true,
         advisor: { provider: 'test', model: 'm1' },
     });
-    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 激活即清除
-    const get = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/get').handler;
-    const set = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
-
-    const got = await get({});
+    await settle();
+    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 动态装配完成后清除
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
     assert.equal(got.config.advisor.model, 'm1');
-    const result = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    const result = await gateway.set({ advisor: { model: 'm2' } });
     assert.equal(result.ok, true);
 
     // 即时生效：set 后的下一次咨询用新模型（R-02-001/AC-01）
@@ -424,7 +439,7 @@ test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询�
 test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回并修复，保存不丢键', async () => {
     const gatewayEndpoints = [];
     const llm = createFakeLlm([answer('ok')]);
-    const { ctx } = makeCtx({
+    const { ctx, providedService } = makeCtx({
         llm,
         typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
     });
@@ -437,10 +452,10 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
     });
     assert.equal(services.status.snapshot().enabled, false); // 运行时禁用
 
-    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 激活即清除
-    const get = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/get').handler;
-    const set = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
-    const got = await get({});
+    await settle();
+    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 动态装配完成后清除
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
     // raw 保留了真实键（非法 maxTokens 与合法 privacy/customKey 都在）
     assert.equal(got.config.advisor.maxTokens, 'broken');
     assert.equal(got.config.privacy.history, 'off');
@@ -448,9 +463,9 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
     assert.equal(got.error !== undefined, true);
 
     // 修复保存：只修 maxTokens —— 合法键与未知键都不丢
-    const result = await set({ args: { patch: { advisor: { maxTokens: 8192 } } } });
+    const result = await gateway.set({ advisor: { maxTokens: 8192 } });
     assert.equal(result.ok, true);
-    const after = await get({});
+    const after = await gateway.get();
     assert.equal(after.config.advisor.maxTokens, 8192);
     assert.equal(after.config.privacy.history, 'off');
     assert.equal(after.config.customKey.keep, true);
@@ -460,7 +475,7 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
 test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
     const writes = [];
     const llm = createFakeLlm([answer('ok')]);
-    const { ctx, registered } = makeCtx({
+    const { ctx, registered, providedService } = makeCtx({
         llm,
         settings: { update: async (namespace, raw) => writes.push({ namespace, raw }) },
         typert: { register: (name, handler) => registered.push({ name, handler }) },
@@ -470,8 +485,9 @@ test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 ad
         advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
         privacy: { history: 'off' },
     });
-    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
-    const result = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    await settle(); // 动态装配（typert-gateway 服务注册 + 端点声明）完成
+    const gateway = services && providedService('advisor-flow');
+    const result = await gateway.set({ advisor: { model: 'm2' } });
     assert.equal(result.ok, true);
     assert.equal(result.persisted, true);
     assert.match(result.notice, /已保存并持久化/);
@@ -495,7 +511,7 @@ test('R-02-001/AC-01 持久写缝缺失：一次性 error + degradations.persist
 test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
     let shouldThrow = true;
     const llm = createFakeLlm([]);
-    const { ctx, registered, logs } = makeCtx({
+    const { ctx, registered, logs, providedService } = makeCtx({
         llm,
         typert: { register: (name, handler) => registered.push({ name, handler }) },
         settings: {
@@ -507,24 +523,25 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢�
         },
     });
     const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
-    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+    await settle();
+    const gateway = providedService('advisor-flow');
 
     // 失败 → 标注 + 一次性 error
-    const first = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    const first = await gateway.set({ advisor: { model: 'm2' } });
     assert.equal(first.persisted, false);
     assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1);
 
     // 恢复（写入修好）→ 保存成功 → 标注清除
     shouldThrow = false;
-    const recovered = await set({ args: { patch: { advisor: { model: 'm3' } } } });
+    const recovered = await gateway.set({ advisor: { model: 'm3' } });
     assert.equal(recovered.persisted, true);
     assert.match(recovered.notice, /已保存并持久化/);
     assert.equal(services.status.snapshot().degradations.persistence, undefined);
 
     // 再失败 → 再次显性（错误日志第二次出现）
     shouldThrow = true;
-    const again = await set({ args: { patch: { advisor: { model: 'm4' } } } });
+    const again = await gateway.set({ advisor: { model: 'm4' } });
     assert.equal(again.persisted, false);
     assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
@@ -548,7 +565,7 @@ test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿
     const decisions = [];
     const writes = [];
     const endpoints = [];
-    const { ctx, provide, registered, subscriptions, logs, llm } = makeCtx({ llm: createFakeLlm([answer('意见。')]) });
+    const { ctx, provide, registered, subscriptions, logs, llm, providedService } = makeCtx({ llm: createFakeLlm([answer('意见。')]) });
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
@@ -569,11 +586,13 @@ test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿
     provide('commands', { register: (spec) => registered.push(spec) || (() => {}) });
     provide('settings', { update: async (namespace, raw) => writes.push({ namespace, raw }) });
     provide('typert', { register: (name, handler) => endpoints.push({ name, handler }) });
+    await settle(); // 动态装配完成（服务注册 + 端点声明）
     degradations = services.status.snapshot().degradations;
     assert.equal(degradations.askPolicy, undefined);
     assert.equal(degradations.commands, undefined);
     assert.equal(degradations.settingsCard, undefined);
     assert.equal(degradations.persistence, undefined);
+    const gateway = providedService('advisor-flow');
 
     // 激活后的缝真实可用：ask 门经审批拒绝 → deny；gateway set 可用
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
@@ -581,8 +600,7 @@ test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿
     assert.equal(decision.kind, 'deny');
     assert.match(decision.reason, /人工拒绝/);
     assert.equal(decisions.length, 1); // ask 策略经审批缝征询
-    const set = endpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
-    const saved = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    const saved = await gateway.set({ advisor: { model: 'm2' } });
     assert.equal(saved.ok, true);
     assert.equal(saved.persisted, true); // settings 写缝激活后保存即持久化
 });

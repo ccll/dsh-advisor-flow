@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConfigGateway, mergeAdvisorFlowConfig, registerConfigGateway } from '../lib/gateway.js';
+import { advisorFlowTypertContribution, createConfigGateway, mergeAdvisorFlowConfig, toWireJson } from '../lib/gateway.js';
 
 const BASE = {
     enabled: true,
@@ -90,19 +90,80 @@ test('R-02-001/AC-02 mergeAdvisorFlowConfig：section 按键合并、gates 按�
     assert.equal(merged.privacy.history, 'off');
 });
 
-test('R-02-001/AC-01 gateway 注册与卸载：经注入缝 register 两个端点', () => {
-    const registered = [];
-    const unregistered = [];
-    const seam = {
-        register: (name, handler) => registered.push({ name, handler }),
-        unregister: (name) => unregistered.push(name),
+test('R-02-001/AC-01 typert 贡献声明：namespace=advisor-flow 派生 /api/advisor-flow/get|set', () => {
+    const contribution = advisorFlowTypertContribution();
+    assert.equal(contribution.package, 'dsh-advisor-flow');
+    assert.equal(contribution.invocations.length, 2);
+    for (const invocation of contribution.invocations) {
+        assert.equal(invocation.namespace, 'advisor-flow'); // 前缀规则：/api/<namespace>/<method>
+        assert.equal(invocation.invocation.kind, 'direct');
+        assert.equal(invocation.result.mode, 'src-json');
+    }
+    const [get, set] = contribution.invocations;
+    assert.equal(get.method, 'get');
+    assert.deepEqual(get.parameters, []);
+    assert.equal(set.method, 'set');
+    assert.deepEqual(set.parameters.map((parameter) => parameter.name), ['patch']);
+});
+
+test('R-02-001/AC-01 线界归一化：undefined 值递归剥离（null 保留、数组元素保留）', () => {
+    const wire = toWireJson({
+        enabled: true,
+        provider: undefined,
+        nested: { a: 1, b: undefined, c: { d: undefined, e: null } },
+        list: [{ x: 1, y: undefined }, undefined === undefined ? 'keep' : ''],
+    });
+    assert.deepEqual(wire, {
+        enabled: true,
+        nested: { a: 1, c: { e: null } },
+        list: [{ x: 1 }, 'keep'],
+    });
+    // 不可序列化断言双保险：JSON 往返后无 undefined 语义差异
+    assert.deepEqual(JSON.parse(JSON.stringify(wire)), wire);
+});
+
+test('R-02-001/AC-01 TypertRemoteService 服务方法：get/set 委托处理器并过线界归一化（peer 可解析时）', async (t) => {
+    // peer 依赖在插件安装时由宿主 node_modules 解析；单测环境缺失时跳过
+    let typertModule;
+    try {
+        typertModule = await import('../lib/typert-gateway.js');
+    } catch {
+        t.skip('typert-protocol peer 不可解析（未安装宿主依赖）');
+        return;
+    }
+    const provided = {};
+    const contributions = [];
+    const stubCtx = {
+        reflect: { provide: (serviceName, service) => { provided[serviceName] = service; } },
+        inject: (names, fn) => fn({ typert: { register: (contribution) => contributions.push(contribution) } }),
     };
-    const handlers = { 'advisor-flow/get': async () => ({}), 'advisor-flow/set': async () => ({}) };
-    const dispose = registerConfigGateway(seam, handlers);
-    assert.deepEqual(registered.map((entry) => entry.name), ['advisor-flow/get', 'advisor-flow/set']);
-    assert.equal(typeof registered[0].handler, 'function');
-    dispose();
-    assert.deepEqual(unregistered, ['advisor-flow/get', 'advisor-flow/set']);
+    const handlers = {
+        'advisor-flow/get': async () => ({
+            config: { enabled: true, advisor: { provider: 'p', model: undefined } }, // undefined 必须被剥除
+            warnings: [],
+        }),
+        'advisor-flow/set': async (payload) => ({
+            ok: true,
+            config: { enabled: true, advisor: { provider: 'p', model: payload.args.patch.advisor.model } },
+            persisted: true,
+            notice: '已保存并持久化到 settings.yaml。',
+        }),
+    };
+    const { gateway } = typertModule.registerAdvisorFlowGateway(stubCtx, handlers);
+    assert.equal(provided['advisor-flow'], gateway); // cordis Service 以服务键注册
+    assert.equal(gateway.name, 'advisor-flow');      // 命名空间 = 服务键 → /api/advisor-flow/*
+    assert.equal(contributions.length, 1);
+    assert.equal(contributions[0].invocations[0].namespace, 'advisor-flow');
+
+    const got = await gateway.get();
+    assert.equal(got.config.enabled, true);
+    assert.equal('model' in got.config.advisor, false); // 线界无 undefined
+    const wire = JSON.stringify(got);
+    assert.ok(!wire.includes('undefined'));
+
+    const set = await gateway.set({ advisor: { model: 'm2' } });
+    assert.equal(set.ok, true);
+    assert.equal(set.config.advisor.model, 'm2');
 });
 
 test('R-02-001/AC-02 gateway set 缺 patch 或异常载荷返回结构化错误，不抛出', async () => {
