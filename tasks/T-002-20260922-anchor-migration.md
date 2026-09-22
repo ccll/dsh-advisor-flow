@@ -24,7 +24,14 @@ strict 测试锚定要求 PRD 全部 AC-ID（30 个）在测试中锚定。T-001
 - 后续实现任务（门控、命令、卡片）以测试先行落地，测试名携带对应 `<R-ID>/AC-nn` 锚点。
 - 全部 30 个 AC 锚定后：CONVENTIONS 切回 strict，本任务转 completed（证据 = lint 计数）。
 - 本任务只承载锚点迁移，不承载任何实现设计（设计归各实现任务）。
-- 跨任务交接项（自 T-001 终态移交）：宽松 JSON balancedObjects 帧解析（lib/consultation.js）为自研解析器，接入真实模型输出时须验证帧误识别边界（已覆盖空 note/非帧 JSON/markdown 围栏三类单测）；该联调验收随首个接真实模型的任务（T-003/T-004 或集成冒烟）执行，不得在 T-001 关闭后失track。
+- 跨任务交接项（自 T-001 终态移交）：宽松 JSON balancedObjects 帧解析（lib/consultation.js）为自研解析器，接入真实模型输出时须验证帧误识别边界（已覆盖空 note/非帧 JSON/markdown 围栏三类单测）。
+- 联调验证清单（自 T-003 双轴评审移交，接入真实 dsh 运行时后逐项实测并记录结论）：
+  - `tools/result` 与 `session/event` 双缝是否重复投递同一工具结果（双计会让失败门阈值实际减半）；确认后保留单一观测缝或实现去重。
+  - 观察器假设的事件形状实测：result 失败判定字段（error/ok/success）、压缩/重写事件名——错向会把失败记成功。
+  - `stopSession` 字段：handoff 已验证的 waterfall 契约仅 allow/ask/deny；宿主是否消费 stopSession 需实测，否则 block-session 退化为普通 deny（R-01-004/AC-03 兑现方式需按实测结论收敛）。
+  - approver 宿主缝实际可用性（ctx.approval 或等价服务）：当前 ask 策略在无 approver 时 fail-open。
+  - delivery source 负载形状（kind/plugin/form/summary）与宿主注入消息渲染的兼容性。
+  - immuneTurns 冷却的 turn-end 事件源修复后，实测冷却窗口按 stepped turn 递减。
 
 ## 测试计划
 
