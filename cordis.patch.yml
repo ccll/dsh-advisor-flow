@@ -1,0 +1,7 @@
+# The dsh-advisor-flow bundle patch: inserts the advisor-flow plugin row over
+# the profile root (mirrors dsh-advisor's bundle patch shape). Per-row config
+# (enabled/advisor/privacy/...) lands in the user's profile cordis.patch.yml
+# under id: advisor-flow (T2 schema).
+- insert:
+    - id: advisor-flow
+      name: dsh-advisor-flow

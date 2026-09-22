@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+if command -v mise >/dev/null 2>&1; then
+  mise x -- python "$root/tools/agentmap_validate_commit_msg.py" "$1"
+else
+  python3 "$root/tools/agentmap_validate_commit_msg.py" "$1"
+fi
+
+for hook in "$root"/.githooks/commit-msg.d/*.sh; do
+  [[ -e "$hook" ]] || continue
+  if [[ ! -f "$hook" || ! -x "$hook" ]]; then
+    echo "commit-msg: extension must be an executable regular file: $hook" >&2
+    exit 1
+  fi
+  "$hook" "$1"
+done

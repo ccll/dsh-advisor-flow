@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LC_ALL=C
+root="$(git rev-parse --show-toplevel)"
+input="$(mktemp "${TMPDIR:-/tmp}/agentmap-pre-push.XXXXXX")"
+message="$(mktemp "${TMPDIR:-/tmp}/agentmap-commit-message.XXXXXX")"
+trap 'rm -f "$input" "$message"' EXIT
+cat >"$input"
+
+commit_hook="$root/.githooks/commit-msg"
+if [[ -e "$commit_hook" ]]; then
+  if [[ ! -f "$commit_hook" || ! -x "$commit_hook" ]]; then
+    echo "pre-push: .githooks/commit-msg must be an executable regular file" >&2
+    exit 1
+  fi
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [[ "$local_sha" != "0000000000000000000000000000000000000000" ]] || continue
+    if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
+      commits="$(git rev-list --reverse "$local_sha" --not --remotes)"
+    else
+      commits="$(git rev-list --reverse "$remote_sha..$local_sha")"
+    fi
+    for commit in $commits; do
+      git show -s --format=%B "$commit" >"$message"
+      if ! "$commit_hook" "$message"; then
+        echo "pre-push: $(git rev-parse --short "$commit") rejected by .githooks/commit-msg" >&2
+        exit 1
+      fi
+    done
+  done <"$input"
+fi
+
+for script in "$root"/.githooks/pre-push.d/*.sh; do
+  [[ -e "$script" ]] || continue
+  "$script" "$@" <"$input"
+done
