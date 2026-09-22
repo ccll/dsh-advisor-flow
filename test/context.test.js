@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAdvisorUserMessage, capUtf8, HISTORY_WINDOW_MAX_CHARS } from '../lib/context.js';
 
-test('R-02-004 AC-01 repoContext 为 none 时不外发仓库内容且明确告知顾问无仓库访问', () => {
+test('R-02-004/AC-01 repoContext 为 none 时不外发仓库内容且明确告知顾问无仓库访问', () => {
     const { text, dropped } = buildAdvisorUserMessage({
         repoContext: { summary: '内部仓库摘要内容', patch: 'diff --git a/x b/x' },
         question: '这段设计有问题吗？',
@@ -16,7 +16,7 @@ test('R-02-004 AC-01 repoContext 为 none 时不外发仓库内容且明确告�
     assert.ok(dropped.includes('repoContext:none'));
 });
 
-test('R-02-004 AC-02 文件内容未获 opt-in 时不外发正文，仅附路径并注明', () => {
+test('R-02-004/AC-02 文件内容未获 opt-in 时不外发正文，仅附路径并注明', () => {
     const { text, dropped } = buildAdvisorUserMessage({
         files: [
             { path: 'src/a.js', content: 'const secret = 1;' },

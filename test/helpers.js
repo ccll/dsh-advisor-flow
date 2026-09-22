@@ -104,3 +104,43 @@ export function failure(error, { throwImmediately = false } = {}) {
 export function hung() {
     return { hang: true };
 }
+
+/**
+ * Manual clock + timer pair: `advance(ms)` moves virtual time and fires due
+ * timers synchronously (abort deadlines run deterministically, no real
+ * waiting). Feed `timers` into the engine's `timers` option and
+ * `timers.clock` into its `clock` option.
+ */
+export function createManualTimers({ now = 0 } = {}) {
+    let current = now;
+    let seq = 0;
+    const pending = new Map();
+    return {
+        clock: () => current,
+        setTimeout(fn, ms) {
+            const id = ++seq;
+            pending.set(id, { fn, at: current + (ms ?? 0) });
+            return id;
+        },
+        clearTimeout(id) {
+            pending.delete(id);
+        },
+        advance(ms) {
+            current += ms;
+            for (const [id, timer] of [...pending.entries()].sort((a, b) => a[1].at - b[1].at)) {
+                if (timer.at <= current) {
+                    pending.delete(id);
+                    timer.fn();
+                }
+            }
+        },
+        pendingCount: () => pending.size,
+    };
+}
+
+/** Drain microtasks (lets abort-triggered promise chains settle). */
+export async function pump(turns = 6) {
+    for (let i = 0; i < turns; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+}

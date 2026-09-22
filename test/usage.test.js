@@ -101,3 +101,23 @@ test('R-02-002 JSONL 落盘逐行追加；落盘失败被包含不影响台账',
     memoryOnly.record({ adviceId: 'adv-3', entry: 'gate' });
     assert.equal(memoryOnly.totals().total.calls, 1);
 });
+
+test('R-02-002/AC-01 totals 快照为深拷贝且时间戳取自可注入 clock', () => {
+    let now = 1000;
+    const ledger = createUsageLedger({ clock: () => now });
+    ledger.record({ adviceId: 'adv-1', entry: 'tool', inputTokens: 3 });
+    assert.equal(ledger.records()[0].at, 1000);
+    now = 2000;
+    ledger.record({ adviceId: 'adv-2', entry: 'tool', inputTokens: 4 });
+    assert.equal(ledger.records()[1].at, 2000);
+
+    // 快照是深拷贝：改写快照不得影响台账内部累计
+    const snapshot = ledger.totals();
+    snapshot.total.calls = 99;
+    snapshot.total.inputTokens = 999;
+    snapshot.byEntry.tool.calls = 77;
+    const fresh = ledger.totals();
+    assert.equal(fresh.total.calls, 2);
+    assert.equal(fresh.total.inputTokens, 7);
+    assert.equal(fresh.byEntry.tool.calls, 2);
+});

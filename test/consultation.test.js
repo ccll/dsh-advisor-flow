@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveAdvisorFlowConfig } from '../lib/config.js';
 import { createConsultationEngine, parseAdvice, ADVISOR_SYSTEM_PROMPT } from '../lib/consultation.js';
 import { createUsageLedger } from '../lib/usage.js';
-import { createFakeLlm, answer, failure, hung } from './helpers.js';
+import { createFakeLlm, answer, failure, hung, createManualTimers, pump } from './helpers.js';
 
 /** Build a ready-to-use engine config: enabled, provider/model set. */
 function resolvedConfig({ advisor = {}, ...rest } = {}) {
@@ -63,7 +63,7 @@ test('R-01-001/AC-02 路由不存在（NO_ADAPTER）返回可诊断的 ADVISOR_R
     assert.equal(again.code, 'ADVISOR_HALTED');
 });
 
-test('R-01-001 AC-03 单次失败只终止当次咨询；transient 重试 1 次后成功', async () => {
+test('R-01-001/AC-03 单次失败只终止当次咨询；transient 重试 1 次后成功', async () => {
     const llm = createFakeLlm([
         failure({ code: 'ECONNRESET', message: 'connection reset' }),
         answer('重试后成功的意见。'),
@@ -84,7 +84,7 @@ test('R-01-001 AC-03 单次失败只终止当次咨询；transient 重试 1 次�
     assert.equal(next.ok, true);
 });
 
-test('R-01-001 AC-03 transient 重试耗尽后丢弃当次且不抛出，随后的咨询不受影响', async () => {
+test('R-01-001/AC-03 transient 重试耗尽后丢弃当次且不抛出，随后的咨询不受影响', async () => {
     const llm = createFakeLlm([
         failure({ code: 'ECONNRESET', message: 'boom' }),
         failure({ code: 'ECONNRESET', message: 'boom' }),
@@ -108,24 +108,33 @@ test('R-01-001 AC-03 transient 重试耗尽后丢弃当次且不抛出，随后�
     assert.equal(llm.calls.length, 3);
 });
 
-test('R-02-005/AC-01 整调用超时按 transient 收敛：重试后丢弃，consult 不抛出', async () => {
+test('R-02-005/AC-01 整调用超时按 transient 收敛：重试后丢弃，consult 不抛出（假 clock）', async () => {
     const llm = createFakeLlm([hung(), hung(), answer('超时后恢复。')]);
+    const timers = createManualTimers();
     const engine = createConsultationEngine({
         llm,
-        config: resolvedConfig({ advisor: { callTimeoutMs: 15 } }),
+        config: resolvedConfig({ advisor: { callTimeoutMs: 200 } }),
         logger: quietLogger,
         sleep: async () => {},
+        timers,
+        clock: timers.clock,
     });
-    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    const pending = engine.consult({ entry: 'tool', question: 'q' });
+    await pump(); // 第一次尝试挂起，deadline timer 已排定
+    timers.advance(200); // 触发第一次超时
+    await pump(); // 重试（退避已注入为即时）→ 第二次挂起
+    timers.advance(200); // 触发第二次超时 → 重试预算耗尽 → 丢弃
+    const result = await pending;
     assert.equal(result.ok, false);
     assert.equal(result.code, 'ADVISOR_TIMEOUT');
     assert.match(result.reason, /timed out/);
-    // 主循环继续：下一次咨询照常可用
+    assert.equal(timers.pendingCount(), 0); // deadline timer 已清理
+    // 主循环继续：下一次咨询照常可用（真返回，无需推进时钟）
     const next = await engine.consult({ entry: 'tool', question: 'q2' });
     assert.equal(next.ok, true);
     // 挂起的流被尝试收尾（iterator.return 被调用），不悬挂
     assert.ok(llm.calls[0].returned && llm.calls[1].returned);
-}, { timeout: 5000 });
+});
 
 test('R-02-005/AC-01 任何失败路径都不得向调用方抛出未处理异常', async () => {
     // llm.stream 同步抛错
@@ -353,4 +362,165 @@ test('R-01-001 parseAdvice：severity 显式声明生效，缺省 nit', () => {
     assert.equal(parseAdvice('普通意见，未声明严重度').severity, 'nit');
     assert.equal(parseAdvice('severity: 看情况').severity, 'nit');
     assert.equal(parseAdvice(undefined).severity, 'nit');
+});
+
+test('R-01-001/AC-01 宽松 JSON 兼容：JSON 帧回复提取 note/severity 转自由文本', async () => {
+    const llm = createFakeLlm([
+        answer('前置说明\n```json\n{"note": "建议先补集成测试再合并。", "severity": "concern"}\n```\n后缀'),
+        answer('{"note": "  ", "severity": "blocker"}\n其实 severity: blocker\n正文意见。'),
+        answer('{"other": 1} 不是意见帧'),
+    ]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
+
+    const framed = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(framed.ok, true);
+    assert.equal(framed.severity, 'concern');
+    assert.equal(framed.text, '建议先补集成测试再合并。'); // 不再透传 JSON 原文
+    assert.ok(!framed.text.includes('{'));
+
+    // note 为空的帧不采纳 → 回落自由文本路径（severity 行 + 全文）
+    const fallback = await engine.consult({ entry: 'tool' });
+    assert.equal(fallback.severity, 'blocker');
+    assert.ok(fallback.text.includes('正文意见。'));
+
+    // 无 note 字段的 JSON 只是普通文本，不当作帧
+    const plain = await engine.consult({ entry: 'tool' });
+    assert.equal(plain.severity, 'nit');
+    assert.ok(plain.text.includes('{"other": 1}'));
+
+    // 单元面：解析函数直接断言
+    assert.deepEqual(parseAdvice('{"note":"意见A","severity":"BLOCKER"}'), { text: '意见A', severity: 'blocker' });
+    assert.equal(parseAdvice('{"note":"意见B"}').severity, 'nit');
+    assert.equal(parseAdvice('{"note":"意见C","severity":"catastrophic"}').severity, 'nit');
+});
+
+test('R-02-001/AC-01 applyConfig 即时生效：effort 判定缓存随配置失效', async () => {
+    const llm = createFakeLlm([answer('a'), answer('b'), answer('c')]);
+    llm.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] } });
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ advisor: { reasoningEffort: 'high' } }),
+        logger: quietLogger,
+    });
+    await engine.consult({ entry: 'tool' });
+    assert.equal(llm.calls[0].options.reasoningEffort, 'high');
+    assert.equal(llm.modelInfoCalls.length, 1); // 同 (provider, model, effort) 命中缓存
+
+    // 换模型：缓存键随 (provider, model, effort) 变化 → 重新解析；新路由未声明 high → 不发送
+    llm.setModelInfo({ reasoning: { efforts: [{ id: 'off' }] } });
+    engine.applyConfig(resolvedConfig({ advisor: { reasoningEffort: 'high', model: 'other-model' } }));
+    await engine.consult({ entry: 'tool' });
+    assert.equal(llm.calls[1].options.model, 'other-model');
+    assert.equal(llm.calls[1].options.reasoningEffort, undefined);
+    assert.equal(llm.modelInfoCalls.length, 2);
+
+    // 同模型换 effort 档位：同样重新解析（缓存键随 effort 变化），新档位被声明 → 发送
+    engine.applyConfig(resolvedConfig({ advisor: { reasoningEffort: 'off', model: 'other-model' } }));
+    await engine.consult({ entry: 'tool' });
+    assert.equal(llm.calls[2].options.reasoningEffort, 'off');
+    assert.equal(llm.modelInfoCalls.length, 3);
+});
+
+test('R-01-001/AC-03 重试预算按配置生效：retryAttempts=2 瞬态失败重试 2 次', async () => {
+    // 预算内成功：3 次尝试（首试 + 2 次重试），第 3 次成功
+    const llm = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'boom-1' }),
+        failure({ code: 'ECONNRESET', message: 'boom-2' }),
+        answer('第三次成功的意见。'),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ advisor: { retryAttempts: 2 } }),
+        logger: quietLogger,
+        sleep: async () => {},
+    });
+    const ok = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(ok.ok, true);
+    assert.equal(llm.calls.length, 3);
+
+    // 预算耗尽：3 次全失败 → 丢弃当次（不抛出），丢弃记录携带 retryAttempts
+    const infos = [];
+    const llm2 = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'boom-a' }),
+        failure({ code: 'ECONNRESET', message: 'boom-b' }),
+        failure({ code: 'ECONNRESET', message: 'boom-c' }),
+    ]);
+    const engine2 = createConsultationEngine({
+        llm: llm2,
+        config: resolvedConfig({ advisor: { retryAttempts: 2 } }),
+        logger: { info: (m, f) => infos.push({ m, f }), warn() {} },
+        sleep: async () => {},
+    });
+    const dropped = await engine2.consult({ entry: 'manual', question: 'q' });
+    assert.equal(dropped.ok, false);
+    assert.equal(dropped.code, 'ADVISOR_FAILED');
+    assert.equal(llm2.calls.length, 3);
+    assert.ok(infos.some((entry) => entry.f.entry === 'manual' && entry.f.retryAttempts === 2));
+});
+
+test('R-02-005/AC-01 调用方取消中止后，排队咨询按丢弃策略收敛而非悬挂', async () => {
+    const llm = createFakeLlm([
+        { hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] },
+        answer('never'),
+        answer('never'),
+    ]);
+    const infos = [];
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: { info: (m, f) => infos.push({ m, f }), warn() {} },
+        maxQueued: 2,
+        sleep: async () => {},
+    });
+    const controller = new AbortController();
+    const first = engine.consult({ entry: 'tool', question: 'first', signal: controller.signal });
+    const second = engine.consult({ entry: 'tool', question: 'second' });
+    await pump(2);
+    assert.equal(engine.pendingCount, 2); // first 进行中 + second 排队
+
+    controller.abort(new Error('caller cancelled'));
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.equal(firstResult.ok, false);
+    assert.equal(firstResult.code, 'ADVISOR_FAILED');
+    assert.equal(secondResult.ok, false); // 排队者被收敛，而非悬挂
+    assert.equal(secondResult.code, 'ADVISOR_FAILED');
+    assert.equal(engine.pendingCount, 0);
+    assert.ok(infos.some((entry) => entry.f.entry === 'tool' && /丢弃|收敛/.test(entry.f.reason)));
+    // 引擎仍可用
+    const after = await engine.consult({ entry: 'tool', question: 'again' });
+    assert.equal(after.ok, true);
+});
+
+test('R-01-002/AC-01 手动入口携带聚焦词时咨询素材包含该聚焦词', async () => {
+    const llm = createFakeLlm([answer('手动评审意见。')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
+    const result = await engine.consult({ entry: 'manual', question: '聚焦：审查重试退避策略' });
+    assert.equal(result.ok, true);
+    const sent = llm.calls[0].options.messages[0].content;
+    assert.ok(sent.includes('聚焦：审查重试退避策略'));
+    assert.equal(llm.calls[0].options.messages.length, 1);
+});
+
+test('R-01-002/AC-02 手动咨询进行中可取消：取消返回诊断且不留用量副作用', async () => {
+    const ledger = createUsageLedger();
+    const llm = createFakeLlm([{ hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] }, answer('恢复后意见。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        usageLedger: ledger,
+        sleep: async () => {},
+    });
+    const controller = new AbortController();
+    const pending = engine.consult({ entry: 'manual', question: 'q', signal: controller.signal });
+    await pump(2);
+    controller.abort(new Error('user cancel'));
+    const result = await pending;
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ADVISOR_FAILED');
+    assert.equal(ledger.totals().total.calls, 0); // 取消不留用量记录
+    assert.equal(engine.status()[0].runtime, 'active'); // 无残留运行态副作用
+    // 可再次发起
+    const again = await engine.consult({ entry: 'manual', question: 'q2' });
+    assert.equal(again.ok, true);
 });

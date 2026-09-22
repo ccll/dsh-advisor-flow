@@ -49,7 +49,7 @@ test('R-01-001/AC-02 路由失败与失败分类经工具面转译为诊断码',
     assert.equal(result.code, 'ADVISOR_ROUTE_MISSING');
 });
 
-test('R-01-001 AC-03 失败后执行者可重试：下一次工具调用照常成功', async () => {
+test('R-01-001/AC-03 失败后执行者可重试：下一次工具调用照常成功', async () => {
     const llm = createFakeLlm([
         failure({ code: 'ECONNRESET', message: 'boom' }),
         failure({ code: 'ECONNRESET', message: 'boom' }),
