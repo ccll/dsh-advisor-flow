@@ -213,3 +213,37 @@ test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人�
     assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
     assert.equal(decisions[0].gate, 'loop');
 });
+
+test('commands/gateway 缝缺失时显性化降级而非拒绝启动（不锚定 AC）', () => {
+    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    assert.equal(services.status.snapshot().degradations.commands, 'registry-seam-missing');
+    assert.equal(services.status.snapshot().degradations.settingsCard, 'gateway-seam-missing');
+    assert.ok(logs.warn.some((message) => message.includes('命令注册缝缺失')));
+    assert.ok(logs.warn.some((message) => message.includes('gateway 缝缺失')));
+    // ask approval 缺失的降级标注同在
+    assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
+});
+
+test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于后续咨询', async () => {
+    const registered = [];
+    const llm = createFakeLlm([answer('一。'), answer('二。')]);
+    const { ctx, registered: tools } = makeCtx({ llm });
+    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm1' },
+    });
+    const get = registered.find((entry) => entry.name === 'advisor-flow/get').handler;
+    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+
+    const got = await get({});
+    assert.equal(got.config.advisor.model, 'm1');
+    const result = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(result.ok, true);
+
+    // 即时生效：set 后的下一次咨询用新模型（R-02-001/AC-01）
+    const consulted = await services.askAdvisor.execute({});
+    assert.equal(consulted.adviceId, 'adv-1');
+    assert.equal(llm.calls[0].options.model, 'm2');
+});
