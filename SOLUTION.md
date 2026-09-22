@@ -358,7 +358,7 @@ flowchart TD
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要。
   - 失败显性化：丢弃/超时/配额一律 info 级日志带原因。
 - 代码位置: lib/config.js、lib/gateway.js、lib/usage.js、lib/status.js
-- 实现: 单端（宿主）+ client 卡片（lib/client/card-state.js 纯逻辑 + lib/client/render.js 零依赖 DOM）
+- 实现: 单端（宿主）+ client 卡片（lib/client/card-state.js 纯逻辑 + lib/client/render.js 零依赖 DOM + lib/client/index.js bundle 入口）
 
 ### 咨询工具
 - 职责: 注册 `ask_advisor` 工具面，参数校验与错误转译（承接 R-01-001）
