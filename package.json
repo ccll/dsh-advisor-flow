@@ -10,7 +10,7 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
-    "./client": "./lib/client/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -18,7 +18,8 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "build:client": "node scripts/build-client.mjs"
   },
   "dsh": {
     "bundle": {
