@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
 import { createFakeLlm, answer } from './helpers.js';
 
-function makeCtx({ withTools = true, withEvents = true, llm, approvals } = {}) {
+function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings, commands, typert, agents } = {}) {
     const registered = [];
     const subscriptions = [];
+    const activated = [];   // 已激活的条件子上下文（服务名数组）
+    const unactivated = []; // 未激活的条件子上下文（缝缺失路径）
     const logs = { error: [], warn: [], info: [] };
     const logger = {
         error: (message) => logs.error.push(message),
@@ -20,10 +22,26 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals } = {}) {
                 on: (event, handler, options) => subscriptions.push({ event, handler, options }),
             }
             : {}),
+        ...(agents ? { agents } : {}),
         ...(approvals ? { approvals } : {}),
+        ...(settings ? { settings } : {}),
+        ...(commands ? { commands } : {}),
+        ...(typert ? { typert } : {}),
         ...(withTools ? { tools: { register: (tool) => registered.push(tool) } } : {}),
     };
-    return { ctx, registered, subscriptions, logs };
+    // 模拟 cordis 条件子上下文：声明的服务全部在场才激活（回调收到以服务名
+    // 为键的子上下文）；任一缺失 = 未激活（缝缺失路径，不崩溃）。
+    ctx.inject = (names, fn) => {
+        const missing = names.filter((serviceName) => ctx[serviceName] === undefined);
+        if (missing.length > 0) {
+            unactivated.push(names);
+            return;
+        }
+        activated.push(names);
+        const sub = Object.fromEntries(names.map((serviceName) => [serviceName, ctx[serviceName]]));
+        return fn(sub);
+    };
+    return { ctx, registered, subscriptions, activated, unactivated, logs };
 }
 
 const entryConfig = {
@@ -31,21 +49,36 @@ const entryConfig = {
     advisor: { provider: 'test', model: 'm' },
 };
 
-test('工具注册缝缺失时启动期 logger.error 显性化并 fail loud（注册失败留痕属启动期质量问题，不锚定 AC）', () => {
-    const { ctx, registered, logs } = makeCtx({ withTools: false, llm: createFakeLlm([]) });
-    assert.throws(() => apply(ctx, entryConfig), /工具注册缝缺失/);
-    assert.equal(registered.length, 0);
-    assert.equal(logs.error.filter((message) => message.includes('工具注册缝')).length, 1);
-    assert.ok(logs.error.some((message) => message.includes('advisor-flow')));
-});
+test('tools 条件子上下文：服务在场即注册；注册抛错向上传播（不锚定 AC）', () => {
+    // 服务在场 → 子上下文激活 → 注册成功
+    const ok = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ok.ctx, entryConfig);
+    assert.equal(ok.registered.length, 1);
+    assert.equal(ok.activated.some((names) => names.includes('tools')), true);
+    void services;
 
-test('注册缝调用抛错同样 fail loud，不静默降级', () => {
-    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
-    ctx.tools.register = () => {
+    // 注册抛错 → 子上下文内 fail loud（向上传播，不静默降级）
+    const broken = makeCtx({ llm: createFakeLlm([]) });
+    broken.ctx.tools.register = () => {
         throw new Error('registry broken');
     };
-    assert.throws(() => apply(ctx, entryConfig), /registry broken/);
-    assert.ok(logs.error.some((message) => message.includes('注册失败')));
+    assert.throws(() => apply(broken.ctx, entryConfig), /registry broken/);
+    assert.ok(broken.logs.error.some((message) => message.includes('注册失败')));
+});
+
+test('未注入服务的顶层属性访问零次：条件子上下文未激活不崩溃（T-005 实测回归钉住）', () => {
+    // 缝探测原语曾使 apply 在 cordis get-trap 下崩溃（cannot get property
+    // "approvals" without inject）——本测试以「无任何可选服务」的组合钉住
+    // 装载不崩溃 + 降级标注齐全。
+    const { ctx, logs, unactivated } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    assert.ok(unactivated.length >= 4); // approval×2/commands/typert/settings 均未激活
+    const degradations = services.status.snapshot().degradations;
+    assert.equal(degradations.askPolicy, 'approver-seam-missing');
+    assert.equal(degradations.commands, 'registry-seam-missing');
+    assert.equal(degradations.settingsCard, 'gateway-seam-missing');
+    assert.equal(degradations.persistence, 'settings-writer-seam-missing');
+    assert.ok(logs.error.some((message) => message.includes('持久化不可用')));
 });
 
 test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面可咨询可配置', async () => {
@@ -84,7 +117,7 @@ test('R-02-005/AC-01 禁用配置下 apply 仍可用：工具返回 NO_ADVISOR_M
     assert.equal(result.error, true);
     assert.equal(result.code, 'NO_ADVISOR_MODEL');
     assert.equal(name, 'dsh-advisor-flow');
-    assert.deepEqual(inject, ['llm']);
+    assert.deepEqual(inject, ['agents', 'llm']);
 });
 
 test('事件订阅缝缺失时启动期 fail loud（与工具注册缝同纪律，不锚定 AC）', () => {
@@ -186,9 +219,20 @@ test('双缝观测保留：tools/result 与 session/event 均投喂观察器，�
 test('approver 缝缺失显性化：一次性 error + 状态快照 degraded 标注（不锚定 AC）', () => {
     const { ctx, logs: captured } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
-    assert.ok(captured.error.some((message) => message.includes('人工审批缝不可得')));
-    assert.equal(captured.error.filter((message) => message.includes('人工审批缝不可得')).length, 1); // 仅一次性
+    assert.ok(captured.error.some((message) => message.includes('人工审批缝未接入')));
+    assert.equal(captured.error.filter((message) => message.includes('人工审批缝未接入')).length, 1); // 仅一次性
     assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
+});
+
+test('approval 条件子上下文激活：审批缝接入后降级清除（恢复语义）', () => {
+    const decisions = [];
+    const { ctx } = makeCtx({
+        llm: createFakeLlm([]),
+        approvals: { request: async (request) => decisions.push(request) || true },
+    });
+    const services = apply(ctx, { enabled: false });
+    assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 激活即清除
+    assert.ok(services.commandController, '控制器就绪');
 });
 
 test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人工决定（拒绝 → deny）', async () => {
@@ -215,27 +259,43 @@ test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人�
 });
 
 test('commands/gateway 缝缺失时显性化降级而非拒绝启动（不锚定 AC）', () => {
-    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
+    const { ctx } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     assert.equal(services.status.snapshot().degradations.commands, 'registry-seam-missing');
     assert.equal(services.status.snapshot().degradations.settingsCard, 'gateway-seam-missing');
-    assert.ok(logs.warn.some((message) => message.includes('命令注册缝缺失')));
-    assert.ok(logs.warn.some((message) => message.includes('gateway 缝缺失')));
     // ask approval 缺失的降级标注同在
     assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
 });
 
+test('commands 条件子上下文激活：命令经注册表缝挂载并可执行（不锚定 AC）', () => {
+    const registeredSpecs = [];
+    const { ctx } = makeCtx({
+        llm: createFakeLlm([answer('命令手动评审。')]),
+        commands: { register: (spec) => registeredSpecs.push(spec) || (() => {}) },
+    });
+    const services = apply(ctx, entryConfig);
+    assert.equal(services.status.snapshot().degradations.commands, undefined); // 激活即清除
+    const manual = registeredSpecs.find((spec) => spec.name === 'advisor-manual');
+    assert.ok(manual, '/advisor-manual 已挂载');
+    const result = manual.handler({ rawInput: '聚焦词', agent: { session: { id: 's1' } } });
+    assert.equal(result.kind, 'success');
+    assert.match(result.text, /手动咨询已发起/);
+});
+
 test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于后续咨询', async () => {
-    const registered = [];
+    const gatewayEndpoints = [];
     const llm = createFakeLlm([answer('一。'), answer('二。')]);
-    const { ctx, registered: tools } = makeCtx({ llm });
-    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    const { ctx, registered: tools } = makeCtx({
+        llm,
+        typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
+    });
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm1' },
     });
-    const get = registered.find((entry) => entry.name === 'advisor-flow/get').handler;
-    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 激活即清除
+    const get = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/get').handler;
+    const set = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
 
     const got = await get({});
     assert.equal(got.config.advisor.model, 'm1');
@@ -271,10 +331,12 @@ test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询�
 });
 
 test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回并修复，保存不丢键', async () => {
-    const registered = [];
+    const gatewayEndpoints = [];
     const llm = createFakeLlm([answer('ok')]);
-    const { ctx } = makeCtx({ llm });
-    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    const { ctx } = makeCtx({
+        llm,
+        typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
+    });
     // 启动配置含非法值 + 真实存在的合法键（若 raw 被丢弃为 {}，这些键会丢）
     const services = apply(ctx, {
         enabled: true,
@@ -284,8 +346,9 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
     });
     assert.equal(services.status.snapshot().enabled, false); // 运行时禁用
 
-    const get = registered.find((entry) => entry.name === 'advisor-flow/get').handler;
-    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 激活即清除
+    const get = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/get').handler;
+    const set = gatewayEndpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
     const got = await get({});
     // raw 保留了真实键（非法 maxTokens 与合法 privacy/customKey 都在）
     assert.equal(got.config.advisor.maxTokens, 'broken');
@@ -306,9 +369,11 @@ test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回
 test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
     const writes = [];
     const llm = createFakeLlm([answer('ok')]);
-    const { ctx, registered } = makeCtx({ llm });
-    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
-    ctx.settings = { update: async (namespace, raw) => writes.push({ namespace, raw }) };
+    const { ctx, registered } = makeCtx({
+        llm,
+        settings: { update: async (namespace, raw) => writes.push({ namespace, raw }) },
+        typert: { register: (name, handler) => registered.push({ name, handler }) },
+    });
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
@@ -339,15 +404,17 @@ test('R-02-001/AC-01 持久写缝缺失：一次性 error + degradations.persist
 test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
     let shouldThrow = true;
     const llm = createFakeLlm([]);
-    const { ctx, registered, logs } = makeCtx({ llm });
-    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
-    ctx.settings = {
-        update: async () => {
-            if (shouldThrow) {
-                throw new Error('yaml write failed');
-            }
+    const { ctx, registered, logs } = makeCtx({
+        llm,
+        typert: { register: (name, handler) => registered.push({ name, handler }) },
+        settings: {
+            update: async () => {
+                if (shouldThrow) {
+                    throw new Error('yaml write failed');
+                }
+            },
         },
-    };
+    });
     const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
     const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
 
