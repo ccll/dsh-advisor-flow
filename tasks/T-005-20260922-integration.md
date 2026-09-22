@@ -5,7 +5,7 @@ id: T-005
 ---
 # 整装真实联调
 
-状态: active
+状态: completed
 关联: R-01-001、R-01-003、R-01-004、R-01-005、R-01-006、R-02-001、R-02-003、R-02-004（联调清单覆盖的需求面）
 风险等级: high
 
@@ -60,3 +60,22 @@ id: T-005
 | 跨实现 | 不适用：单一实现 | — |
 
 ## 终态与证据
+
+- 实现: 真实联调六轮修复全部落地并经双轴复审闭环——装载双原语（声明式必选 inject + 条件子上下文，4644aa9/aee78cc）、client 半区 classic-script 打包线（afe2b16）、exports 子路径（e90908b）、TypertRemoteService gateway（b0e6842）、settings section 注册（d8d907d）、RPC 信封解包（e0955f7）、三级目录联动下拉（b48f0da）、卡片视觉对齐（569ae18）、工具监听 {global:true}（511d996）、持久写与产物守卫（01ce483/2bb697b/02114b6）。
+- 测试: `node --test` 155/155 全绿；test-anchored 30/30；strict lint 全绿无 warning；产物新鲜度机械守卫（pre-push.d/30）上线。
+- 生产实测（东家确认 + staging headless 浏览器实证）: 装载无崩溃；describe 服务 advisor-flow；设置卡渲染完整表单且三级联动选项来自真实目录；配置保存 → settings.yaml 落盘 → live re-apply（运行中实例 RPC 回读 enabled=True + 新路由）；**东家在子代理中实测所有触发情况，均符合设计要求**。
+- SOLUTION 对照: 双轴批次复审确认 settings 桥使 R-02-001/AC-01 完整兑现（卡片保存与 settings.yaml 手改双路径即时生效、无回写环）；模块条目与实现一致。
+- commit: b0e6842
+- commit: afe2b16
+- commit: d8d907d
+- commit: e0955f7
+- commit: b48f0da
+- commit: 569ae18
+- commit: 511d996
+- commit: 01ce483
+- review:
+  - 审核方: 双轴独立评审——Standards 轴代理 eb77d407-3912-4c16-86c8-da1c1997a42d、Spec 轴代理 8f19eb7a-2266-4fb4-9220-ef1f316e1ba8（同前 task 审核方），code-review skill 流程，按轮次复审（装载修复两轮 + 批次 + 收口批次）
+  - 目的理解: 本 task 目标是让插件在真实 dsh 运行时中可装载、可配置、可触发——所有宿主缝形态假设（exports、inject 原语、typert 贡献、installSection、事件可达性、classic-script 约束）都须经真机实测收敛；reviewer 开审前已据 map 与各轮实测证据建立该理解
+  - 执行方式: code-review skill 双轴并行子代理按轮复审；实测由 staging 独立实例（headless 浏览器 + curl RPC）与生产真实会话（东家亲自验证）承载；联调清单逐项销项
+  - 问题与修复: 实测暴露并修复六类真问题——装载崩溃（try/catch 探测原语）、client ESM 经典脚本不兼容（exports+打包线）、gateway 注册原语错误（TypertRemoteService）、卡片不渲染（settings section 未注册交集规则）、RPC 信封误读、工具监听缺 {global:true} 门零触发；每轮修复均经同审核方复审确认
+  - 复审结论: 双轴各轮终确认均通过；残余运行时深项（条件子上下文热重启、双缝共享标识、事件形状细目）已在联调清单登记，由日常使用持续验证，不阻塞关闭
