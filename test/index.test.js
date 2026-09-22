@@ -173,19 +173,21 @@ test('tools 条件子上下文：服务在场即注册；注册抛错向上传�
     assert.ok(broken.logs.error.some((message) => message.includes('注册失败')));
 });
 
-test('未注入服务的顶层属性访问零次：条件子上下文未激活不崩溃（T-005 实测回归钉住）', () => {
+test('未注入服务的顶层属性访问零次：条件子上下文未激活不崩溃（T-005 实测回归钉住）', async () => {
     // 缝探测原语曾使 apply 在 cordis get-trap 下崩溃（cannot get property
     // "approvals" without inject）——本测试以「无任何可选服务」的组合钉住
     // 装载不崩溃 + 降级标注齐全。
     const { ctx, logs, unactivated } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
+    await settle();
     assert.ok(unactivated.length >= 4); // approval×2/commands/typert/settings 均未激活
     const degradations = services.status.snapshot().degradations;
     assert.equal(degradations.askPolicy, 'approver-seam-missing');
     assert.equal(degradations.commands, 'registry-seam-missing');
     assert.equal(degradations.settingsCard, 'gateway-seam-missing');
     assert.equal(degradations.persistence, 'settings-writer-seam-missing');
-    assert.ok(logs.error.some((message) => message.includes('持久化不可用')));
+    // 缺失未经确认（子上下文未激活≠确认失败）前不虚报「持久化不可用」日志
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
 });
 
 test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面可咨询可配置', async () => {
@@ -501,11 +503,14 @@ test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 ad
     assert.equal(services.status.snapshot().degradations.persistence, undefined);
 });
 
-test('R-02-001/AC-01 持久写缝缺失：一次性 error + degradations.persistence 标注', async () => {
+test('R-02-001/AC-01 持久写缝缺失：degradations.persistence 标注且不虚报日志（服务缺失≠确认失败）', async () => {
     const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
+    await settle();
     assert.equal(services.status.snapshot().degradations.persistence, 'settings-writer-seam-missing');
-    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1); // 一次性
+    // settings 服务整个缺失时子上下文永不激活——缺失是推断而非确认，
+    // 不写「持久化不可用」一次性日志（写失败/装配失败才确认）。
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
 });
 
 test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
@@ -603,4 +608,107 @@ test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿
     const saved = await gateway.set({ advisor: { model: 'm2' } });
     assert.equal(saved.ok, true);
     assert.equal(saved.persisted, true); // settings 写缝激活后保存即持久化
+});
+
+test('R-02-001/AC-01 settings section 注册：installSection 以 advisor-flow 命名空间调用，describe 可服务', async () => {
+    const installed = [];
+    const { ctx, registered } = makeCtx({
+        llm: createFakeLlm([answer('ok')]),
+        settings: {
+            update: async () => {},
+            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
+                installed.push({ namespace, schema, entry, hooks });
+            },
+        },
+        typert: { register: (name, handler) => registered.push({ name, handler }) },
+    });
+    apply(ctx, entryConfig);
+    await settle();
+    assert.equal(installed.length, 1);
+    assert.equal(installed[0].namespace, 'advisor-flow'); // describe 服务本命名空间 → 卡片交集成立
+    assert.ok(installed[0].schema, 'schema 随注册声明');
+    assert.equal(installed[0].entry.enabled, true); // entry = 配置基线
+    assert.equal(typeof installed[0].hooks.onChange, 'function');
+    assert.equal(typeof installed[0].hooks.setSource, 'function');
+});
+
+test('R-02-001/AC-01 onChange → applyConfig：settings 段变更即时生效于后续咨询', async () => {
+    const llm = createFakeLlm([answer('一。'), answer('二。')]);
+    let hooks;
+    const { ctx } = makeCtx({
+        llm,
+        settings: {
+            update: async () => {},
+            installSection: (sectionCtx, namespace, schema, entry, sectionHooks) => {
+                hooks = sectionHooks;
+            },
+        },
+    });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm1' },
+    });
+    await settle();
+    const before = await services.askAdvisor.execute({});
+    assert.equal(llm.calls[0].options.model, 'm1');
+
+    // settings 文件段变更：source-thunk 更新（宿主契约传 thunk）+ onChange 触发 → live re-apply
+    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'test', model: 'm2' } }));
+    hooks.onChange();
+    const after = await services.askAdvisor.execute({});
+    assert.equal(after.adviceId, 'adv-2');
+    assert.equal(llm.calls[1].options.model, 'm2');
+});
+
+test('R-02-001/AC-01 onChange 携非法用户层：disabled-with-reason 兜底且 raw 保留真实键（不楔住热路径）', async () => {
+    const llm = createFakeLlm([answer('ok')]);
+    let hooks;
+    const { ctx, providedService } = makeCtx({
+        llm,
+        settings: {
+            update: async () => {},
+            installSection: (sectionCtx, namespace, schema, entry, sectionHooks) => {
+                hooks = sectionHooks;
+            },
+        },
+        typert: { register: () => {} },
+    });
+    const services = apply(ctx, entryConfig);
+    await settle();
+    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 'broken' }, customKey: { keep: true } }));
+    hooks.onChange();
+    const snapshot = services.status.snapshot();
+    assert.equal(snapshot.enabled, false); // 非法层 → disabled-with-reason 兜底
+    assert.match(snapshot.reason, /配置无效/);
+    assert.equal(snapshot.degradations.persistence, undefined);
+    // 卡片可修复：gateway get 读回保留真实键
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
+    assert.equal(got.config.customKey.keep, true);
+    assert.equal(got.config.advisor.maxTokens, 'broken');
+});
+
+test('R-02-003/AC-02 重复注册守卫：already registered 降级为 entry-source 兜底，状态可查询不崩装载', async () => {
+    const { ctx } = makeCtx({
+        llm: createFakeLlm([]),
+        settings: {
+            update: async () => {},
+            installSection: () => {
+                throw new Error('settings namespace "advisor-flow" is already registered');
+            },
+        },
+    });
+    const services = apply(ctx, { enabled: false });
+    await settle();
+    // 命名空间已在（describe 照常服务）→ 能力视为在，降级清除
+    assert.equal(services.status.snapshot().degradations.settingsSection, undefined);
+    assert.equal(services.status.snapshot().enabled, false); // 状态照常可查询
+});
+
+test('settings 服务缺 installSection 能力：section 缺失显性化（联调验证项，不锚定 AC）', async () => {
+    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]), settings: { update: async () => {} } });
+    const services = apply(ctx, { enabled: false });
+    await settle();
+    assert.equal(services.status.snapshot().degradations.settingsSection, 'install-section-missing');
+    assert.ok(logs.error.some((message) => message.includes('settings section 未注册')));
 });
