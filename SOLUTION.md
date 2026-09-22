@@ -285,7 +285,7 @@ flowchart TD
   - `/advisor-manual [focus]`：立即咨询；进行中可取消。
   - `/advisor status`：启用态、模型路由、各门状态、待处理数、最近活动、累计用量摘要。
   - `/advisor gates`：门配置与阈值只读回读。
-  - `/advisor on|off`：会话级临时开关，不写持久配置。
+  - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 增项，契约在此补记）。
 - **设置命名空间** `advisor-flow`（settings.yaml 顶层键）：
   - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`、`advisor.retryAttempts`（瞬态重试次数，默认 1）
   - `gates.plan|failure|loop|completion`：各含 `enabled`、`policy(review|ask|block)`、阈值（failure/loop 另有 `threshold`，failure 另有 `policy(block|block-session)`）
@@ -304,7 +304,7 @@ flowchart TD
 | R-01-004 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/failure.js |
 | R-01-005 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/loop.js |
 | R-01-006 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/completion.js |
-| R-02-001 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/settings.js；client/SettingsCard.jsx |
+| R-02-001 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/config.js；lib/client/card-state.js；lib/client/render.js |
 | R-02-002 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/usage.js |
 | R-02-003 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/status.js |
 | R-02-004 | 咨询服务 | SOLUTION.md#数据流与信任边界图 | lib/context.js；lib/redact.js |
@@ -366,7 +366,7 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 命令面
-- 职责: `/advisor-manual`、`/advisor status|gates|on|off` 命令挂载（承接 R-01-002、R-02-003）
+- 职责: `/advisor-manual`、`/advisor status|gates|on|off|toggle` 命令挂载（承接 R-01-002、R-02-003）
 - 代码位置: lib/commands.js
 - 实现: 单端（宿主）
 
