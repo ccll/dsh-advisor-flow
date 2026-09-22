@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
 import { createFakeLlm, answer } from './helpers.js';
 
+/**
+ * 模拟 cordis ctx 的 get-trap：白名单内的模拟上下文方法直取；显式提供的
+ * 服务返回实例；「非白名单且未提供」的服务属性抛同型
+ * `cannot get property "X" without inject`——使「未注入属性零次访问」的
+ * 约束在旧代码形态下真能变红。`provide(name, value)` 支持延迟提供
+ * （apply 返回后激活等待中的条件子上下文，模拟宿主服务后到）。
+ */
+const SIMULATED_CONTEXT_METHODS = new Set(['on', 'logger', 'root', 'inject', 'reflect']);
+
 function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings, commands, typert, agents } = {}) {
     const registered = [];
     const subscriptions = [];
@@ -14,7 +23,39 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
         warn: (message) => logs.warn.push(message),
         info: (message) => logs.info.push(message),
     };
-    const ctx = {
+
+    const provided = new Map();       // 服务名 → 实例
+    const pendingChildren = new Map(); // 服务名 → 等待激活的子上下文
+    function runChild(child) {
+        const missing = child.names.filter((name) => !provided.has(name));
+        if (missing.length > 0) {
+            unactivated.push(child.names); // 未激活（缝缺失路径）——后到激活时移除
+            return false;
+        }
+        const index = unactivated.indexOf(child.names);
+        if (index >= 0) {
+            unactivated.splice(index, 1); // 后到提供 → 从未激活名单移除
+        }
+        activated.push(child.names);
+        const sub = Object.fromEntries(child.names.map((name) => [name, provided.get(name)]));
+        child.fn(sub);
+        return true;
+    }
+    function provide(name, value) {
+        provided.set(name, value);
+        const waiting = pendingChildren.get(name);
+        if (waiting) {
+            for (const child of [...waiting]) {
+                if (runChild(child)) {
+                    for (const name of child.names) {
+                        pendingChildren.get(name)?.delete(child);
+                    }
+                }
+            }
+        }
+    }
+
+    const target = {
         logger: () => logger,
         root: { get: (service) => (service === 'llm' ? llm : undefined) },
         ...(withEvents
@@ -22,26 +63,69 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
                 on: (event, handler, options) => subscriptions.push({ event, handler, options }),
             }
             : {}),
-        ...(agents ? { agents } : {}),
-        ...(approvals ? { approvals } : {}),
-        ...(settings ? { settings } : {}),
-        ...(commands ? { commands } : {}),
-        ...(typert ? { typert } : {}),
-        ...(withTools ? { tools: { register: (tool) => registered.push(tool) } } : {}),
     };
-    // 模拟 cordis 条件子上下文：声明的服务全部在场才激活（回调收到以服务名
-    // 为键的子上下文）；任一缺失 = 未激活（缝缺失路径，不崩溃）。
+    const ctx = new Proxy(target, {
+        get(t, prop) {
+            if (typeof prop === 'symbol') {
+                return t[prop];
+            }
+            if (SIMULATED_CONTEXT_METHODS.has(prop)) {
+                return t[prop];
+            }
+            if (provided.has(prop)) {
+                return provided.get(prop);
+            }
+            throw new Error(`cannot get property "${String(prop)}" without inject`);
+        },
+        has(t, prop) {
+            return Reflect.has(t, prop) || provided.has(prop);
+        },
+        set(t, prop, value) {
+            if (SIMULATED_CONTEXT_METHODS.has(prop)) {
+                t[prop] = value; // 模拟上下文方法（inject/on/…）走 target，不是服务
+                return true;
+            }
+            provide(String(prop), value);
+            return true;
+        },
+    });
+    // 声明的必选服务预置占位（真实宿主恒提供；桩内未给实例则为 undefined
+    // 占位，get 不抛——保持「必选服务可安全直访」语义）。
+    for (const serviceName of inject) {
+        provided.set(serviceName, undefined);
+    }
+    if (llm !== undefined) {
+        provide('llm', llm);
+    }
+    if (agents !== undefined) {
+        provide('agents', agents);
+    }
+    if (approvals !== undefined) {
+        provide('approvals', approvals);
+    }
+    if (settings !== undefined) {
+        provide('settings', settings);
+    }
+    if (commands !== undefined) {
+        provide('commands', commands);
+    }
+    if (typert !== undefined) {
+        provide('typert', typert);
+    }
+    if (withTools) {
+        provide('tools', { register: (tool) => registered.push(tool) });
+    }
     ctx.inject = (names, fn) => {
-        const missing = names.filter((serviceName) => ctx[serviceName] === undefined);
-        if (missing.length > 0) {
-            unactivated.push(names);
-            return;
+        const child = { names, fn };
+        for (const name of names) {
+            if (!pendingChildren.has(name)) {
+                pendingChildren.set(name, new Set());
+            }
+            pendingChildren.get(name).add(child);
         }
-        activated.push(names);
-        const sub = Object.fromEntries(names.map((serviceName) => [serviceName, ctx[serviceName]]));
-        return fn(sub);
+        runChild(child);
     };
-    return { ctx, registered, subscriptions, activated, unactivated, logs };
+    return { ctx, registered, subscriptions, activated, unactivated, logs, provide, llm };
 }
 
 const entryConfig = {
@@ -252,6 +336,7 @@ test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人�
     assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 缝可得 → 不降级
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
     const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
+    process.stdout.write('DBG-DECISION ' + JSON.stringify(decision) + '\n');
     assert.equal(decision.kind, 'deny');
     assert.ok(decision.reason.includes('人工拒绝'));
     assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
@@ -437,4 +522,61 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢�
     assert.equal(again.persisted, false);
     assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
+});
+
+test('tools 缝缺失显性化：degradations.askAdvisorTool 标注，激活即清除（五缝显性化对齐）', () => {
+    // 未激活（withTools=false → tools 服务缺失）
+    const missing = makeCtx({ withTools: false, llm: createFakeLlm([]) });
+    const services = apply(missing.ctx, { enabled: false });
+    assert.equal(services.status.snapshot().degradations.askAdvisorTool, 'tools-seam-not-activated');
+    assert.ok(missing.unactivated.some((names) => names.includes('tools')));
+
+    // 激活 → 注册成功 → 标注清除
+    const present = makeCtx({ llm: createFakeLlm([]) });
+    const presentServices = apply(present.ctx, { enabled: false });
+    assert.equal(presentServices.status.snapshot().degradations.askAdvisorTool, undefined);
+    assert.equal(present.registered.length, 1);
+});
+
+test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿主服务后到时序）', async () => {
+    const decisions = [];
+    const writes = [];
+    const endpoints = [];
+    const { ctx, provide, registered, subscriptions, logs, llm } = makeCtx({ llm: createFakeLlm([answer('意见。')]) });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { loop: { enabled: true, policy: 'ask', threshold: 1 } },
+    });
+    // apply 时四缝均缺失 → 降级齐全
+    let degradations = services.status.snapshot().degradations;
+    assert.equal(degradations.askPolicy, 'approver-seam-missing');
+    assert.equal(degradations.commands, 'registry-seam-missing');
+    assert.equal(degradations.settingsCard, 'gateway-seam-missing');
+    assert.equal(degradations.persistence, 'settings-writer-seam-missing');
+
+    // 服务后到：逐一延迟提供 → 子上下文激活、降级清除
+    provide('approvals', { request: async (request) => {
+        decisions.push(request);
+        return false; // 人工拒绝
+    } });
+    provide('commands', { register: (spec) => registered.push(spec) || (() => {}) });
+    provide('settings', { update: async (namespace, raw) => writes.push({ namespace, raw }) });
+    provide('typert', { register: (name, handler) => endpoints.push({ name, handler }) });
+    degradations = services.status.snapshot().degradations;
+    assert.equal(degradations.askPolicy, undefined);
+    assert.equal(degradations.commands, undefined);
+    assert.equal(degradations.settingsCard, undefined);
+    assert.equal(degradations.persistence, undefined);
+
+    // 激活后的缝真实可用：ask 门经审批拒绝 → deny；gateway set 可用
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'deny');
+    assert.match(decision.reason, /人工拒绝/);
+    assert.equal(decisions.length, 1); // ask 策略经审批缝征询
+    const set = endpoints.find((entry) => entry.name === 'advisor-flow/set').handler;
+    const saved = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(saved.ok, true);
+    assert.equal(saved.persisted, true); // settings 写缝激活后保存即持久化
 });
