@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createSettingsCardController } from '../../lib/client/card-state.js';
 import { renderSettingsCard } from '../../lib/client/render.js';
 
-/** Fake RPC over canned handlers (mirrors the host gateway handlers). */
+/** Fake RPC over canned handlers（信封形态与 dsh-client-connection 契约一致）. */
 function makeRpc({ handlers }) {
     const calls = [];
     return {
@@ -14,7 +14,14 @@ function makeRpc({ handlers }) {
             if (!handler) {
                 throw new Error(`no endpoint ${method}`);
             }
-            return handler(payload);
+            const result = await handler(payload);
+            // handler 返回 { ok, value } 形态 = 已是信封（模拟传输/网关级失败
+            // 专用，见信封失败用例）；否则包成 { ok: true, value } —— 与
+            // connection.rpc.call 的 resolve 契约一致（ok:false 也 resolve）。
+            if (typeof result === 'object' && result !== null && result.ok !== undefined && 'value' in result) {
+                return result;
+            }
+            return { ok: true, value: result };
         },
     };
 }
@@ -335,4 +342,49 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     const { resolveAdvisorFlowConfig } = await import('../../lib/config.js');
     const resolved = resolveAdvisorFlowConfig(writtenCleared);
     assert.equal(resolved.config.advisor.reasoningEffort, undefined); // null → 缺省=跟随模型默认
+});
+
+test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通用异常（connection 契约）', async () => {
+    const rawRef = { current: structuredClone(RAW) };
+    // 直接以信封形态 resolve（connection.rpc.call 的失败也是 resolve 非 reject）：
+    // get 失败验证 load 路径，set 失败验证 save 路径（分两个控制器）。
+    const envelope = (message) => ({ ok: false, error: { code: 'gateway/internal', message } });
+    const getFail = {
+        calls: [],
+        call: async (channel, method) => {
+            getFail.calls.push({ channel, method });
+            if (method === 'advisor-flow/get') {
+                return envelope('settings service unavailable');
+            }
+            throw new Error(`no endpoint ${method}`);
+        },
+    };
+    const controller = createSettingsCardController({ rpc: getFail, logger: { warn() {}, error() {} } });
+    const dom = createDomStub();
+    const container = dom.createElement('div');
+    renderSettingsCard({ document: dom, container, controller });
+    await controller.load();
+    assert.equal(controller.getState().status, 'error');
+    assert.match(controller.getState().error, /settings service unavailable/); // error.message 显性化
+    const errorNodes = findAll(container, (node) => node.attrs.class === 'advisor-flow-error');
+    assert.ok(errorNodes[0].textContent.includes('settings service unavailable'));
+
+    // save 路径：load 成功、set 信封失败 → 保存失败显性化并区分 error.code
+    const setFail = {
+        calls: [],
+        call: async (channel, method, payload) => {
+            setFail.calls.push({ channel, method, payload });
+            if (method === 'advisor-flow/get') {
+                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
+            }
+            return envelope('set dispatch failed');
+        },
+    };
+    const saveController = createSettingsCardController({ rpc: setFail, logger: { warn() {}, error() {} } });
+    await saveController.load();
+    saveController.setField('advisor.provider', 'p');
+    const result = await saveController.save();
+    assert.equal(result.ok, false);
+    assert.match(result.error, /set dispatch failed/);
+    assert.equal(result.code, 'gateway/internal'); // 区分 error.code
 });
