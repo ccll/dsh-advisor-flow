@@ -318,8 +318,21 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     const written = writes[0];
     assert.equal(written.advisor.reasoningEffort, 'high'); // 写回内容保留档位
 
-    // 选回「不指定」→ 空值语义（undefined = 跟随模型默认，非法值校验不拒）
+    // 选回「不指定」→ null（可穿越 JSON 序列化的「未配置」载体，非法值校验不拒）
     effortSelect.listeners.change[0]({ target: { value: '' } });
-    assert.equal(controller.getState().patch.advisor.reasoningEffort, undefined);
-    assert.equal(controller.validate(), undefined); // 空值不触发非空字符串拒绝
+    assert.equal(controller.getState().patch.advisor.reasoningEffort, null);
+    assert.equal(controller.validate(), undefined);
+
+    // JSON 往返钉住：undefined 键会被序列化丢弃致 merge 保留旧档位（卡片与
+    // 持久真相分歧）；null 穿越往返后解析为缺省、写回内容不含旧档位。
+    controller.setField('advisor.model', 'm2'); // 顺带验证同次保存
+    const cleared = await controller.save();
+    assert.equal(cleared.ok, true);
+    const wirePatch = JSON.parse(JSON.stringify(rpc.calls.findLast((call) => call.method === 'advisor-flow/set').payload.args.patch));
+    assert.equal(wirePatch.advisor.reasoningEffort, null); // null 穿越序列化（undefined 会被丢弃）
+    const writtenCleared = writes[writes.length - 1];
+    assert.equal(writtenCleared.advisor.reasoningEffort, null); // 持久写内容不含 'high'
+    const { resolveAdvisorFlowConfig } = await import('../../lib/config.js');
+    const resolved = resolveAdvisorFlowConfig(writtenCleared);
+    assert.equal(resolved.config.advisor.reasoningEffort, undefined); // null → 缺省=跟随模型默认
 });
