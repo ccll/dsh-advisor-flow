@@ -35,7 +35,7 @@ id: T-005
 - 会话标识形状实测：session/disposed 是否以纯字符串 id 直传、result 事件是否携带会话语义的 id 字段——sessionOf 的字符串分支与窄版解析按实测结论最终确认（当前已加宽键防护与钉住测试）。
 - effort 下拉选项集收敛：当前硬编码 low/high/max/off——按 resolveModelInfo 实测的真实档位列表收敛选项集，或在 SOLUTION 契约把档位枚举定为封闭集（引擎能力门控已兜住列表外误值，仅 GUI 选择面受限）。
 - block-session：宿主是否存在 agent cancel 类缝、钩子命中后是否真正停止执行。
-- approver：宿主 approval 缝实际可用性与形状（approvals.request|ask 为猜测）。
+- approver：宿主 approval 缝实际可用性与形状——**部分已实测（2026-09-22 journal）**：服务名为 `approval`（dsh-user-approval 的 ApprovalService 存在于宿主）；但经 ctx 代理直访未声明 inject 会抛 `cannot get property without inject` 且 try/catch 探测不可靠（曾致插件树装载崩溃）——已改条件 `ctx.inject(['approval'], …)` 子上下文方案，激活后 approver 缝可用性与 request 形状仍需下次重启确认。
 - delivery source 负载形状与注入消息渲染兼容性。
 - immuneTurns 冷却：turn-end 事件源实测下按 stepped turn 递减。
 - fail-open 委托式放行：waterfall 多监听者场景下后续监听者是否如期执行。
