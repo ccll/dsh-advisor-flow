@@ -37,6 +37,7 @@ id: T-005
 - block-session：宿主是否存在 agent cancel 类缝、钩子命中后是否真正停止执行。
 - approver：宿主 approval 缝实际可用性与形状——**部分已实测（2026-09-22 journal）**：服务名为 `approval`（dsh-user-approval 的 ApprovalService 存在于宿主）；但经 ctx 代理直访未声明 inject 会抛 `cannot get property without inject` 且 try/catch 探测不可靠（曾致插件树装载崩溃）——已改条件 `ctx.inject(['approval'], …)` 子上下文方案，激活后 approver 缝可用性与 request 形状仍需下次重启确认。
 - 必选/可选服务划分实测裁决：必选 = agents/llm（声明式 inject）、可选 = approval/commands/typert/settings（条件子上下文）；**tools 若重启时再报同类属性访问错误则升级必选**（实现方提请实测裁决）。
+- 条件子上下文三项实测（T-005 装载修复复审移交）：① 子上下文 apply 内 throw 的上溯语义（宿主吞掉则 ask_advisor 注册失败静默消失；上溯则恢复整树装载失败——两种后果都需钉死）；② 服务后到时序（宿主是否可能在插件装载后才 provide approval/commands/typert/settings——影响「激活清除降级」是否真能触发）；③ 条件子上下文热重启边界（fiber 随服务消失撤除、服务回归重放 apply：approval 守卫跳过重接、commands/typert 重复注册且 disposer 泄漏）；④ approval/approvals 双候选名常驻等待 fiber 的收敛（真名定后单注册）。
 - delivery source 负载形状与注入消息渲染兼容性。
 - immuneTurns 冷却：turn-end 事件源实测下按 stepped turn 递减。
 - fail-open 委托式放行：waterfall 多监听者场景下后续监听者是否如期执行。
