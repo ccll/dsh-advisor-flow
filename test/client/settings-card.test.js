@@ -158,7 +158,7 @@ test('R-02-001/AC-01 卡片编辑经 set 保存成功：patch 提交、raw 吸�
     const { controller, container, rpc } = await renderedCard();
     controller.setField('advisor.model', 'm2');
     controller.setField('enabled', true);
-    const save = byTag(container, 'button').find((node) => node.attrs.class === 'advisor-flow-save');
+    const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
     assert.equal(save.attrs.disabled, undefined); // 校验通过 → 可保存
     await save.listeners.click[0]();
     const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
@@ -178,7 +178,7 @@ test('R-02-001/AC-03 enabled 且缺 provider/model 时保存被阻断：不发�
     controller.setField('privacy.redactSecrets', false); // 触发一个无关键编辑
     const state = controller.getState();
     assert.match(state.validationError, /缺少 advisor\.model/);
-    const save = byTag(container, 'button').find((node) => node.attrs.class === 'advisor-flow-save');
+    const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
     assert.equal(save.attrs.disabled, 'disabled'); // 校验失败 → 按钮禁用
     const before = rpc.calls.length;
     const result = await controller.save();
@@ -206,7 +206,7 @@ test('R-02-001/AC-03 宿主拒绝保存时错误可见且表单保留（patch �
     assert.equal(result.ok, false);
     assert.match(result.error, /并发修改冲突/);
     assert.equal(controller.getState().patch.advisor.model, 'm9'); // 表单保留待重试
-    const errorNodes = findAll(container, (node) => node.attrs.class === 'advisor-flow-error');
+    const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
     assert.equal(errorNodes.length >= 1, true);
 });
 
@@ -247,7 +247,7 @@ test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（�
     assert.match(result.notice, /当前运行时/);
     assert.match(result.notice, /重启后修改会丢失/);
     // 渲染可见
-    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    const notices = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-notice'));
     assert.equal(notices.length, 1);
     assert.ok(notices[0].textContent.includes('重启后修改会丢失'));
     // 新编辑使旧回执失效
@@ -265,7 +265,7 @@ test('R-02-001/AC-01 保存回执双形态：写缝可得时「已保存并持�
     assert.equal(result.ok, true);
     assert.equal(result.persisted, true);
     assert.match(result.notice, /已保存并持久化/);
-    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    const notices = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-notice'));
     assert.ok(notices[0].textContent.includes('持久化'));
     assert.equal(writes.length, 1);
 });
@@ -303,7 +303,7 @@ test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，�
     assert.match(result.notice, /写入 settings\.yaml 失败/);
     assert.match(result.notice, /原因：.*yaml write failed/); // 原因摘要进回执
     assert.equal(controller.getState().persistError, 'Error: yaml write failed');
-    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    const notices = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-notice'));
     assert.ok(notices[0].textContent.includes('原因：'));
 });
 
@@ -375,7 +375,7 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     await controller.load();
     assert.equal(controller.getState().status, 'error');
     assert.match(controller.getState().error, /settings service unavailable/); // error.message 显性化
-    const errorNodes = findAll(container, (node) => node.attrs.class === 'advisor-flow-error');
+    const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
     assert.ok(errorNodes[0].textContent.includes('settings service unavailable'));
 
     // save 路径：load 成功、set 信封失败 → 保存失败显性化并区分 error.code
