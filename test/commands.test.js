@@ -113,7 +113,7 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     // gates 只读回读
     const gates = advisor.handler(invocation(' gates'));
     assert.match(gates.text, /门配置（只读回读）/);
-    assert.match(gates.text, /loop: enabled=false policy=review threshold=3/);
+    assert.match(gates.text, /loop=off\(review\) threshold=3/);
 });
 
 test('R-02-001/AC-03 enabled 但缺 provider/model 时命令面给出明确原因且状态可查询', async () => {

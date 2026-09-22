@@ -247,3 +247,58 @@ test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于�
     assert.equal(consulted.adviceId, 'adv-1');
     assert.equal(llm.calls[0].options.model, 'm2');
 });
+
+test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询随 session/disposed 一并清除', async () => {
+    const llm = createFakeLlm([{ hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] }]);
+    const { ctx, subscriptions } = makeCtx({ llm });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' } });
+    const disposed = subscriptions.find((s) => s.event === 'session/disposed');
+    assert.equal(disposed.options?.global, true);
+
+    // 会话级 off + 进行中手动咨询
+    services.engine.setSessionEnabled('s1', false);
+    services.commandController.startManual('s1', '焦点');
+    assert.equal(services.engine.sessionEnabled('s1'), false);
+    assert.equal(services.commandController.manualRunning('s1'), true);
+
+    disposed.handler({ id: 's1' });
+    // 覆盖清除（不留残留）、手动咨询记录清理（中止，无用量副作用）
+    assert.equal(services.engine.sessionEnabled('s1'), undefined);
+    assert.equal(services.commandController.manualRunning('s1'), false);
+    // 观察与送达状态同被清理
+    assert.equal(services.observer.snapshot('s1').loopKeys, 0);
+    assert.equal(services.delivery.status().agents.includes('s1'), false);
+});
+
+test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回并修复，保存不丢键', async () => {
+    const registered = [];
+    const llm = createFakeLlm([answer('ok')]);
+    const { ctx } = makeCtx({ llm });
+    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    // 启动配置含非法值 + 真实存在的合法键（若 raw 被丢弃为 {}，这些键会丢）
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'p', model: 'm', maxTokens: 'broken' },
+        privacy: { history: 'off' },
+        customKey: { keep: true },
+    });
+    assert.equal(services.status.snapshot().enabled, false); // 运行时禁用
+
+    const get = registered.find((entry) => entry.name === 'advisor-flow/get').handler;
+    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+    const got = await get({});
+    // raw 保留了真实键（非法 maxTokens 与合法 privacy/customKey 都在）
+    assert.equal(got.config.advisor.maxTokens, 'broken');
+    assert.equal(got.config.privacy.history, 'off');
+    assert.equal(got.config.customKey.keep, true);
+    assert.equal(got.error !== undefined, true);
+
+    // 修复保存：只修 maxTokens —— 合法键与未知键都不丢
+    const result = await set({ args: { patch: { advisor: { maxTokens: 8192 } } } });
+    assert.equal(result.ok, true);
+    const after = await get({});
+    assert.equal(after.config.advisor.maxTokens, 8192);
+    assert.equal(after.config.privacy.history, 'off');
+    assert.equal(after.config.customKey.keep, true);
+    assert.equal(after.config.advisor.model, 'm');
+});
