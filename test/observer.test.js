@@ -107,6 +107,25 @@ test('R-01-004/AC-01 仅单缝投递时正常计数（两种实测结论下都�
     observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'e2' });
     assert.equal(observer.failureStreak('s1', 'bash'), 2);
     // 无执行标识的事件保守逐次计数（宁可阈值偏差一格，不可让失败门失去输入）
+    // ——临时偏置；若联调确认两缝无共享标识，idempotency token 方案见
+    // T-002 联调清单（b5d82eb）。
     observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false });
     assert.equal(observer.failureStreak('s1', 'bash'), 3);
+});
+
+test('R-01-004/AC-01 同工具两次不同执行（不同标识）均正常计数，不被去重误并', () => {
+    const { observer } = makeObserver();
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'exec-A' });
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'exec-B' });
+    // 去重键必须逐执行区分：若未来放宽为 session+toolName 宽键，这里会塌成
+    // 1 而漏计失败门输入——该断言钉住「键必含执行标识字段」的约束（实现侧
+    // resultIdentity 仅从 execId/callId/executionId/seq/id 提取，宽键不成立）。
+    assert.equal(observer.failureStreak('s1', 'bash'), 2);
+    // 数字形态的标识同样逐执行区分
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, seq: 1 });
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, seq: 2 });
+    assert.equal(observer.failureStreak('s1', 'bash'), 4);
+    // 跨会话同标识互不影响（键含 sessionId）
+    observer.onEvent({ type: 'tool/result', session: 's2', tool: 'bash', ok: false, execId: 'exec-A' });
+    assert.equal(observer.failureStreak('s2', 'bash'), 1);
 });
