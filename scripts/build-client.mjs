@@ -34,6 +34,9 @@ try {
     esbuild = require('esbuild')
 } catch {
     const fallbacks = [
+        // 环境依赖登记（机器环境依赖，非包依赖）：仓库不 vendor node_modules，
+        // esbuild 在本机的可得路径为全局 pi-coding-agent 安装内（只读复用）。
+        // 换机/升级时路径失效 → 请安装 esbuild 或更新本清单。
         '/home/cailei/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/esbuild',
     ]
     for (const candidate of fallbacks) {
@@ -64,16 +67,19 @@ if (result.errors.length > 0) {
     throw new Error(`client bundle build failed:\n${result.errors.map((e) => e.text).join('\n')}`)
 }
 
-// Bundle contract: the artifact must carry the closure-factory load handoff
-// with the plugin id and parse as a CLASSIC script (no ESM statements, no
-// import.meta) — a violation is a parse-time SyntaxError for the entire
-// combined plugin bundle.
+// Bundle contract（classic-script 硬约束的构建期断言，三条独立标签化）：
+// 产物必须含 closure-factory loader 注册入口（带插件 id）、不得含
+// import.meta、不得含顶层 ESM 语句——任一违反都是整个合并插件 bundle 的
+// 解析期 SyntaxError（T-005 client 装载实测）。
 const bundleText = readFileSync(OUT_FILE, 'utf8')
 if (!bundleText.includes('window.__ModuleLoader__.load(') || !bundleText.includes(JSON.stringify(ID))) {
-    throw new Error('client bundle contract: the closure-factory load handoff with the plugin id is missing')
+    throw new Error('client bundle contract [loader-entry]: the closure-factory load handoff with the plugin id is missing')
 }
-if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
-    throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
+if (bundleText.includes('import.meta')) {
+    throw new Error('client bundle contract [import.meta]: emitted bundle contains import.meta — the classic-script loader would fail to parse it')
+}
+if (/(^|\n)\s*(import|export)\s/.test(bundleText)) {
+    throw new Error('client bundle contract [top-level-esm]: emitted bundle contains top-level ESM statements — the classic-script loader would fail to parse it')
 }
 
 console.log(`build-client: lib/client/index.js -> lib/client.js (closure-factory CJS, id=${ID})`)

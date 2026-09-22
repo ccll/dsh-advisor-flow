@@ -479,3 +479,40 @@ test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、ef
     assert.equal(warnCount, 1);
     void warns;
 });
+
+test('R-02-003/AC-02 信封成功但 value 形态意外 → fallback 文案而非 undefined（产物新鲜度守卫同轮）', async () => {
+    const rpc = {
+        calls: [],
+        call: async (channel, method) => {
+            rpc.calls.push({ channel, method });
+            if (method === 'advisor-flow/get') {
+                return { ok: true, value: 'unexpected scalar' }; // value 非 record/array
+            }
+            return { ok: true, value: 'unexpected' };
+        },
+    };
+    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
+    const dom = createDomStub();
+    const container = dom.createElement('div');
+    renderSettingsCard({ document: dom, container, controller });
+    await controller.load();
+    assert.equal(controller.getState().status, 'error');
+    assert.match(controller.getState().error, /配置通道返回了意外形态/); // fallback 文案而非 undefined
+    // save 路径同语义（独立控制器：get 成功、set 返回意外形态 value）
+    const saveRpc = {
+        calls: [],
+        call: async (channel, method, payload) => {
+            saveRpc.calls.push({ channel, method, payload });
+            if (method === 'advisor-flow/get') {
+                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
+            }
+            return { ok: true, value: 'unexpected scalar' };
+        },
+    };
+    const saveController = createSettingsCardController({ rpc: saveRpc, logger: { warn() {}, error() {} } });
+    await saveController.load();
+    saveController.setField('advisor.provider', 'p');
+    const result = await saveController.save();
+    assert.equal(result.ok, false);
+    assert.match(result.error, /配置通道返回了意外形态/);
+});
