@@ -1,0 +1,88 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createSessionObserver, normalizeToolArgs } from '../lib/observer.js';
+
+/** Drive the observer through a compact fixture. */
+function makeObserver() {
+    const logs = { info: [], warn: [], error: [] };
+    const observer = createSessionObserver({
+        logger: {
+            info: (m, f) => logs.info.push({ m, f }),
+            warn: (m) => logs.warn.push(m),
+            error: (m) => logs.error.push(m),
+        },
+    });
+    return { observer, logs };
+}
+
+test('R-01-004/AC-01 观察器维护失败计数：连续失败累加，成功清零', () => {
+    const { observer } = makeObserver();
+    observer.recordResult('s1', 'write_file', false);
+    observer.recordResult('s1', 'write_file', false);
+    assert.equal(observer.failureStreak('s1', 'write_file'), 2);
+    assert.equal(observer.failureStreak('s1', 'read_file'), 0); // 按工具隔离
+    observer.recordResult('s1', 'write_file', true);
+    assert.equal(observer.failureStreak('s1', 'write_file'), 0);
+});
+
+test('R-01-005/AC-03 循环等价以工具名与规范化参数为准：键序无关、参数实质变化即新键', () => {
+    const { observer } = makeObserver();
+    const first = observer.recordCall('s1', 'write_file', { path: 'a.js', mode: 'w', content: 'x' });
+    assert.equal(first.count, 1);
+    // 键序不同但内容等价 → 同键累加
+    const second = observer.recordCall('s1', 'write_file', { content: 'x', mode: 'w', path: 'a.js' });
+    assert.equal(second.count, 2);
+    assert.equal(second.key, first.key);
+    // 参数实质变化 → 新键从 1 起算
+    const changed = observer.recordCall('s1', 'write_file', { path: 'b.js', mode: 'w', content: 'x' });
+    assert.notEqual(changed.key, first.key);
+    assert.equal(changed.count, 1);
+    // 工具名参与等价键
+    const otherTool = observer.recordCall('s1', 'edit_file', { path: 'a.js', mode: 'w', content: 'x' });
+    assert.notEqual(otherTool.key, first.key);
+});
+
+test('R-01-005/AC-03 参数规范化：长字符串截断保留长度标记，同参仍等价', () => {
+    const long = 'x'.repeat(5000);
+    assert.equal(normalizeToolArgs({ blob: long }), normalizeToolArgs({ blob: long }));
+    const key = normalizeToolArgs({ blob: long });
+    assert.ok(key.includes('len=5000'));
+    assert.ok(key.length < 1000); // 序列化有界
+    assert.notEqual(normalizeToolArgs({ blob: long }), normalizeToolArgs({ blob: `${long}y` }));
+});
+
+test('R-01-004/AC-01 压缩/重写事件重置观察状态，失败计数不跨压缩继承', () => {
+    const { observer } = makeObserver();
+    observer.recordResult('s1', 'write_file', false);
+    observer.recordResult('s1', 'write_file', false);
+    observer.recordCall('s1', 'write_file', { path: 'a' });
+    observer.onEvent({ type: 'session/compact', session: 's1' });
+    assert.equal(observer.failureStreak('s1', 'write_file'), 0);
+    assert.equal(observer.snapshot('s1').loopKeys, 0);
+    // reset 后同一等价键重新从 1 计数
+    const after = observer.recordCall('s1', 'write_file', { path: 'a' });
+    assert.equal(after.count, 1);
+});
+
+test('R-01-004/AC-01 result 事件经 onEvent 消费：显式失败入计数、成功清零', () => {
+    const { observer } = makeObserver();
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false });
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: false });
+    assert.equal(observer.failureStreak('s1', 'bash'), 2);
+    observer.onEvent({ type: 'tool/result', session: 's1', tool: 'bash', ok: true });
+    assert.equal(observer.failureStreak('s1', 'bash'), 0);
+});
+
+test('R-02-005 观察器容错：垃圾事件与内部异常不外抛、不断事件管线', () => {
+    const { observer, logs } = makeObserver();
+    assert.equal(observer.onEvent(null), undefined);
+    assert.equal(observer.onEvent('garbage'), undefined);
+    assert.equal(observer.onEvent({ type: 'unknown/type', session: 's1' }), undefined);
+    // 内部抛错被包含
+    const breaking = createSessionObserver({ logger: { info: () => logs.info.push(1), warn() {}, error: (m) => logs.error.push(m) } });
+    breaking.recordResult = () => {
+        throw new Error('boom');
+    };
+    assert.equal(breaking.onEvent({ type: 'tool/result', session: 's', tool: 't', ok: false }), undefined);
+    assert.equal(logs.error.length, 1);
+});
