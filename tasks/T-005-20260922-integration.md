@@ -33,6 +33,7 @@ id: T-005
 - 双缝投递：`tools/result` 与 `session/event` 是否重复投递同一工具结果；两缝载荷是否共享可拼接执行标识（无则评估 idempotency token 方案）；双缝成败判定一致性（不一致则合并策略改「任一缝报失败即失败」）；resultIdentity 'id' 字段是否跨缝不同值。
 - 观察器事件形状：result 失败判定字段（error/ok/success）、压缩/重写事件名实测。
 - 会话标识形状实测：session/disposed 是否以纯字符串 id 直传、result 事件是否携带会话语义的 id 字段——sessionOf 的字符串分支与窄版解析按实测结论最终确认（当前已加宽键防护与钉住测试）。
+- effort 下拉选项集收敛：当前硬编码 low/high/max/off——按 resolveModelInfo 实测的真实档位列表收敛选项集，或在 SOLUTION 契约把档位枚举定为封闭集（引擎能力门控已兜住列表外误值，仅 GUI 选择面受限）。
 - block-session：宿主是否存在 agent cancel 类缝、钩子命中后是否真正停止执行。
 - approver：宿主 approval 缝实际可用性与形状（approvals.request|ask 为猜测）。
 - delivery source 负载形状与注入消息渲染兼容性。
