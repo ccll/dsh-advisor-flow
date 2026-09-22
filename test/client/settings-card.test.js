@@ -260,3 +260,30 @@ test('R-02-001/AC-01 保存回执双形态：写缝缺失时「仅运行时态�
     assert.match(result.notice, /当前运行时/);
     assert.match(result.notice, /重启后失效/);
 });
+
+test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，不误读为功能缺失）', async () => {
+    const rawRef = { current: structuredClone(RAW) };
+    const gateway = await gatewayHandlers(rawRef);
+    gateway['advisor-flow/set'] = async (payload) => ({
+        ok: true,
+        config: rawRef.current,
+        persisted: false,
+        notice: '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。',
+        persistError: 'Error: yaml write failed',
+    });
+    const rpc = makeRpc({ handlers: { 'advisor-flow/get': async () => ({ config: rawRef.current, warnings: [] }), 'advisor-flow/set': gateway['advisor-flow/set'] } });
+    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
+    const dom = createDomStub();
+    const container = dom.createElement('div');
+    renderSettingsCard({ document: dom, container, controller });
+    await controller.load();
+    controller.setField('advisor.model', 'm9');
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, false);
+    assert.match(result.notice, /写入 settings\.yaml 失败/);
+    assert.match(result.notice, /原因：.*yaml write failed/); // 原因摘要进回执
+    assert.equal(controller.getState().persistError, 'Error: yaml write failed');
+    const notices = findAll(container, (node) => node.attrs.class === 'advisor-flow-notice');
+    assert.ok(notices[0].textContent.includes('原因：'));
+});

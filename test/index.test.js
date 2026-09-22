@@ -335,3 +335,39 @@ test('R-02-001/AC-01 持久写缝缺失：一次性 error + degradations.persist
     assert.equal(services.status.snapshot().degradations.persistence, 'settings-writer-seam-missing');
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1); // 一次性
 });
+
+test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
+    let shouldThrow = true;
+    const llm = createFakeLlm([]);
+    const { ctx, registered, logs } = makeCtx({ llm });
+    ctx.gateway = { register: (name, handler) => registered.push({ name, handler }) };
+    ctx.settings = {
+        update: async () => {
+            if (shouldThrow) {
+                throw new Error('yaml write failed');
+            }
+        },
+    };
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
+    const set = registered.find((entry) => entry.name === 'advisor-flow/set').handler;
+
+    // 失败 → 标注 + 一次性 error
+    const first = await set({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(first.persisted, false);
+    assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1);
+
+    // 恢复（写入修好）→ 保存成功 → 标注清除
+    shouldThrow = false;
+    const recovered = await set({ args: { patch: { advisor: { model: 'm3' } } } });
+    assert.equal(recovered.persisted, true);
+    assert.match(recovered.notice, /已保存并持久化/);
+    assert.equal(services.status.snapshot().degradations.persistence, undefined);
+
+    // 再失败 → 再次显性（错误日志第二次出现）
+    shouldThrow = true;
+    const again = await set({ args: { patch: { advisor: { model: 'm4' } } } });
+    assert.equal(again.persisted, false);
+    assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
+});

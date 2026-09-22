@@ -175,8 +175,8 @@ test('R-02-001/AC-01 非法 patch 不触发持久写', async () => {
     assert.equal(writes.length, 0);
 });
 
-/** gateway fixture with explicit persist/onPersistenceFailure injection. */
-function createGatewayFixture({ persist, onPersistenceFailure } = {}) {
+/** gateway fixture with explicit persist/persistence-callback injection. */
+function createGatewayFixture({ persist, onPersistenceFailure, onPersistenceRecovered } = {}) {
     let raw = structuredClone(BASE);
     const applied = [];
     const gateway = createConfigGateway({
@@ -187,7 +187,86 @@ function createGatewayFixture({ persist, onPersistenceFailure } = {}) {
         },
         persist,
         onPersistenceFailure,
+        onPersistenceRecovered,
         logger: { warn() {}, error() {}, info() {} },
     });
     return { gateway, applied };
 }
+
+test('R-02-001/AC-01 持久化失败→恢复→再失败全链：降级标注随恢复清除，再失败再次显性', async () => {
+    let shouldThrow = true;
+    const failures = [];
+    const recoveries = [];
+    const { gateway } = createGatewayFixture({
+        persist: async () => {
+            if (shouldThrow) {
+                throw new Error('yaml write failed');
+            }
+        },
+        onPersistenceFailure: (reason) => failures.push(reason),
+        onPersistenceRecovered: () => recoveries.push(1),
+    });
+    // 第一次保存：写失败 → 失败专属回执 + 降级
+    const failed = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(failed.persisted, false);
+    assert.equal(failed.notice, '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。');
+    assert.deepEqual(failures, ['persist-write-failed']);
+    assert.equal(recoveries.length, 0);
+
+    // 恢复：写缝修好 → 持久化成功 → 回执升级、恢复回调触发
+    shouldThrow = false;
+    const recovered = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm3' } } } });
+    assert.equal(recovered.persisted, true);
+    assert.equal(recovered.notice, '已保存并持久化到 settings.yaml。');
+    assert.equal(recoveries.length, 1);
+    assert.deepEqual(failures, ['persist-write-failed']); // 失败计数未虚增
+
+    // 再失败：必须再次显性（恢复不得静默后续失败）
+    shouldThrow = true;
+    const failedAgain = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm4' } } } });
+    assert.equal(failedAgain.persisted, false);
+    assert.deepEqual(failures, ['persist-write-failed', 'persist-write-failed']);
+    assert.equal(recoveries.length, 1);
+});
+
+test('R-02-001/AC-01 回执三态：persisted / 写失败专属文案 / 缺失场景运行时态', async () => {
+    let shouldThrow = false;
+    const notices = [];
+    const { gateway } = createGatewayFixture({
+        persist: async () => {
+            if (shouldThrow) {
+                throw new Error('disk full');
+            }
+        },
+    });
+    // 三态之一：持久化
+    notices.push((await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } })).notice);
+    // 三态之二：写失败专属文案（非 EPHEMERAL，不误读为功能缺失）
+    shouldThrow = true;
+    const failed = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm3' } } } });
+    notices.push(failed.notice);
+    assert.equal(failed.notice, '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。');
+    // 三态之三：缝缺失 → 运行时态
+    const missingSeam = createConfigGateway({
+        getRawConfig: () => structuredClone(BASE),
+        applyResolved: () => {},
+    });
+    notices.push((await missingSeam['advisor-flow/set']({ args: { patch: { advisor: { model: 'm4' } } } })).notice);
+    assert.deepEqual(
+        [...new Set(notices)],
+        ['已保存并持久化到 settings.yaml。', '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。', '已保存到当前运行时；宿主重启后失效，持久化随后续版本提供。'],
+    );
+});
+
+test('R-02-001/AC-01 persistError 字段随失败回执透出（卡片原因摘要的载体）', async () => {
+    const { gateway } = createGatewayFixture({
+        persist: async () => {
+            throw new Error('yaml write failed');
+        },
+    });
+    const failed = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.match(failed.persistError, /yaml write failed/);
+    const recovered = createGatewayFixture({});
+    const ok = await recovered.gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
+    assert.equal(ok.persistError, undefined); // 成功回执不带原因字段
+});
