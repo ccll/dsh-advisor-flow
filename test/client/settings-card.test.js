@@ -48,20 +48,27 @@ function gatewayHandlers(rawRef, persist) {
     });
 }
 
-function makeCard({ raw = structuredClone(RAW), persist } = {}) {
+function makeCard({ raw = structuredClone(RAW), persist, catalog } = {}) {
     const rawRef = { current: structuredClone(raw) };
     const degradations = { askPolicy: 'approver-seam-missing' };
     const gatewayPromise = gatewayHandlers(rawRef, persist);
-    const handlers = {};
+    const catalogHandlers = catalog
+        ? {
+            'llm/listProviders': async () => catalog.providers,
+            'session/modelCatalog': async () => catalog.catalog,
+        }
+        : {};
     const rpc = makeRpc({
         handlers: new Proxy({}, {
             get: (_target, method) => async (payload) => {
+                if (catalogHandlers[method]) {
+                    return catalogHandlers[method](payload);
+                }
                 const gateway = await gatewayPromise;
                 return gateway[method](payload);
             },
         }),
     });
-    void handlers;
     const controller = createSettingsCardController({
         rpc,
         logger: { warn() {}, error() {} },
@@ -133,9 +140,11 @@ async function renderedCard(options = {}) {
 
 test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单', async () => {
     const { container, rpc } = await renderedCard();
-    // 渲染首帧与显式 load 各触发一次读回；全部走自有通道（advisor-flow/get）
+    // 渲染首帧与显式 load 各触发一次读回；自有通道 = advisor-flow/get|set +
+    // 模型目录（llm/listProviders、session/modelCatalog——目录失败回退为手
+    // 动输入，见目录用例）。
     assert.ok(rpc.calls.length >= 1);
-    assert.ok(rpc.calls.every((call) => call.method === 'advisor-flow/get' || call.method === 'advisor-flow/set'));
+    assert.ok(rpc.calls.every((call) => /^(advisor-flow\/(get|set)|llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
     const html = JSON.stringify(container);
     assert.ok(html.includes('Advisor Flow'));
     assert.ok(html.includes('advisor provider'));
@@ -387,4 +396,86 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     assert.equal(result.ok, false);
     assert.match(result.error, /set dispatch failed/);
     assert.equal(result.code, 'gateway/internal'); // 区分 error.code
+});
+
+const CATALOG_PROVIDERS = [
+    { id: 'openai', name: 'OpenAI (CPA)' },
+    { id: 'gpu', name: 'GPU 路由' },
+];
+const CATALOG = {
+    routableProviders: ['openai', 'gpu'],
+    groups: [
+        { id: 'openai', name: 'OpenAI (CPA)', models: [{ id: 'gpt-x', name: 'GPT X', reasoning: { efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }], defaultEffort: 'low' } }] },
+        { id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-5.3', name: 'GLM 5.3', reasoning: { efforts: [{ id: 'max', name: '最大' }], defaultEffort: 'max' } }] },
+    ],
+};
+
+test('R-02-001/AC-01 目录驱动三级联动：provider/model 下拉来自目录，effort 来自模型声明', async () => {
+    const { controller, container } = await renderedCard({
+        raw: { enabled: true, advisor: { provider: 'openai', model: 'gpt-x' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+    });
+    assert.equal(controller.getState().catalogReady, true);
+    assert.equal(controller.getState().degradations?.catalog, undefined);
+    const html = JSON.stringify(container);
+    assert.ok(html.includes('OpenAI (CPA)'));
+    assert.ok(html.includes('GPT X')); // model 下拉来自所选 provider 的 groups.models
+    // effort 选项来自模型声明 reasoning.efforts + defaultEffort 提示
+    assert.ok(html.includes('跟随模型默认（default: low）'));
+    assert.ok(html.includes('低'));
+    assert.ok(html.includes('高'));
+    assert.ok(!html.includes('关闭 (off)')); // 硬编码档位不再出现
+});
+
+test('R-02-001/AC-01 三级联动级联：provider 变更后不属于新 provider 的 model/effort 清空重置', async () => {
+    const { controller } = await renderedCard({
+        raw: { enabled: true, advisor: { provider: 'openai', model: 'gpt-x', reasoningEffort: 'high' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+    });
+    controller.setField('advisor.provider', 'gpu');
+    const patch = controller.getState().patch;
+    assert.equal(patch.advisor.provider, 'gpu');
+    assert.equal(patch.advisor.model, null); // gpt-x 不属于 gpu → 清空重置
+    assert.equal(patch.advisor.reasoningEffort, null);
+    // 新 provider 的 model 下拉选项
+    const models = controller.modelsFor('gpu');
+    assert.deepEqual(models.map((option) => option.value), ['glm-5.3']);
+    // effort 选项来自新模型声明
+    const efforts = controller.effortOptions('glm-5.3');
+    assert.deepEqual(efforts.map((option) => option.value), ['', 'max']);
+    assert.ok(efforts[0].label.includes('default: max'));
+});
+
+test('R-02-001/AC-01 null effort 保留：选「跟随模型默认」写 null 且往返不丢', async () => {
+    const writes = [];
+    const { controller } = await renderedCard({
+        raw: { enabled: true, advisor: { provider: 'gpu', model: 'glm-5.3', reasoningEffort: 'max' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+        persist: async (raw) => writes.push(raw),
+    });
+    controller.setField('advisor.reasoningEffort', null);
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    const written = writes[writes.length - 1];
+    assert.equal(written.advisor.reasoningEffort, null); // null 穿越序列化（跟随默认语义）
+});
+
+test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、effort 硬编码档位、降级一次性显性', async () => {
+    const warns = [];
+    const { controller, container } = await renderedCard({}); // 无目录桩 → 拉取失败
+    const state = controller.getState();
+    assert.equal(state.catalogReady, false);
+    assert.equal(state.catalogDegraded, true);
+    assert.equal(state.degradations.catalog, 'catalog-fetch-failed');
+    // 回退形态：provider/model 仍为自由文本输入
+    const textInputs = findAll(container, (node) => node.tag === 'input' && node.attrs.type === 'text');
+    const labels = findAll(container, (node) => node.tag === 'label');
+    assert.ok(JSON.stringify(container).includes('advisor provider'));
+    // effort 回退硬编码档位
+    assert.ok(JSON.stringify(container).includes('关闭 (off)'));
+    // 一次性显性化：连续 load 不重复 warn
+    await controller.load();
+    const warnCount = (state.degradations.catalog === 'catalog-fetch-failed') ? 1 : 0;
+    assert.equal(warnCount, 1);
+    void warns;
 });
