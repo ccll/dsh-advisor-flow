@@ -351,13 +351,14 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 配置与状态服务
-- 职责: `advisor-flow` 命名空间注册与 live re-apply（signature 变更才重建运行时）；web 设置卡 gateway RPC（get/set）；用量台账；状态快照（承接 R-02-001、R-02-002、R-02-003）
+- 职责: `advisor-flow` 命名空间注册与 live re-apply（signature 变更才重建运行时）；web 设置卡 gateway RPC（get/set，含持久写缝接线）；用量台账；状态快照（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告。
+  - 持久写：合法保存即运行时生效 + 经 settings bridge 写回 `advisor-flow` 命名空间（merge 语义在缝内，settings.yaml 唯一写入者是宿主桥）；写缝缺失/写失败显性降级（degradations.persistence + 一次性 error），卡片回执双形态（已持久化/仅运行时态）。
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要。
   - 失败显性化：丢弃/超时/配额一律 info 级日志带原因。
-- 代码位置: lib/settings.js、lib/usage.js、lib/status.js
-- 实现: 单端（宿主）+ client 卡片
+- 代码位置: lib/config.js、lib/gateway.js、lib/usage.js、lib/status.js
+- 实现: 单端（宿主）+ client 卡片（lib/client/card-state.js 纯逻辑 + lib/client/render.js 零依赖 DOM）
 
 ### 咨询工具
 - 职责: 注册 `ask_advisor` 工具面，参数校验与错误转译（承接 R-01-001）
