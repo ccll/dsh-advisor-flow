@@ -5,7 +5,7 @@ id: T-001
 ---
 # 咨询服务与配置核心
 
-状态: active
+状态: completed
 关联: R-01-001、R-01-002（工具与错误语义）、R-02-001（配置解析与硬门）、R-02-002（用量台账）、R-02-003（失败显性化）、R-02-004（裁剪与脱敏）、R-02-005（非阻断）；关联决策 C-002、C-003
 风险等级: standard
 
@@ -49,3 +49,17 @@ id: T-001
 | 跨实现 | 不适用：单一实现 | — |
 
 ## 终态与证据
+
+- 实现: lib/config.js、lib/redact.js、lib/context.js、lib/consultation.js、lib/usage.js、lib/status.js、lib/util.js、lib/tools/ask-advisor.js、lib/index.js（bundle 入口骨架，含根作用域 LLM 解析）；package.json、cordis.patch.yml。门控/观察/命令/卡片按边界留待后续 task。
+- 测试: `node --test` 50/50 全绿；test-anchored 16/30（migration T-002 承载其余 14 项，warnings 无 unknown anchor）；lint --self-test 与 --report 通过。
+- SOLUTION 对照: 双轴复审逐项核对 SOLUTION 契约与实现一致（含 C-005 quota 语义对齐、retryAttempts/toolResultMaxBytes 两键契约回补）；无差异。
+- commit: 1e8f7ac
+- commit: fe04be0
+- commit: 8393f5d
+- commit: 63bfec6
+- review:
+  - 审核方: 双轴独立评审——Standards 轴代理 eb77d407-3912-4c16-86c8-da1c1997a42d、Spec 轴代理 8f19eb7a-2266-4fb4-9220-ef1f316e1ba8，均经 code-review skill 流程
+  - 目的理解: 本 task 目标是在 dsh 接缝上正确实现"一次咨询"的核心语义（可注入、可测、非阻断），受 SOLUTION 咨询服务/配置与状态服务/咨询工具契约与 DOMAIN 非阻断不变量约束；两位 reviewer 开审前已据 map 建立该理解并记录
+  - 执行方式: code-review skill 双轴并行子代理；Standards 基线 = AGENTS/CONVENTIONS/handoff 硬约束 + Fowler 坏味道清单；Spec 基线 = T-001 任务书 + SOLUTION/PRD/DOMAIN；范围 4b825dc..HEAD 代码与配置
+  - 问题与修复: 首轮 Standards 2 硬违规 + 4 坏味道、Spec 2 中 + 4 低——全部经 8393f5d 修复并经同审核方逐项确认已解决；复审新增锚点语义漂移 3 处与默认值单源 1 处，经 63bfec6 修复；过程中 advisor 注入两度纠偏（PRD AC-03 语义漂移 c55d90e；migration 掩盖的锚点缺口 15→18 显形）
+  - 复审结论: 双轴终确认均通过，无未决事项；残余风险一项——宽松 JSON balancedObjects 帧误识别边界待真实模型联调验证（已有空 note/非帧 JSON/markdown 围栏三类测试）

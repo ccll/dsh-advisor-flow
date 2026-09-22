@@ -15,15 +15,16 @@ strict 测试锚定要求 PRD 全部 AC-ID 在测试中锚定；T-001（咨询�
 
 ## 差距评估
 
-- `agentmap_lint.py --report`：test-anchored=12/30。
+- `agentmap_lint.py --report`：- `agentmap_lint.py --report`：test-anchored=12/30（后经 EARS 修正与修复轮，现为 16/30）。
 - 未锚定清单：R-01-001/AC-03（咨询引擎重试预算可配）、R-02-004/AC-01..02（裁剪与排除语义，现有 context 测试需补斜杠锚点）；R-01-002/AC-01..02（命令面）；R-01-003..006 全部 AC（门控服务）；R-02-005/AC-02（门组件 fail-open）。
 - 上述需求的实现尚未开始（T-003 门控与观察、T-004 命令与卡片待立项）；R-01-001/AC-03 与 R-02-004 两项随修复轮补齐。
 
 ## 收敛方案
 
 - 后续实现任务（门控、命令、卡片）以测试先行落地，测试名携带对应 `<R-ID>/AC-nn` 锚点。
-- 全部 27 个 AC 锚定后：CONVENTIONS 切回 strict，本任务转 completed（证据 = lint 计数）。
+- 全部 AC 锚定后：CONVENTIONS 切回 strict，本任务转 completed（证据 = lint 计数）。
 - 本任务只承载锚点迁移，不承载任何实现设计（设计归各实现任务）。
+- 跨任务交接项（自 T-001 终态移交）：宽松 JSON balancedObjects 帧解析（lib/consultation.js）为自研解析器，接入真实模型输出时须验证帧误识别边界（已覆盖空 note/非帧 JSON/markdown 围栏三类单测）；该联调验收随首个接真实模型的任务（T-003/T-004 或集成冒烟）执行，不得在 T-001 关闭后失track。
 
 ## 测试计划
 
