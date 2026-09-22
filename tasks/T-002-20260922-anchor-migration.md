@@ -5,7 +5,7 @@ id: T-002
 ---
 # 测试锚定迁移：剩余 AC 锚点补齐
 
-状态: active
+状态: completed
 关联: R-01-002、R-01-003、R-01-004、R-01-005、R-01-006、R-02-005（14 个未锚定 AC 的归属需求）
 风险等级: standard
 
@@ -42,3 +42,17 @@ strict 测试锚定要求 PRD 全部 AC-ID（30 个）在测试中锚定。T-001
 | 跨实现 | 不适用：单一实现 | — |
 
 ## 终态与证据
+
+- 实现: 无运行时代码——纯锚点迁移与映射窗口管理；CONVENTIONS 随本提交由 migration T-002 切回 strict。
+- 测试: `agentmap_lint.py --report` test-anchored 30/30、warnings 清零（收口前独立复跑实证：npm test 122/122、lint exit 0）。
+- SOLUTION 对照: 不适用（无方案变化；迁移过程中 EARS 句式修正使 AC 计数 27→30，属 PRD 措辞校准）。
+- commit: c62fe17
+- commit: 1ed08a2
+- commit: b5d82eb
+- commit: 3ee4383
+- review:
+  - 审核方: Standards 轴独立评审代理（eb77d407-3912-4c16-86c8-da1c1997a42d），同 T-001/T-003/T-004 审核方
+  - 目的理解: 迁移窗口的成果是「锚点真实性」——锚点必须指向真实覆盖而非虚报，lint 机械计数可信；reviewer 各轮复审均以此为目的核验
+  - 执行方式: 随 T-001/T-003/T-004 各实现轮的 Standards 轴复审逐轮核验（17→16 虚报锚点移除、空格锚点改正、新增测试锚点语义相符性），lint 机械校验为可执行证据
+  - 问题与修复: 迁移窗口内发现并修正三类锚点失真（空格写法规避、引擎层虚报 AC 覆盖、migration 模式掩盖的真实缺口 15→18 显形）；全部经对应轮修复
+  - 复审结论: Standards 轴各轮均确认锚点真实性纪律成立；30/30 达成后 strict 恢复，lint 全绿无 warning
