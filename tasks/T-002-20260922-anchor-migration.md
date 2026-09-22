@@ -29,7 +29,8 @@ strict 测试锚定要求 PRD 全部 AC-ID（30 个）在测试中锚定。T-001
   - `tools/result` 与 `session/event` 双缝是否重复投递同一工具结果；**两缝载荷是否共享可拼接的执行标识（execId/callId/seq）**——若实测无共享标识，评估在调用时生成 idempotency token 由双缝回传的可行性；当前实现为「有标识去重、无标识保守逐次计数」的临时偏置，实测后收敛。
   - 双缝去重的键宽语义实测：同工具两次不同执行不得被误并为一次（单测已钉该语义，实测验证真实载荷满足键假设）。
   - 观察器假设的事件形状实测：result 失败判定字段（error/ok/success）、压缩/重写事件名——错向会把失败记成功。
-  - `stopSession` 字段：handoff 已验证的 waterfall 契约仅 allow/ask/deny；宿主是否消费 stopSession 需实测，否则 block-session 退化为普通 deny（R-01-004/AC-03 兑现方式需按实测结论收敛）。
+  - block-session 兑现路径（修复后已收敛）：保证路径仅 deny(reason)；会话停止经注入钩子——实测宿主是否存在 agent cancel 类缝、钩子命中后宿主是否真正停止执行（R-01-004/AC-03 兑现方式按实测结论最终确认）。
+  - fail-open 放行形态统一（T-003 复审遗留轻微项）：handlePreExecute 顶层 catch 当前返回裸 allow（终止瀑布跳过后续监听者），应统一为委托式放行（next 存在时委托）——随 T-004 修复轮收敛，属纯代码级修复。
   - approver 宿主缝实际可用性（ctx.approval 或等价服务）：当前 ask 策略在无 approver 时 fail-open。
   - delivery source 负载形状（kind/plugin/form/summary）与宿主注入消息渲染的兼容性。
   - immuneTurns 冷却的 turn-end 事件源修复后，实测冷却窗口按 stepped turn 递减。
