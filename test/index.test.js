@@ -9,6 +9,13 @@ import { createFakeLlm, answer } from './helpers.js';
  * `cannot get property "X" without inject`——使「未注入属性零次访问」的
  * 约束在旧代码形态下真能变红。`provide(name, value)` 支持延迟提供
  * （apply 返回后激活等待中的条件子上下文，模拟宿主服务后到）。
+ *
+ * 认知注记（与真实 cordis 的已知偏差，均不影响当前断言）：
+ * - set-trap 把「任何属性赋值」当作服务提供，是桩内便利假设——真实 cordis
+ *   走 ctx.set/reflect 原语，不会把任意赋值当服务注册；
+ * - get-trap 白名单未覆盖 cordis isSpecialProperty 类形态（'then'、'_'
+ *   前缀、数字属性）——桩比真实 trap 更严：真实宿主对这类属性有特殊分支，
+ *   当前插件代码不触达它们，故此处不模拟。
  */
 const SIMULATED_CONTEXT_METHODS = new Set(['on', 'logger', 'root', 'inject', 'reflect']);
 
@@ -336,7 +343,6 @@ test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人�
     assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 缝可得 → 不降级
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
     const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
-    process.stdout.write('DBG-DECISION ' + JSON.stringify(decision) + '\n');
     assert.equal(decision.kind, 'deny');
     assert.ok(decision.reason.includes('人工拒绝'));
     assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
