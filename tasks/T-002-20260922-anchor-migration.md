@@ -26,7 +26,8 @@ strict 测试锚定要求 PRD 全部 AC-ID（30 个）在测试中锚定。T-001
 - 本任务只承载锚点迁移，不承载任何实现设计（设计归各实现任务）。
 - 跨任务交接项（自 T-001 终态移交）：宽松 JSON balancedObjects 帧解析（lib/consultation.js）为自研解析器，接入真实模型输出时须验证帧误识别边界（已覆盖空 note/非帧 JSON/markdown 围栏三类单测）。
 - 联调验证清单（自 T-003 双轴评审移交，接入真实 dsh 运行时后逐项实测并记录结论）：
-  - `tools/result` 与 `session/event` 双缝是否重复投递同一工具结果（双计会让失败门阈值实际减半）；确认后保留单一观测缝或实现去重。
+  - `tools/result` 与 `session/event` 双缝是否重复投递同一工具结果；**两缝载荷是否共享可拼接的执行标识（execId/callId/seq）**——若实测无共享标识，评估在调用时生成 idempotency token 由双缝回传的可行性；当前实现为「有标识去重、无标识保守逐次计数」的临时偏置，实测后收敛。
+  - 双缝去重的键宽语义实测：同工具两次不同执行不得被误并为一次（单测已钉该语义，实测验证真实载荷满足键假设）。
   - 观察器假设的事件形状实测：result 失败判定字段（error/ok/success）、压缩/重写事件名——错向会把失败记成功。
   - `stopSession` 字段：handoff 已验证的 waterfall 契约仅 allow/ask/deny；宿主是否消费 stopSession 需实测，否则 block-session 退化为普通 deny（R-01-004/AC-03 兑现方式需按实测结论收敛）。
   - approver 宿主缝实际可用性（ctx.approval 或等价服务）：当前 ask 策略在无 approver 时 fail-open。
