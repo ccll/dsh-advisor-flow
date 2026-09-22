@@ -102,7 +102,7 @@ test('R-02-002 JSONL 落盘逐行追加；落盘失败被包含不影响台账',
     assert.equal(memoryOnly.totals().total.calls, 1);
 });
 
-test('R-02-002/AC-01 totals 快照为深拷贝且时间戳取自可注入 clock', () => {
+test('totals 快照为深拷贝且时间戳取自可注入 clock（实现质量项，不锚定 AC）', () => {
     let now = 1000;
     const ledger = createUsageLedger({ clock: () => now });
     ledger.record({ adviceId: 'adv-1', entry: 'tool', inputTokens: 3 });

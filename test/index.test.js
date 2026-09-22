@@ -24,7 +24,7 @@ const entryConfig = {
     advisor: { provider: 'test', model: 'm' },
 };
 
-test('R-02-003/AC-01 工具注册缝缺失时启动期 logger.error 显性化并 fail loud', () => {
+test('工具注册缝缺失时启动期 logger.error 显性化并 fail loud（注册失败留痕属启动期质量问题，不锚定 AC）', () => {
     const { ctx, registered, logs } = makeCtx({ withTools: false, llm: createFakeLlm([]) });
     assert.throws(() => apply(ctx, entryConfig), /工具注册缝缺失/);
     assert.equal(registered.length, 0);
@@ -32,7 +32,7 @@ test('R-02-003/AC-01 工具注册缝缺失时启动期 logger.error 显性化并
     assert.match(logs.error[0], /advisor-flow/);
 });
 
-test('R-02-003/AC-01 注册缝调用抛错同样 fail loud，不静默降级', () => {
+test('注册缝调用抛错同样 fail loud，不静默降级', () => {
     const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
     ctx.tools.register = () => {
         throw new Error('registry broken');

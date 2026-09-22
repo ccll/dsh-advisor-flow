@@ -501,7 +501,7 @@ test('R-01-002/AC-01 手动入口携带聚焦词时咨询素材包含该聚焦�
     assert.equal(llm.calls[0].options.messages.length, 1);
 });
 
-test('R-01-002/AC-02 手动咨询进行中可取消：取消返回诊断且不留用量副作用', async () => {
+test('手动咨询进行中可取消：取消返回诊断且不留用量副作用（进行状态可见属命令面，不锚定 AC）', async () => {
     const ledger = createUsageLedger();
     const llm = createFakeLlm([{ hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] }, answer('恢复后意见。')]);
     const engine = createConsultationEngine({
