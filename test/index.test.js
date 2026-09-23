@@ -730,7 +730,7 @@ test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带
     }
 });
 
-test('R-02-001/AC-01 启动种子：settings 文件段预置持久化值时，装载即生效（无需任何 set）', async () => {
+test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之后就绪——读时求值使 engine/get 读到就绪值', async () => {
     const llm = createFakeLlm([answer('种子配置意见。')]);
     const writes = [];
     const persistedRaw = {
@@ -738,14 +738,15 @@ test('R-02-001/AC-01 启动种子：settings 文件段预置持久化值时，�
         advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
         privacy: { history: 'delta' },
     };
+    // sourceHolder：attach 时为空（文档未加载完成），之后就绪（宿主异步加载）
+    const sourceHolder = { value: {} };
     const { ctx, registered, providedService } = makeCtx({
         llm,
         settings: {
             update: async (namespace, raw) => writes.push({ namespace, raw }),
-            // installSection 模拟宿主：attach 时以 source-thunk 服务文件现值
             installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                hooks.setSource(() => structuredClone(persistedRaw));
-                // 宿主 onChange 在 attach 时机不触发（实测第七发现的前提）
+                hooks.setSource(() => structuredClone(sourceHolder.value));
+                // 宿主 onChange 在 attach 时机不触发（实测第八发现的前提）
             },
         },
         typert: { register: (name, handler) => registered.push({ name, handler }) },
@@ -753,22 +754,46 @@ test('R-02-001/AC-01 启动种子：settings 文件段预置持久化值时，�
     const services = apply(ctx, entryConfig);
     await settle();
 
-    // engine 配置已启用且为持久化值（启动种子——无任何 set 操作）
+    // attach 种子读到空值 → 空值跳过（raw 不被清空、引擎保持 entry 态）
+    assert.equal(services.status.snapshot().degradations.persistence, undefined); // 写缝已接入
+    assert.equal(services.status.snapshot().enabled, true); // entry 态（种子空值跳过，配置未被清空）
+
+    // source 就绪后（无 onChange、无 set）——读时求值：gateway get 读到持久化值
+    sourceHolder.value = structuredClone(persistedRaw);
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
+    assert.equal(got.config.enabled, true);
+    assert.equal(got.config.advisor.provider, 'persisted-p');
+    assert.equal(got.config.advisor.model, 'persisted-m');
+    assert.equal(got.config.privacy.history, 'delta');
+
+    // 咨询入口同样读时求值：真实使用持久化配置（无任何 set 触发）
+    const consulted = await services.askAdvisor.execute({});
+    assert.equal(consulted.adviceId, 'adv-1');
+    assert.equal(llm.calls[0].options.model, 'persisted-m');
+    assert.equal(writes.length, 0); // 未发生任何持久写
+});
+
+test('R-02-001/AC-01 attach 时 source 就绪：启动种子立即可用（尽力早刷路径保留）', async () => {
+    const llm = createFakeLlm([answer('种子配置意见。')]);
+    const persistedRaw = {
+        enabled: true,
+        advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
+    };
+    const { ctx } = makeCtx({
+        llm,
+        settings: {
+            update: async () => {},
+            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
+                hooks.setSource(() => structuredClone(persistedRaw));
+            },
+        },
+    });
+    const services = apply(ctx, entryConfig);
+    await settle();
     const snapshot = services.status.snapshot();
     assert.equal(snapshot.enabled, true);
     assert.equal(snapshot.advisor.provider, 'persisted-p');
     assert.equal(snapshot.advisor.model, 'persisted-m');
-    assert.equal(snapshot.advisor.maxTokens, 8192);
-    assert.equal(snapshot.degradations.persistence, undefined); // 写缝已接入
-    // rawConfig 含文件值（卡片读回即见持久化内容）
-    const gateway = providedService('advisor-flow');
-    const got = await gateway.get();
-    assert.equal(got.config.advisor.provider, 'persisted-p');
-    assert.equal(got.config.advisor.model, 'persisted-m');
-    assert.equal(got.config.privacy.history, 'delta');
-    // 咨询真实使用持久化配置（无任何 set 触发）
-    const consulted = await services.askAdvisor.execute({});
-    assert.equal(consulted.adviceId, 'adv-1'); // 咨询成功
-    assert.equal(llm.calls[0].options.model, 'persisted-m');
-    assert.equal(writes.length, 0); // 未发生任何持久写
+    assert.equal(snapshot.degradations.persistence, undefined);
 });
