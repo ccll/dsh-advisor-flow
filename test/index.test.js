@@ -729,3 +729,46 @@ test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带
         assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
     }
 });
+
+test('R-02-001/AC-01 启动种子：settings 文件段预置持久化值时，装载即生效（无需任何 set）', async () => {
+    const llm = createFakeLlm([answer('种子配置意见。')]);
+    const writes = [];
+    const persistedRaw = {
+        enabled: true,
+        advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
+        privacy: { history: 'delta' },
+    };
+    const { ctx, registered, providedService } = makeCtx({
+        llm,
+        settings: {
+            update: async (namespace, raw) => writes.push({ namespace, raw }),
+            // installSection 模拟宿主：attach 时以 source-thunk 服务文件现值
+            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
+                hooks.setSource(() => structuredClone(persistedRaw));
+                // 宿主 onChange 在 attach 时机不触发（实测第七发现的前提）
+            },
+        },
+        typert: { register: (name, handler) => registered.push({ name, handler }) },
+    });
+    const services = apply(ctx, entryConfig);
+    await settle();
+
+    // engine 配置已启用且为持久化值（启动种子——无任何 set 操作）
+    const snapshot = services.status.snapshot();
+    assert.equal(snapshot.enabled, true);
+    assert.equal(snapshot.advisor.provider, 'persisted-p');
+    assert.equal(snapshot.advisor.model, 'persisted-m');
+    assert.equal(snapshot.advisor.maxTokens, 8192);
+    assert.equal(snapshot.degradations.persistence, undefined); // 写缝已接入
+    // rawConfig 含文件值（卡片读回即见持久化内容）
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
+    assert.equal(got.config.advisor.provider, 'persisted-p');
+    assert.equal(got.config.advisor.model, 'persisted-m');
+    assert.equal(got.config.privacy.history, 'delta');
+    // 咨询真实使用持久化配置（无任何 set 触发）
+    const consulted = await services.askAdvisor.execute({});
+    assert.equal(consulted.adviceId, 'adv-1'); // 咨询成功
+    assert.equal(llm.calls[0].options.model, 'persisted-m');
+    assert.equal(writes.length, 0); // 未发生任何持久写
+});
