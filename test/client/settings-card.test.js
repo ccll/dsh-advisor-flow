@@ -177,8 +177,10 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(htmlOpen.includes('advisor provider'));
     assert.ok(htmlOpen.includes('启用 Advisor Flow'));
     assert.ok(htmlOpen.includes('密钥脱敏'));
-    assert.ok(htmlOpen.includes('plan 门')); // 四门矩阵逐门渲染
-    assert.ok(htmlOpen.includes('completion 门'));
+    assert.ok(htmlOpen.includes('启用 plan 门')); // 门名只在 checkbox 文字（legend 已删）
+    assert.ok(htmlOpen.includes('启用 completion 门'));
+    assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
+    assert.ok(htmlOpen.includes('placeholder":"默认 3"')); // 阈值空值=用默认（目验 ③）
     // footer 右对齐按钮组
     assert.ok(htmlOpen.includes('advisor-flow-save'));
     assert.ok(htmlOpen.includes('advisor-flow-discard'));
