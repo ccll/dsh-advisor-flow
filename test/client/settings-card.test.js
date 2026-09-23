@@ -556,3 +556,22 @@ test('R-02-003/AC-02 信封成功但 value 形态意外 → fallback 文案而�
     assert.equal(result.ok, false);
     assert.match(result.error, /配置通道返回了意外形态/);
 });
+
+test('R-02-001/AC-01 展开态跨 setField/emit 重绘存续：改字段不塌卡片（T-006 实测回归钉住）', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    assert.equal(findById(container, 'advisor-gate-plan-enabled') !== undefined, true);
+    // 展开态下改字段 → emit → 重绘：卡片保持展开（aria-expanded=true + 字段在位）
+    controller.setField('advisor.model', 'm2');
+    const header = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_header'));
+    assert.equal(header.attrs['aria-expanded'], 'true');
+    assert.ok(findById(container, 'advisor-gate-plan-enabled'), '字段仍在位');
+    // 折叠 → setField → 仍折叠
+    controller.setExpanded(false);
+    assert.equal(byTag(container, 'fieldset').length, 0);
+    controller.setField('advisor.provider', 'p2');
+    assert.equal(byTag(container, 'fieldset').length, 0); // 折叠态保持
+    // 再展开恢复
+    controller.setExpanded(true);
+    assert.ok(findById(container, 'advisor-gate-plan-enabled'));
+});
