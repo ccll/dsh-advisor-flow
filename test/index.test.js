@@ -797,3 +797,30 @@ test('R-02-001/AC-01 attach 时 source 就绪：启动种子立即可用（尽�
     assert.equal(snapshot.advisor.model, 'persisted-m');
     assert.equal(snapshot.degradations.persistence, undefined);
 });
+
+test('R-01-002/AC-01 手动命令入口读时求值：consult 前应用最新文件配置（与工具/门路径一致）', async () => {
+    const llm = createFakeLlm([answer('手动意见。')]);
+    const sourceHolder = { value: {} }; // attach 时为空
+    const { ctx, provide, logs } = makeCtx({
+        llm,
+        settings: {
+            update: async () => {},
+            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
+                hooks.setSource(() => structuredClone(sourceHolder.value));
+            },
+        },
+    });
+    const services = apply(ctx, entryConfig);
+    await settle();
+    // source 就绪（无 onChange、无 set）→ 手动命令 consult 使用持久化模型
+    sourceHolder.value = {
+        enabled: true,
+        advisor: { provider: 'persisted-p', model: 'persisted-m' },
+    };
+    const manual = services.commandController.startManual('s1', '种子');
+    const result = await manual.promise;
+    assert.equal(result.ok, true);
+    assert.equal(llm.calls[0].options.model, 'persisted-m'); // 读时求值生效
+    void provide;
+    void logs;
+});
