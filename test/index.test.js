@@ -824,3 +824,34 @@ test('R-01-002/AC-01 手动命令入口读时求值：consult 前应用最新文
     void provide;
     void logs;
 });
+
+test('R-01-002/AC-01 wiring 级端到端：startManual → agent.inject 收到 [advisor: 前缀意见', async () => {
+    // 钉住「index.js 传入的是函数而非路由对象」的真实缺陷形态（注入桩掩盖
+    // 接线形态）——commands.js startManual 以回调 delivery(sessionId, advice)
+    // 送达，index.js 必须传函数（曾误传 delivery 对象致意见静默失败）。
+    const llm = createFakeLlm([answer('手动评审意见正文。')]);
+    const injected = [];
+    const steerCalls = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1'
+            ? { id: 's1', inject: (message) => injected.push({ channel: 'inject', message }), steer: (message) => steerCalls.push({ channel: 'steer', message }) }
+            : undefined),
+    };
+    const { ctx } = makeCtx({ llm, agents });
+    const services = apply(ctx, entryConfig);
+
+    const manual = services.commandController.startManual('s1', '种子焦点');
+    assert.equal(services.commandController.manualRunning('s1'), true); // startManual 同步置进行态
+    const result = await manual.promise;
+    assert.equal(result.ok, true);
+    assert.equal(services.commandController.manualRunning('s1'), false); // 完成后清除
+    assert.equal(llm.calls[0].options.messages[0].content.includes('种子焦点'), true);
+    // agent.inject（或 steer）收到含 [advisor: 前缀的意见消息——wiring 级钉住
+    // index.js 传入 commands 的是 delivery 回调（曾误传对象致送达静默失败）。
+    assert.equal(injected.length + steerCalls.length, 1);
+    const delivered = injected[0] ?? steerCalls[0];
+    assert.ok(delivered.message.content.includes('[advisor:'));
+    assert.ok(delivered.message.content.includes('手动评审意见正文'));
+    assert.equal(delivered.message.content.includes('adviceId: adv-1'), true);
+    assert.equal(services.commandController.manualRunning('s1'), false);
+});
