@@ -8,6 +8,8 @@ owner: 双方
 
 ## 条目
 
+- [维护想法] 联调深项持续观察（T-005 清单遗留）：条件子上下文热重启边界、双缝执行标识共享性、setSource/onChange 宿主时序、tools 升级必选裁决——日常使用异常时按 T-005 清单排查
+
 - [维护想法] render.js 新旧 CSS 类名并存（advisorflow_* 新体系 + advisor-flow-gate/notice 旧语义钩子）——旧类无消费方后清理
 - [维护想法] card-state unwrap 对 ok:true 但 value 非 record/array 判失败属过严校验——未来契约扩展（返回数组/标量的端点）时放宽
 
