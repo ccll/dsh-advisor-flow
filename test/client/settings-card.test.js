@@ -174,11 +174,11 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.equal(headerOpen.attrs['aria-expanded'], 'true');
     assert.equal(byTag(headerOpen, 'svg').length, 1); // 展开态同款 SVG（旋转切换）
     const htmlOpen = JSON.stringify(container);
-    assert.ok(htmlOpen.includes('advisor provider'));
+    assert.ok(htmlOpen.includes('Advisor provider'));
     assert.ok(htmlOpen.includes('启用 Advisor Flow'));
     assert.ok(htmlOpen.includes('密钥脱敏'));
-    assert.ok(htmlOpen.includes('启用 plan 门')); // 门名只在 checkbox 文字（legend 已删）
-    assert.ok(htmlOpen.includes('启用 completion 门'));
+    assert.ok(htmlOpen.includes('启用 Plan 门')); // 门名只在 checkbox 文字（legend 已删）
+    assert.ok(htmlOpen.includes('启用 Completion 门'));
     assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
     assert.ok(htmlOpen.includes('placeholder":"默认 3"')); // 阈值空值=用默认（目验 ③）
     // footer 右对齐按钮组
@@ -510,7 +510,7 @@ test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、ef
     // 回退形态：provider/model 仍为自由文本输入
     const textInputs = findAll(container, (node) => node.tag === 'input' && node.attrs.type === 'text');
     const labels = findAll(container, (node) => node.tag === 'label');
-    assert.ok(JSON.stringify(container).includes('advisor provider'));
+    assert.ok(JSON.stringify(container).includes('Advisor provider'));
     // effort 回退硬编码档位
     assert.ok(JSON.stringify(container).includes('关闭 (off)'));
     // 一次性显性化：连续 load 不重复 warn
