@@ -233,8 +233,18 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(htmlOpen.includes('启用计划门')); // 门名在开关 toggleRow 文字（legend 已删）
     assert.ok(htmlOpen.includes('启用完成门'));
     assert.ok(htmlOpen.includes('退出计划模式（计划定稿）前先经顾问评审')); // 门触发时机说明
+    // 门触发时机句式与实现语义一致（T-007 评审修正：循环门计数含当前调用，
+    // 达到阈值的那次调用本身受审；失败门只计既往结果，下一次调用受审）
+    assert.ok(htmlOpen.includes('等价工具调用重复达到阈值的那次调用，执行前先经顾问评审'));
+    assert.ok(htmlOpen.includes('同一工具连续失败达到阈值时，下一次调用先经顾问评审'));
+    assert.ok(!htmlOpen.includes('等价工具调用重复达到阈值时，下一次调用'), '循环门句式不得误用失败门的「下一次」语形');
     assert.ok(htmlOpen.includes('评审放行（review）')); // 下拉选项「中文（原值）」双写
     assert.ok(htmlOpen.includes('拦截并停止会话（block-session）'));
+    // 策略/阈值/仓库上下文 hint 抽样补钉（T-007 评审）
+    assert.ok(htmlOpen.includes('review：意见随动作送达，不拦截；ask：评审后请示人工；block：blocker 级意见拦截本次动作'));
+    assert.ok(htmlOpen.includes('同一工具连续失败达到该次数后，下一次调用先经评审'));
+    assert.ok(htmlOpen.includes('等价工具调用重复达到该次数的那次调用即受审'));
+    assert.ok(htmlOpen.includes('patch 含当前变更补丁（受字节上限）'));
     assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
     assert.ok(htmlOpen.includes('不发送（off）')); // 隐私档位选项双写
     assert.ok(htmlOpen.includes('随咨询发送的会话历史范围')); // 档位说明
