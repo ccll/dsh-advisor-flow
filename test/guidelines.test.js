@@ -59,14 +59,29 @@ test('R-01-003/AC-01 守则求值实时生效：活配置切换守则开关，�
 });
 
 test('R-01-003/AC-02 守则全关、功能未启用或 agentless 组装时求值为空串；getConfig 缺失不抛出', () => {
+    // 同时覆盖 R-01-004/AC-02 与 R-01-006/AC-02（守则禁用→系统提示不含该守则）。
     const render = guidelineTextFactory(() => config({}));
     assert.equal(render(undefined), '');
     assert.equal(render({ agent: {} }), '');
     assert.equal(guidelineTextFactory(() => ({ enabled: false, gates: { plan: { enabled: true } } }))({ agent: {} }), '');
     const allOff = { enabled: true, gates: { plan: { enabled: false }, failure: { enabled: false }, completion: { enabled: false } } };
     assert.equal(guidelineTextFactory(() => allOff)({ agent: {} }), '');
+    // R-01-004/AC-02 / R-01-006/AC-02：单门禁用时该行缺席（其余守则仍在）
+    const onlyPlan = { enabled: true, gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
+    const onlyPlanText = guidelineTextFactory(() => onlyPlan)({ agent: {} });
+    assert.ok(!onlyPlanText.includes('两次实质等价的尝试'), '失败守则禁用→不含失败守则行');
+    assert.ok(onlyPlanText.includes(GUIDELINE_TEXTS.plan), '其余守则不受影响');
     assert.equal(guidelineTextFactory(undefined)({ agent: {} }), '');
     assert.equal(guidelineTextFactory(() => null)({ agent: {} }), '');
+});
+
+test('R-01-004/AC-02 与 R-01-006/AC-02 禁用锚定：逐门禁用时该门守则行不出现，其余守则照常', () => {
+    const onlyPlan = { enabled: true, gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
+    const text = guidelineTextFactory(() => onlyPlan)({ agent: {} });
+    assert.ok(text.includes(GUIDELINE_TEXTS.plan));
+    assert.ok(!text.includes(GUIDELINE_TEXTS.failure));
+    assert.ok(!text.includes(GUIDELINE_TEXTS.completion));
+    void [1];
 });
 
 test('installAdvisorGuidelines：注册 advisor-flow:guidelines section（text 函数实时求值，disposer 撤除）', () => {
