@@ -427,6 +427,6 @@ flowchart TD
 - **完成门与收口去重**：`agent/turn-stopping` 对同一回合的每次收口尝试都会再派发，而完成门的任何输出就是一次续步（送达 inject 与反对 steer 都落 next-step inbox）。
   - 去重标记只在**放行收口**的处置后落（review / block 非 blocker / ask 同意）：同回合的后续收口尝试直接放行，送达后续步的循环有界。
   - **反对收口不落标记**：同回合的再收口会重新评审，blocker 反对不能被立即再收口绕过（R-01-006/AC-02）。
-  - 反对未能发出（steer 缝缺失/抛错）按自由收口降级放行并留痕。
+  - 反对未能发出（steer 缝缺失/抛错）按自由收口降级放行并留痕；ask 拒绝后反对未能发出时意见已在审批前送达，按 fail-open 放行落标记（循环有界）。
   - 拉锯期代价：每次收口尝试各耗一次咨询，由 budget.maxPerSession 与门开关兜底（T-008 实测发现）。
 - **恢复**：paused 由 `/advisor on` 原地恢复；halted 由命令重建运行时；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。

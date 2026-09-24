@@ -585,7 +585,7 @@ test('R-02-005/AC-02 完成门反对降级：steer 缝缺失/抛错时收口降�
     assert.ok(throwing.logs.error.some((entry) => String(entry.message).includes('steer failed')));
 });
 
-test('R-01-006/AC-02 完成门 ask 策略 fail-open：审批缝缺失/抛错时已送达的意见按 delivered 处置（宿主续步），不得悬挂', async () => {
+test('R-02-005/AC-02 完成门 ask 策略 fail-open：审批缝缺失/抛错时已送达的意见按 delivered 处置（宿主续步），不得悬挂', async () => {
     const run = async (approverSetup) => {
         const delivered = [];
         const steerCalls = [];
@@ -615,6 +615,34 @@ test('R-01-006/AC-02 完成门 ask 策略 fail-open：审批缝缺失/抛错时�
     assert.equal(throwing.delivered, 1);
     assert.equal(throwing.steered, 0);
     assert.ok(throwing.logs.error.some((entry) => String(entry.message).includes('approver failed')));
+});
+
+test('R-02-005/AC-02 完成门 ask 拒绝且反对未发出（steer 抛错）：意见已送达 → fail-open 放行落标记，同回合再收口跳过', async () => {
+    const delivered = [];
+    const { engine, consultCalls, logs } = makeGate({
+        gates: { completion: { enabled: true, policy: 'ask' } },
+        results: [
+            { ok: true, adviceId: 'adv-8', severity: 'concern', text: '还差验收。' },
+            { ok: true, adviceId: 'adv-9', severity: 'nit', text: '再评。' },
+        ],
+        approver: async () => false, // 人工拒绝
+        delivery: (sessionId, advice) => {
+            delivered.push(advice);
+            return 'inject'; // 无 steer 缝时的 inject 兜底形态（消息落 inbox）
+        },
+    });
+    const first = await engine.handleTurnStopping({
+        turn: 2, signal: undefined, agent: { id: 's1', steer() { throw new Error('steer seam broken'); }, inject() {} },
+    });
+    assert.equal(first, 'delivered'); // 已送达 + 反对未发出 → fail-open 放行落标记
+    assert.equal(delivered.length, 1);
+    assert.ok(logs.error.some((entry) => String(entry.message).includes('steer failed')));
+    // 同回合再收口：去重跳过（fail-open 放行已落标记，循环有界）
+    const second = await engine.handleTurnStopping({
+        turn: 2, signal: undefined, agent: { id: 's1', steer() { throw new Error('steer seam broken'); }, inject() {} },
+    });
+    assert.equal(second, undefined);
+    assert.equal(consultCalls.length, 1);
 });
 
 // ---------------------------------------------------------------------------
