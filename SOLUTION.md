@@ -55,16 +55,17 @@ owner: agent 主笔，项目属主审批
 flowchart LR
     owner[会话主] -->|web GUI / 设置卡| host[dsh web 宿主]
     agent[执行者 agent] -->|ask_advisor 工具调用| plugin[advisor-flow 插件]
-    plugin -->|inject / steer 建议注入| agent
-    plugin -->|tools/pre-execute 门判定| agent
+    plugin -->|守则注入 systemPrompt section| agent
+    plugin -->|tools/pre-execute 循环门拦截| agent
     agent -->|工具调用 exec| tools[dsh 工具层]
     tools -->|pre-execute waterfall| plugin
     plugin -->|llm.stream 咨询请求| route[顾问模型路由]
-    route -->|意见文本| plugin
+    route -->|意见/决策行| plugin
     plugin <-->|advisor-flow 设置命名空间| settings[settings.yaml]
 ```
 
 - 插件不修改 dsh 源码（纯 mount）；全部接缝为公开事件与服务。
+- 执行者守则经 `ctx.systemPrompt.section` 注入（文本函数实时求值，配置变更即时生效）。
 
 ### 一级静态分解图
 
@@ -73,7 +74,8 @@ flowchart TB
     subgraph bundle[advisor-flow 插件 bundle]
         tool[咨询工具 ask_advisor]
         commands[命令面]
-        gates[门控服务]
+        loopgate[门控服务 循环门]
+        guidelines[执行者守则]
         consult[咨询服务]
         observer[会话观察]
         delivery[意见送达]
@@ -83,11 +85,12 @@ flowchart TB
     tool --> consult
     commands --> consult
     commands --> configsvc[配置与状态服务]
-    gates --> consult
-    gates --> observer
-    observer --> gates
+    loopgate --> consult
+    loopgate --> observer
+    observer --> loopgate
     consult --> config
-    config[配置与状态服务] --> gates
+    config[配置与状态服务] --> loopgate
+    config --> guidelines
     card -->|gateway RPC| config
     consult --> delivery[意见送达]
     delivery --> agent[执行者 agent]
@@ -97,25 +100,22 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph gates[门控服务]
+    subgraph loopgate[门控服务 循环门]
         watcher[调用与失败观察器] --> loopdet[循环等价判定]
-        watcher[失败计数器] --> arbiter
         loopdet --> arbiter[门仲裁器]
-        planner[计划门] --> arbiter
-        completer[完成门] --> arbiter
-        arbiter --> policy[门策略处置 review/ask/block]
+        arbiter --> decision[决策解析器 Decision 行]
     end
-    arbiter -->|命中| consult[咨询服务]
+    arbiter2[处置器] -->|命中| consult[咨询服务]
     consult --> ctxasm[上下文装配器]
     ctxasm --> redact[脱敏器]
     redact --> llmcall[顾问模型调用器]
-    llmcall[llmcall] -.-> llmcall2[usage 采集]
-    llmcall --> parse[意见解析与 adviceId]
+    llmcall --> parse[决策行解析 proceed/revise/blocked]
+    parse --> policy[阻断模式处置]
 ```
 
-- 观察器只读：从 `session/event` 消费 `tool/call` 与结果事件，维护每会话失败计数与循环等价表。
-- 仲裁器单一出口：`allow / ask / deny(reason)`，命中即同步触发咨询。
-- 失败路径与成功路径同样经过仲裁器；门组件自身异常按放行处置并记录。
+- 观察器只读：从 `tools/result` 消费结果事件维护失败与循环计数；`session/event` 仅承载压缩/重置。
+- 循环门是唯一硬门：命中即同步咨询，决策三值（proceed/revise/blocked）按阻断模式处置。
+- 门组件自身异常 fail-open（放行 + 记录）；咨询失败按阻断模式处置。
 
 ## 运行时视图
 
@@ -129,57 +129,43 @@ sequenceDiagram
     participant A as 顾问路由
     participant D as 意见送达
     E->>G: 工具调用（pre-execute waterfall）
-    G->>G: 循环/失败/计划/完成判定
+    G->>G: 循环等价判定
     alt 门未命中
         G-->>E: allow（放行执行）
-    else 门命中且策略 review
-        G->>C: 同步发起咨询
+    else 命中且决策 proceed
+        G->>C: 同步咨询（决策协议提示）
         C->>A: llm.stream（素材 + 脱敏）
-        A-->>C: 意见
-        C-->>G: 意见（adviceId）
-        G->>D: 送达（nit→inject，concern/blocker→steer）
+        A-->>C: Decision: proceed + 意见
+        G->>D: 门结果 steer 送达（**Decision: proceed** + 全文）
+        G->>G: 重置等价计数
         G-->>E: allow（放行执行）
-    else 门命中且策略 block 且存在 blocker
-        G->>C: 同步发起咨询
-        C-->>G: 意见
-        G-->>E: deny（原因 = 意见摘要）
-    else 门命中且策略 ask
-        G->>D: 征询会话主（approval 通道）
-        D-->>E: ask（人工决定后放行或拒绝）
+    else 命中且决策 revise
+        G->>C: 同步咨询
+        C-->>G: Decision: revise + 意见
+        G->>D: 门结果 steer 送达
+        G-->>E: deny（原因 = 意见全文）
+    else 命中且决策 blocked
+        G->>C: 同步咨询
+        C-->>G: Decision: blocked + 意见
+        G->>D: 门结果 steer 送达
+        alt 阻断模式 warn-and-continue
+            G-->>E: allow（通知后放行）
+        else block-tool
+            G-->>E: deny（原因 = 意见全文）
+        else block-session
+            G->>G: 会话封锁（后续工具调用一律拦截）
+        end
+    else 咨询失败（空回复/缺决策行/矛盾决策/预算耗尽）
+        G-->>E: 按阻断模式处置 + 原因留痕
     end
     E->>C: ask_advisor（按需咨询）
-    C->>A: llm.stream
+    C->>A: llm.stream（Verdict 协议提示）
     A-->>C: 意见
     C-->>E: 意见文本 + adviceId
 ```
 
-### 完成门收口时序（agent/turn-stopping）
-
-```mermaid
-sequenceDiagram
-    participant E as 执行者
-    participant H as 宿主回合边界
-    participant G as 门控服务
-    participant C as 咨询服务
-    participant D as 意见送达
-    E->>H: 回合收口（无未决工作）
-    H->>G: agent/turn-stopping（串行等待）
-    G->>G: 回合去重检查（同回合已放行→直接跳过）
-    G->>C: 同步发起咨询（entry: gate）
-    C-->>G: 意见（adviceId）
-    alt review / block 非 blocker / ask 同意
-        G->>D: 送达（nit→inject，concern/blocker→steer）
-        G-->>H: 放行收口（落回合去重标记）
-    else block + blocker / ask 拒绝
-        G->>D: agent.steer（反对消息，inbox 续步）
-        G-->>H: 收口被反对——宿主重读 inbox 续步（不落去重标记）
-    else consult 不可用/超时
-        G-->>H: fail-open 放行收口（error 留痕）
-    end
-```
-
-- 门内联等待有硬上限（`callTimeoutMs`）；超时按非阻断放行并记录。
-- 完成门不在工具调用时序内：它挂在 `agent/turn-stopping`（回合收口前的串行派发）上，反对以 steer 数据表达（收口被拒 → inbox 续步）。
+- 门内联等待有硬上限（`callTimeoutMs`）；超时按阻断模式处置并记录。
+- 三类守则（计划/失败/收尾）经 `ctx.systemPrompt.section` 注入执行者系统提示（文本函数实时求值），非拦截门；硬拦截门仅循环门。
 
 ## 数据视图
 
@@ -194,26 +180,26 @@ classDiagram
         +state
         +素材引用
     }
-    class Advice {
-        +adviceId
-        +severity: blocker|concern|nit
-        +text
-        +outcome?
+    class GateOutcome {
+        +decision: proceed|revise|blocked
+        +markdown
     }
     class UsageRecord {
         +adviceId
         +inputTokens?
         +outputTokens?
-        +cacheTokens?
+        +cacheReadTokens?
+        +cacheWriteTokens?
+        +totalTokens?
+        +reasoningTokens?
         +cost?
     }
     class GateState {
         +会话id
-        +失败计数表
         +循环等价表
-        +冷却标记
+        +封锁标记
     }
-    Consultation "1" --> "1" Advice : 产生
+    Consultation "1" --> "0..1" GateOutcome : 门触发时产生
     Consultation "1" --> "0..1" UsageRecord : 归属
     GateState "1" --> "*" Consultation : 触发
 ```
@@ -226,15 +212,15 @@ classDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> pending: 咨询发起
-    pending --> answered: 顾问返回意见
-    pending --> failed: 失败（重试耗尽/永久错误）
+    pending --> answered: 顾问返回意见/决策
+    pending --> failed: 失败（空回复/缺决策行/矛盾决策/预算耗尽）
     pending --> aborted: 超时或取消
     answered --> [*]
     failed --> [*]
     aborted --> [*]
 ```
 
-- 顾问运行态另有三态：`active / paused(quota) / halted(permanent)`；paused 可经 `/advisor on` 恢复，halted 需重建。
+- 顾问运行态仅 `active`（可用）与 `disabled`（配置缺失整体禁用）；无独立暂停/停机态。
 - 终态一次性；终态后只允许追加 outcome。
 
 ## 部署视图
@@ -276,8 +262,8 @@ flowchart LR
     transcript -->|隐私档位裁剪| red
     args -->|隐私档位裁剪| red
     red -->|不可信数据标注| route((顾问模型路由))
-    route -->|意见文本| deliver[意见送达]
-    deliver -->|advisory 前缀注入| session[会话流]
+    route -->|决策行+意见| deliver[意见送达]
+    deliver -->|门结果 steer| session[会话流]
 ```
 
 - 出境侧：素材按档位裁剪后才可出境；脱敏在裁剪后、发送前执行。
@@ -309,16 +295,18 @@ flowchart TD
   - 返回：意见文本 + `adviceId`；失败返回带诊断码的错误（`NO_ADVISOR_MODEL` / `ADVISOR_ROUTE_MISSING` / `ADVISOR_TIMEOUT` 等）。
 - **命令**：
   - `/advisor-manual [focus]`：立即咨询；进行中可取消。
-  - `/advisor status`：启用态、模型路由、各门状态、待处理数、最近活动、累计用量摘要。
-  - `/advisor gates`：门配置与阈值只读回读。
+  - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要。
+  - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 增项，契约在此补记）。
 - **设置命名空间** `advisor-flow`（settings.yaml 顶层键）：
-  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`、`advisor.retryAttempts`（瞬态重试次数，默认 1）
-  - `gates.plan|failure|loop|completion`：各含 `enabled`、`policy(review|ask|block)`、阈值（failure/loop 另有 `threshold`，failure 另有 `policy(block|block-session)`）
+  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`（无重试——咨询失败直接按阻断模式处置）
+  - `gates.plan|failure|completion`：各含 `enabled`（守则开关，布尔）
+  - `gates.loop`：`enabled`、`threshold`（等价重复阈值，默认 3）
+  - `failureMode`：`warn-and-continue`（默认）/ `block-tool` / `block-session`——循环门 blocked 决策与咨询失败的统一处置档位
   - `privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)`、`privacy.toolResultMaxBytes`（capped 档字节上限）、`privacy.fileContent(默认 false)`、`privacy.redactSecrets`
   - `budget.maxPerSession`（0 = 不限）
   - 未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
-- **注入消息格式**：`[advisor:{severity}] <摘要>`；意见正文附 adviceId 引用。
+- **注入消息格式**：门结果经 steer 送达，文本为 `**Decision: {proceed|revise|blocked}**` + 意见全文；按需咨询意见走工具返回值（不注入），文本附 adviceId 回查行。
 
 ## 需求追溯索引
 
@@ -326,10 +314,10 @@ flowchart TD
 |---|---|---|---|
 | R-01-001 | 咨询服务 | SOLUTION.md#咨询服务 | lib/consultation.js；lib/tools/ask-advisor.js |
 | R-01-002 | 咨询服务 | SOLUTION.md#命令面 | lib/commands.js |
-| R-01-003 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/plan.js |
-| R-01-004 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/failure.js |
-| R-01-005 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/loop.js |
-| R-01-006 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/index.js（handleTurnStopping） |
+| R-01-003 | 执行者守则 | SOLUTION.md#执行者守则 | lib/guidelines.js |
+| R-01-004 | 执行者守则 | SOLUTION.md#执行者守则 | lib/guidelines.js |
+| R-01-005 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/index.js；lib/observer.js |
+| R-01-006 | 执行者守则 | SOLUTION.md#执行者守则 | lib/guidelines.js |
 | R-02-001 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/config.js；lib/client/card-state.js；lib/client/render.js |
 | R-02-002 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/usage.js |
 | R-02-003 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/status.js |
@@ -339,41 +327,49 @@ flowchart TD
 ## 子系统与模块
 
 ### 咨询服务
-- 职责: 顾问模型调用的唯一入口——上下文组装（隐私裁剪、脱敏）、llm.stream 调用（根作用域 LLM 解析、reasoningEffort 能力门控）、意见解析（自由文本，宽松 JSON 兼容）、adviceId 分配、用量记录（承接 R-01-001、R-01-002、R-02-004、R-02-005）
+- 职责: 顾问模型调用的唯一入口——上下文组装（隐私裁剪、脱敏）、llm.stream 调用（根作用域 LLM 解析、reasoningEffort 能力门控）、两套回复协议的提示词（按需咨询 Verdict 行 / 循环门 Decision 行）、决策行对抗性解析、adviceId 分配、用量记录（承接 R-01-001、R-01-002、R-02-004、R-02-005）
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
   - `resolveModelInfo` 能力门控 effort：仅模型声明时发送，缺省不传（路由 defaultEffort 会物化，须显式传 off 等级）。
   - `maxTokens` 与 `callTimeoutMs` 可配置；deadline 融合 dispose 信号，race 每 chunk。
-  - 失败三分类：transient（重试 1 次）/ quota（pause）/ permanent（halt）；对工具调用表现为带诊断码的当次错误。
-  - 意见为自由文本，不做严格 JSON 帧约定；严重度由顾问显式声明，缺省 nit。
+  - 失败无重试：咨询失败（provider 错误/空回复/缺决策行/矛盾决策行/预算耗尽）直接上抛为门失败类别，按阻断模式处置（pi 原生语义）。
+  - 意见为自由文本，不做严格 JSON 帧约定；按需咨询协议要求「完全无问题时首行 `Verdict: sound`」，无严重度分级。
 - 代码位置: lib/consultation.js；lib/context.js；lib/redact.js
 - 实现: 单端（宿主）
 
 ### 门控服务
-- 职责: 注册 `tools/pre-execute` waterfall 监听对计划/失败/循环三门做前置判定与处置；注册 `agent/turn-stopping` 串行监听承载完成门的回合收口评审（承接 R-01-003～R-01-006）
+- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价循环重复执行前置拦截、同步咨询、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）
 - 关键内部结构:
-  - 判定数据来自会话观察器维护的每会话 `GateState`。
-  - 计划门锚定 `exit_plan_mode` 工具名；失败/循环门锚定观察器计数；完成门锚定 `agent/turn-stopping`（宿主无名为 concludesTurn 的工具，回合收口是串行事件 + steer 反对语义，T-008 实测裁决）。
-  - 载体契约（dsh-tools 0.1.5-rc.2 实测）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`；结果缝 `(exec, result)` 两参、失败真值 `result.isError`。
-  - 命中即同步 `await` 咨询，处置按门策略：review 放行+送达；ask 转 approval 通道；block 且 blocker 即 deny(reason)。完成门的反对经 `agent.steer` 表达（serial 派发无返回值否决通道）。
-  - 门组件异常 fail-open（放行 + 记录），咨询超时同此；收口路径任何异常 contained，不得打断宿主收口流程。
-- 代码位置: lib/gates/
+  - 判定数据来自会话观察器维护的每会话 `GateState` 循环等价表（工具名 + 规范化参数键）。
+  - 载体契约（dsh-tools 0.1.5-rc.2 实测）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`。
+  - 决策处置矩阵：proceed → steer 送达门结果 + 重置等价计数 + 放行；revise → steer 送达 + deny(意见全文)；blocked → 按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁）。
+  - 咨询失败（空回复/缺决策行/矛盾决策行/预算耗尽）按同一阻断模式处置；决策行解析含对抗性检查（重复/矛盾决策行判失败、围栏内决策行不采信）。
+  - 门组件异常 fail-open（放行 + 记录）；咨询失败按阻断模式处置并留痕。
+- 代码位置: lib/gates/index.js
+- 实现: 单端（宿主）
+
+### 执行者守则
+- 职责: 计划/失败/收尾三类关键节点守则的生成与注入——经 `ctx.systemPrompt.section` 注册文本函数，按活配置实时求值（承接 R-01-003、R-01-004、R-01-006）
+- 关键内部结构:
+  - 单 section 注册（text 为函数，按配置实时计算各守则行；全关时返回空串）。
+  - 守则文案与 pi 对齐：计划守则要求附草稿（命名拟议工作/验证/风险）；失败守则约束等价失败后先咨询；收尾守则要求草稿命名已变更工作/验证/剩余风险。
+- 代码位置: lib/guidelines.js
 - 实现: 单端（宿主）
 
 ### 会话观察
-- 职责: 全局订阅 `session/event` 与 `tools/result`，维护有界转写增量与工具调用/结果统计，供咨询上下文组装与门判定（承接 R-01-004、R-01-005 的观测面）
+- 职责: 订阅 `tools/result` 与 `session/event`，维护工具调用/结果统计与循环等价表（承接 R-01-005 的观测面）
 - 关键内部结构:
-  - 监听必须 `{ global: true }`（跨 scope 会话事件）。
-  - 成败计数的权威缝是 `tools/result` 生命周期事件（`(exec, result)` 两参：`exec.name`、`result.isError`、`exec.callId` 去重）；session/event 的 `tool/result` 存储记录不带工具名，只承载压缩/重写 reset 类事件（T-008 实测裁决，双缝去重议题关闭）。
+  - 生命周期事件监听必须 `{ global: true }`（跨 scope 事件可达）。
+  - 调用计数在 pre-execute 缝权威计数（`exec.name` + `exec.arguments` 规范化，会话归属 `exec.agent.id`）；成败计数的权威缝是 `tools/result` 生命周期事件（`(exec, result)` 两参：`result.isError`、`exec.callId` 去重）；session/event 的 `tool/result` 存储记录不带工具名，只承载压缩/重写 reset 类事件（T-008 实测裁决）。
   - 压缩/重写事件重置观察游标与计数。
 - 代码位置: lib/observer.js
 - 实现: 单端（宿主）
 
 ### 意见送达
-- 职责: 意见到会话的路由——severity → `agent.inject`（nit，非唤醒）/ `agent.steer`（concern/blocker，唤醒）；维护会话级 agent 映射（承接 R-01-003~006 的意见送达）
+- 职责: 门结果意见到会话的送达——一律 `agent.steer`（唤醒式，文本 = `**Decision: X**` + 意见全文）；维护会话级 agent 映射（承接 R-01-005 的门结果送达）
 - 关键内部结构:
   - `agent/created` 注册 + 注册表回退双通道。
-  - immuneTurns 冷却防止意见风暴。
+  - 无 severity 分流、无冷却（pi 原生语义：门结果对执行者始终可见）。
 - 代码位置: lib/delivery.js
 - 实现: 单端（宿主）
 
@@ -390,7 +386,7 @@ flowchart TD
 
 ### 咨询工具
 - 职责: 注册 `ask_advisor` 工具面，参数校验与错误转译（承接 R-01-001）
-- 关键内部结构: 工具体仅转发咨询服务，不含判定逻辑；定义必须声明 `output { schema, render }`（宿主 tools.register 强制，缺失即注册失败），value 契约 `{ok:true,adviceId,severity,text} | {ok:false,code,reason}`，render 出 text 块。
+- 关键内部结构: 工具体仅转发咨询服务，不含判定逻辑；定义必须声明 `output { schema, render }`（宿主 tools.register 强制，缺失即注册失败），value 契约 `{ok:true,adviceId,text} | {ok:false,code,reason}`，render 出 text 块（意见文本附 adviceId 回查行）。
 - 代码位置: lib/tools/ask-advisor.js
 - 实现: 单端（宿主）
 
@@ -407,28 +403,24 @@ flowchart TD
 ## 横切约束
 
 - 非阻断性优先于功能完整：任何 advisor 路径不得 park 主循环（见 DOMAIN 不变量）。
-- 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时 fail-open；完成门的内联等待挂在 `agent/turn-stopping` 串行派发上，收口等待同样受 `callTimeoutMs` 约束、超时放行收口。
+- 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时按阻断模式处置。
 - 观察与判定不读会话持久化文件，只依赖事件流与投影。
-- 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；回合收口缝 `agent/turn-stopping`（payload `{turn, signal, agent}`，serial 派发、steer 数据反对）；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`。
+- 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`；执行者守则经 `ctx.systemPrompt.section`（text 函数实时求值）。
 - LLM 请求契约（T-009 staging 实测，dsh-llm GenerateOptions）：`messages[].content` 为 ContentBlock 数组（字符串 content 在适配器内容遍历抛 `content.some is not a function`）；`system` 为字符串（一次性调用方）；流 chunk 为 `text-delta`/`usage`/`finish`。
 - 用量契约（T-009 staging 核对，dsh-llm TokenUsage）：`inputTokens`（未缓存输入）/`outputTokens`/`cacheReadTokens`/`cacheWriteTokens`/`totalTokens?`/`reasoningTokens?` 离散计数，无 `cacheTokens` 与 `cost` 字段；台账未收到的字段记 unavailable（R-02-002/AC-02）。
-- 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、tools/result、session/event、agent/turn-stopping、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
-- 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（approval/commands/typert/settings）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
+- 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、tools/result、session/event、systemPrompt.section、steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
+- 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（commands/typert/settings/systemPrompt）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径（client 装载器按 `<包名>/client` 解析插件 client 半区；缺失则宿主半区正常装载而设置卡静默不出现）。
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`（两参成败缝）、`ctx.on('agent/turn-stopping')`、`ctx.on('session/event', …, {global:true})`、`agent.inject/steer`、settings bridge `onChange`、GatewayService RPC、命令注册表。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`（两参成败缝）、`ctx.on('session/event', …, {global:true})`、`agent.steer`（门结果送达）、`ctx.systemPrompt.section`（守则注入）、settings bridge `onChange`、GatewayService RPC、命令注册表。
 - 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
 - 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
 
 ## 运行时、并发与失败语义
 
-- **门内联等待**：门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 180s，可配）；超时/失败按放行处置并记录（R-02-005 AC-02）。`ask` 策略走宿主 approval 通道，拒绝即 deny。完成门的内联等待在 `agent/turn-stopping` 串行派发内：收口被 block/blocker 意见反对时以 `agent.steer` 数据表达，宿主重读 inbox 续步；监听器全 contained，异常不打断收口。
-- **失败分类**：transient → 重试 1 次（1s 退避）→ 丢弃并记录；quota → 暂停并保留待处理；permanent（NO_ADAPTER、模型不存在、凭证无效）→ halt 顾问（门按放行处置，工具调用返回诊断错误）。
-- **丢弃可见性**：每次丢弃记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
+- **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 180s，可配）；超时按阻断模式处置并记录（R-02-005 AC-02）。
+- **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁），原因 info 级留痕。
+- **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；不同会话并行互不影响。
-- **重入防护**：咨询工具自身被门拦截豁免（防止门触发咨询的工具调用自递归）；顾问调用不经过工具层。
-- **完成门与收口去重**：`agent/turn-stopping` 对同一回合的每次收口尝试都会再派发，而完成门的任何输出就是一次续步（送达 inject 与反对 steer 都落 next-step inbox）。
-  - 去重标记只在**放行收口**的处置后落（review / block 非 blocker / ask 同意）：同回合的后续收口尝试直接放行，送达后续步的循环有界。
-  - **反对收口不落标记**：同回合的再收口会重新评审，blocker 反对不能被立即再收口绕过（R-01-006/AC-02）。
-  - 反对未能发出（steer 缝缺失/抛错）按自由收口降级放行并留痕；ask 拒绝后反对未能发出时意见已在审批前送达，按 fail-open 放行落标记（循环有界）。
-  - 拉锯期代价：每次收口尝试各耗一次咨询，由 budget.maxPerSession 与门开关兜底（T-008 实测发现）。
-- **恢复**：paused 由 `/advisor on` 原地恢复；halted 由命令重建运行时；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
+- **重入防护**：咨询工具自身被循环门豁免（防止门触发咨询的工具调用自递归）；顾问调用不经过工具层。
+- **会话封锁**：block-session 模式下 blocked 决策使会话进入封锁态——宿主 `agents.cancel` 尽力停止当前执行，且后续所有工具调用一律拦截（拒绝原因 = 封锁原因），直至会话重建。
+- **恢复**：无独立暂停/停机态；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。

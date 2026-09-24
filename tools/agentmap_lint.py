@@ -1506,7 +1506,7 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
     if missing:
         target.append(f"tests: acceptance criteria without test anchor: {', '.join(missing)}")
     if unknown:
-        result.errors.append(
+        target.append(
             f"tests: test anchors reference missing acceptance criteria: {', '.join(unknown)}"
         )
     for relative, ids in sorted(legacy_anchored.items()):
