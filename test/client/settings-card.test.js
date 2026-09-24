@@ -93,6 +93,9 @@ function createDomStub() {
                 setAttribute(key, value) {
                     node.attrs[key] = String(value);
                 },
+                getAttribute(key) {
+                    return key in node.attrs ? node.attrs[key] : null;
+                },
                 removeAttribute(key) {
                     delete node.attrs[key];
                 },
@@ -143,6 +146,7 @@ async function renderedCard(options = {}) {
     const container = dom.createElement('div');
     const card = renderSettingsCard({ document: dom, container, controller });
     await controller.load(); // load 触发 emit → refresh 重渲染
+    await pump(); // 目录后台拉取（load 不再 await catalog）——等微任务链收敛
     card.refresh();
     return { controller, container, card, dom, rpc, rawRef };
 }
@@ -279,6 +283,37 @@ test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径（ch
     const historySelect = findById(container, 'advisor-privacy-history');
     historySelect.listeners.change[0]({ target: { value: 'off' } });
     assert.equal(controller.getState().patch.privacy.history, 'off');
+});
+
+test('R-02-001/AC-01 视觉轨道本体可点：点击轨道翻转启用值（目验「点开关无反应」）', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    // RAW enabled=true → 点击轨道应翻转为 false（入 patch）
+    const track = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_switchTrack'))[0];
+    assert.ok(track, '轨道节点存在');
+    assert.ok(track.listeners.click?.length > 0, '轨道绑定点击');
+    track.listeners.click[0]();
+    assert.equal(controller.getState().patch.enabled, false);
+    // 再点一次回到 true（翻转语义）
+    const track2 = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_switchTrack'))[0];
+    track2.listeners.click[0]();
+    assert.equal(controller.getState().patch.enabled, true);
+});
+
+test('R-02-001 关闭启用开关不抛错：fieldset 附加 disabledGroup（目验「详情消失」真凶——桩私有 attrs.class 曾使真实 DOM 崩）', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    // 模拟真实点击路径：checkbox change → setField → emit → refresh 全链
+    const enabledBox = findById(container, 'advisor-enabled');
+    enabledBox.listeners.change[0]({ target: { checked: false } });
+    assert.equal(controller.getState().patch.enabled, false);
+    // refresh 后不抛（曾抛 TypeError: Cannot read properties of undefined (reading 'class')）
+    const gateFieldset = findAll(container, (node) => node.tag === 'fieldset' && (node.attrs.class ?? '').includes('advisorflow_fieldset'))[0];
+    assert.ok(gateFieldset, '四门 fieldset 在禁用态仍渲染');
+    // 禁用态标注经 getAttribute 读回（真实 DOM 兼容路径）
+    assert.equal((gateFieldset.getAttribute?.('class') ?? gateFieldset.attrs.class).includes('advisorflow_disabledGroup'), false, '门 fieldset 自身不带禁用类（加在门块 div 上）');
+    const disabledGroups = findAll(container, (node) => (node.getAttribute?.('class') ?? node.attrs.class ?? '').includes('advisorflow_disabledGroup'));
+    assert.ok(disabledGroups.length >= 4, '四门块与隐私组带禁用标注');
 });
 
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
@@ -470,8 +505,45 @@ const CATALOG = {
     ],
 };
 
-test('R-02-001/AC-01 目录驱动三级联动：provider/model 下拉来自目录，effort 来自模型声明', async () => {
+test('R-02-001 目录 RPC 挂起不得阻塞表单：ready 立即达成，表单照常渲染（目验「详情没了」根因）', async () => {
+    // catalog 两端点永不 resolve——旧实现 await loadCatalogs 在 emit 前，
+    // 挂起即卡片长期只剩 header；现在 ready 先行、表单立即可渲染。
     const { controller, container } = await renderedCard({
+        raw: { enabled: true, advisor: { provider: 'p', model: 'm' } },
+        catalog: {
+            providers: new Promise(() => {}), // 永不 resolve（模拟挂起）
+            catalog: new Promise(() => {}),
+        },
+    });
+    assert.equal(controller.getState().status, 'ready');
+    assert.equal(controller.getState().catalogReady, false); // 目录未达
+    expandCard(container);
+    const html = JSON.stringify(container);
+    assert.ok(html.includes('Advisor provider'), '表单在目录挂起时照常渲染');
+});
+
+test('R-02-001/AC-01 load 瞬态失败自动重试一次：再失败才落 error（自愈优先）', async () => {
+    let attempts = 0;
+    const rpc = {
+        call: async (channel, method) => {
+            attempts += 1;
+            if (method === 'advisor-flow/get' && attempts === 1) {
+                throw new TypeError('Failed to fetch'); // 瞬态网络失败
+            }
+            if (method === 'advisor-flow/get') {
+                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
+            }
+            throw new Error(`no endpoint ${method}`);
+        },
+    };
+    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
+    const status = await controller.load();
+    assert.equal(status, 'ready'); // 重试后成功，未落 error
+    assert.ok(attempts >= 2, 'fetch 失败后自动重试了一次');
+    assert.equal(controller.getState().status, 'ready');
+});
+
+test('R-02-001/AC-01 目录驱动三级联动：provider/model 下拉来自目录，effort 来自模型声明', async () => {    const { controller, container } = await renderedCard({
         raw: { enabled: true, advisor: { provider: 'openai', model: 'gpt-x' } },
         catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
     });
