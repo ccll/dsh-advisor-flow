@@ -319,6 +319,26 @@ test('session/event 只承载 reset 类事件；冷却倒数改由 agent/turn-st
     assert.equal(services.delivery.status().cooldowns.s1, undefined);
 });
 
+test('agent/turn-stopping 冷却口径：完成门送达/反对不倒数，自由收口才倒数（评审轮修正，不锚定 AC）', async () => {
+    const llm = createFakeLlm([answer('severity: nit\n可以收尾。')]);
+    const { ctx, subscriptions } = makeCtx({ llm });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { completion: { enabled: true, policy: 'review' } },
+    });
+    services.delivery.registerAgent({ id: 's1', inject() {}, steer() {} });
+    services.delivery.deliver('s1', { adviceId: 'adv-x', severity: 'blocker', text: 't' });
+    assert.equal(services.delivery.status().cooldowns.s1, 2);
+    const turnStopping = subscriptions.find((s) => s.event === 'agent/turn-stopping');
+    // review + nit → 'delivered'：意见注入已让宿主续步——非真实收口，不倒数
+    await turnStopping.handler({ turn: 1, signal: undefined, agent: { id: 's1' } });
+    assert.equal(services.delivery.status().cooldowns.s1, 2);
+    // 同回合放行后去重跳过 → 自由收口 → 倒数
+    await turnStopping.handler({ turn: 1, signal: undefined, agent: { id: 's1' } });
+    assert.equal(services.delivery.status().cooldowns.s1, 1);
+});
+
 test('tools/result 权威成败缝：两参投递计数、callId 去重；session/event 结果型记录不再计数（T-008 裁决，不锚定 AC）', async () => {
     const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });

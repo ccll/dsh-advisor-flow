@@ -403,7 +403,7 @@ test('R-01-006/AC-01 完成门启用时，回合收口提交前完成一次评�
         signal: undefined,
         agent: { id: 's1', steer: (message) => steerCalls.push(message), inject() {} },
     });
-    assert.equal(decision, undefined); // 串行派发无返回值否决通道
+    assert.equal(decision, 'delivered'); // 送达 + 放行收口（宿主续步后同回合再收口将去重跳过）
     assert.equal(consultCalls.length, 1); // 咨询发生在收口前
     assert.equal(consultCalls[0].entry, 'gate');
     assert.equal(consultCalls[0].session, 's1');
@@ -424,7 +424,7 @@ test('R-01-006/AC-02 完成门 block 策略且评审存在 blocker 意见时经 
         signal: undefined,
         agent: { id: 's1', steer: (message) => steerCalls.push(message), inject() {} },
     });
-    assert.equal(decision, undefined);
+    assert.equal(decision, 'objected'); // 反对收口：不落去重标记，同回合再收口会重新评审
     assert.equal(steerCalls.length, 1); // 反对收口 = steer 数据（inbox 续步）
     const message = steerCalls[0];
     assert.equal(message.role, 'user');
@@ -461,13 +461,13 @@ test('R-01-006/AC-02 完成门 ask 策略：审批拒绝经 agent.steer 反对�
         return { decision, decisions: decisions.length, gate: decisions[0]?.gate, delivered: delivered.length, steered: steerCalls.length };
     };
     const rejected = await run(false);
-    assert.equal(rejected.decision, undefined);
+    assert.equal(rejected.decision, 'objected');
     assert.equal(rejected.decisions, 1);
     assert.equal(rejected.gate, 'completion'); // 审批缝征询发生在收口前
     assert.equal(rejected.delivered, 1); // ask 先送达再征询
     assert.equal(rejected.steered, 1); // 拒绝 → steer 反对收口
     const approved = await run(true);
-    assert.equal(approved.decision, undefined);
+    assert.equal(approved.decision, 'delivered');
     assert.equal(approved.delivered, 1);
     assert.equal(approved.steered, 0); // 同意 → 放行收口
 });
@@ -525,6 +525,41 @@ test('R-01-006 真实锚点钉住：完成门不再参与 tools/pre-execute 判�
     assert.equal(decision.kind, 'allow');
     assert.equal(nextCalls.length, 1); // 动作照常派发
     assert.equal(consultCalls.length, 0); // 不触发咨询
+});
+
+test('R-01-006/AC-02 完成门回合去重边界：放行收口落标记（同回合再收口跳过），反对收口不落标记（同回合再收口重新评审）', async () => {
+    // 放行路径（review + nit）：同回合第二次收口尝试去重跳过，循环有界
+    const allowed = makeGate({
+        gates: { completion: { enabled: true, policy: 'review' } },
+        results: [
+            { ok: true, adviceId: 'adv-1', severity: 'nit', text: '可以收尾。' },
+            { ok: true, adviceId: 'adv-2', severity: 'nit', text: '再评一次。' },
+        ],
+    });
+    const turnPayload = (steerCalls) => ({ turn: 7, signal: undefined, agent: { id: 's1', steer: (m) => steerCalls.push(m), inject() {} } });
+    const first = await allowed.engine.handleTurnStopping(turnPayload());
+    assert.equal(first, 'delivered'); // 首次评审：送达 + 放行（注入已让宿主续步）
+    const second = await allowed.engine.handleTurnStopping(turnPayload());
+    assert.equal(second, undefined); // 同回合放行后去重跳过——不再咨询
+    assert.equal(allowed.consultCalls.length, 1);
+
+    // 反对路径：block + blocker 的同回合再收口必须重新评审（AC-02 不被绕过）
+    const objected = makeGate({
+        gates: { completion: { enabled: true, policy: 'block' } },
+        results: [
+            { ok: true, adviceId: 'adv-3', severity: 'blocker', text: '不能收尾。' },
+            { ok: true, adviceId: 'adv-4', severity: 'blocker', text: '仍不能收尾。' },
+        ],
+    });
+    const steerCalls = [];
+    const steerAgent = () => ({ id: 's9', steer: (m) => steerCalls.push(m), inject() {} });
+    const firstObjection = await objected.engine.handleTurnStopping({ turn: 7, signal: undefined, agent: steerAgent() });
+    assert.equal(firstObjection, 'objected');
+    assert.equal(steerCalls.length, 1);
+    const secondObjection = await objected.engine.handleTurnStopping({ turn: 7, signal: undefined, agent: steerAgent() });
+    assert.equal(secondObjection, 'objected'); // 二次评审仍反对收口（去重标记未落）
+    assert.equal(steerCalls.length, 2);
+    assert.equal(objected.consultCalls.length, 2); // 反对不落标记：同回合再收口重新评审
 });
 
 // ---------------------------------------------------------------------------

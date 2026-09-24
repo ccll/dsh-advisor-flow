@@ -153,6 +153,31 @@ sequenceDiagram
     C-->>E: 意见文本 + adviceId
 ```
 
+### 完成门收口时序（agent/turn-stopping）
+
+```mermaid
+sequenceDiagram
+    participant E as 执行者
+    participant H as 宿主回合边界
+    participant G as 门控服务
+    participant C as 咨询服务
+    participant D as 意见送达
+    E->>H: 回合收口（无未决工作）
+    H->>G: agent/turn-stopping（串行等待）
+    G->>G: 回合去重检查（同回合已放行→直接跳过）
+    G->>C: 同步发起咨询（entry: gate）
+    C-->>G: 意见（adviceId）
+    alt review / block 非 blocker / ask 同意
+        G->>D: 送达（nit→inject，concern/blocker→steer）
+        G-->>H: 放行收口（落回合去重标记）
+    else block + blocker / ask 拒绝
+        G->>D: agent.steer（反对消息，inbox 续步）
+        G-->>H: 收口被反对——宿主重读 inbox 续步（不落去重标记）
+    else consult 不可用/超时
+        G-->>H: fail-open 放行收口（error 留痕）
+    end
+```
+
 - 门内联等待有硬上限（`callTimeoutMs`）；超时按非阻断放行并记录。
 - 完成门不在工具调用时序内：它挂在 `agent/turn-stopping`（回合收口前的串行派发）上，反对以 steer 数据表达（收口被拒 → inbox 续步）。
 
@@ -388,6 +413,9 @@ flowchart TD
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、tools/result、session/event、agent/turn-stopping、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（approval/commands/typert/settings）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径（client 装载器按 `<包名>/client` 解析插件 client 半区；缺失则宿主半区正常装载而设置卡静默不出现）。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`（两参成败缝）、`ctx.on('agent/turn-stopping')`、`ctx.on('session/event', …, {global:true})`、`agent.inject/steer`、settings bridge `onChange`、GatewayService RPC、命令注册表。
+- 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
+- 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
 
 ## 运行时、并发与失败语义
 
@@ -396,11 +424,5 @@ flowchart TD
 - **丢弃可见性**：每次丢弃记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；不同会话并行互不影响。
 - **重入防护**：咨询工具自身被门拦截豁免（防止门触发咨询的工具调用自递归）；顾问调用不经过工具层。
-- **完成门与收口去重**：`agent/turn-stopping` 对同一回合的每次收口尝试都会再派发，而完成门的送达本身（inject/steer 落 next-step inbox）就是一次续步——完成门按（会话，回合号）去重，每回合只评审一次；同回合的后续收口尝试直接放行，杜绝「咨询→注入→续步→再咨询」的同回合循环（T-008 实测发现）。
+- **完成门与收口去重**：`agent/turn-stopping` 对同一回合的每次收口尝试都会再派发，而完成门的任何输出（送达 inject 与反对 steer 都落 next-step inbox）就是一次续步——去重标记只在**放行收口**的处置后落（review/block 非 blocker/ask 同意）：同回合的后续收口尝试直接放行，送达后续步的循环有界；**反对收口不落标记**——同回合的再收口会重新评审，blocker 反对不能被立即再收口绕过（R-01-006/AC-02）。拉锯期代价：每次收口尝试各耗一次咨询，由 budget.maxPerSession 与门开关兜底（T-008 实测发现 + 评审轮修正）。
 - **恢复**：paused 由 `/advisor on` 原地恢复；halted 由命令重建运行时；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
-
-## 横切约束
-
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`（两参成败缝）、`ctx.on('agent/turn-stopping')`、`ctx.on('session/event', …, {global:true})`、`agent.inject/steer`、settings bridge `onChange`、GatewayService RPC、命令注册表。
-- 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
-- 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
