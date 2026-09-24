@@ -82,7 +82,8 @@ function makeCard({ raw = structuredClone(RAW), persist, catalog } = {}) {
 
 /** 微型 DOM 桩：createElement/appendChild/事件监听，足够驱动 render.js。 */
 function createDomStub() {
-    return {
+    const dom = {
+        activeElement: null,
         createElement(tag) {
             const node = {
                 tag,
@@ -115,10 +116,30 @@ function createDomStub() {
                 get firstChild() {
                     return node.children[0] ?? null;
                 },
+                replaceChildren(...replacements) {
+                    node.children = replacements.filter((child) => child !== undefined && child !== null);
+                },
+                focus() {
+                    node.__focused = true;
+                },
+                querySelector(selector) {
+                    if (typeof selector !== 'string' || !selector.startsWith('#')) return null;
+                    const id = selector.slice(1);
+                    const find = (n) => {
+                        if (n.attrs?.id === id) return n;
+                        for (const child of n.children ?? []) {
+                            const hit = find(child);
+                            if (hit) return hit;
+                        }
+                        return null;
+                    };
+                    return find(node);
+                },
             };
             return node;
         },
     };
+    return dom;
 }
 
 function findAll(node, predicate, out = []) {
@@ -150,6 +171,20 @@ async function renderedCard(options = {}) {
     card.refresh();
     return { controller, container, card, dom, rpc, rawRef };
 }
+
+test('切换开关不引起滚动重锚：原子替换整棵新树并还原焦点（东家目验）', async () => {
+    const { container, dom } = await renderedCard();
+    expandCard(container);
+    // 模拟浏览器焦点在 Plan 门开关上（点击获焦即此状态）
+    const planSwitch = findById(container, 'advisor-gate-plan-enabled');
+    dom.activeElement = { id: 'advisor-gate-plan-enabled' };
+    // 点击 → setField → emit → refresh（重建）
+    planSwitch.listeners.click[0]();
+    // 重建后焦点还原到同名新开关（旧节点已被原子替换）
+    const rebuilt = findById(container, 'advisor-gate-plan-enabled');
+    assert.notEqual(rebuilt, planSwitch, '开关确实被替换为新节点');
+    assert.equal(rebuilt.__focused, true, '重建后焦点还原，浏览器无需重锚滚动');
+});
 
 test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（默认折叠 → 展开可见）', async () => {
     const { container, rpc } = await renderedCard();
