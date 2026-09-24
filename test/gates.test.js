@@ -562,6 +562,61 @@ test('R-01-006/AC-02 完成门回合去重边界：放行收口落标记（同�
     assert.equal(objected.consultCalls.length, 2); // 反对不落标记：同回合再收口重新评审
 });
 
+test('R-02-005/AC-02 完成门反对降级：steer 缝缺失/抛错时收口降级放行（自由收口返回 undefined），不得悬挂', async () => {
+    // steer 缝缺失 → 反对无法表达 → 收口照常（error 留痕、返回 undefined）
+    const noSeam = makeGate({
+        gates: { completion: { enabled: true, policy: 'block' } },
+        results: [{ ok: true, adviceId: 'adv-5', severity: 'blocker', text: '不能收尾。' }],
+    });
+    const decisionA = await noSeam.engine.handleTurnStopping({
+        turn: 9, signal: undefined, agent: { id: 's1', inject() {} }, // 无 steer 方法
+    });
+    assert.equal(decisionA, undefined); // 降级放行 = 自由收口
+    assert.ok(noSeam.logs.error.some((entry) => String(entry.message).includes('could not steer')));
+    // steer 抛错 → 同样降级放行
+    const throwing = makeGate({
+        gates: { completion: { enabled: true, policy: 'block' } },
+        results: [{ ok: true, adviceId: 'adv-6', severity: 'blocker', text: '不能收尾。' }],
+    });
+    const decisionB = await throwing.engine.handleTurnStopping({
+        turn: 9, signal: undefined, agent: { id: 's1', steer() { throw new Error('steer seam broken'); }, inject() {} },
+    });
+    assert.equal(decisionB, undefined);
+    assert.ok(throwing.logs.error.some((entry) => String(entry.message).includes('steer failed')));
+});
+
+test('R-01-006/AC-02 完成门 ask 策略 fail-open：审批缝缺失/抛错时已送达的意见按 delivered 处置（宿主续步），不得悬挂', async () => {
+    const run = async (approverSetup) => {
+        const delivered = [];
+        const steerCalls = [];
+        const { engine, logs } = makeGate({
+            gates: { completion: { enabled: true, policy: 'ask' } },
+            results: [{ ok: true, adviceId: 'adv-7', severity: 'concern', text: '还差验收。' }],
+            approver: approverSetup,
+            delivery: (sessionId, advice) => {
+                delivered.push(advice);
+                return 'inject';
+            },
+        });
+        const decision = await engine.handleTurnStopping({
+            turn: 4, signal: undefined, agent: { id: 's1', steer: (m) => steerCalls.push(m), inject() {} },
+        });
+        return { decision, delivered: delivered.length, steered: steerCalls.length, logs };
+    };
+    // 审批缝缺失 → fail-open 放行，但意见已送达（宿主将续步）→ delivered
+    const missing = await run(undefined);
+    assert.equal(missing.decision, 'delivered');
+    assert.equal(missing.delivered, 1);
+    assert.equal(missing.steered, 0);
+    assert.ok(missing.logs.error.some((entry) => String(entry.message).includes('no approver')));
+    // 审批抛错 → 同样 delivered
+    const throwing = await run(async () => { throw new Error('approval seam broken'); });
+    assert.equal(throwing.decision, 'delivered');
+    assert.equal(throwing.delivered, 1);
+    assert.equal(throwing.steered, 0);
+    assert.ok(throwing.logs.error.some((entry) => String(entry.message).includes('approver failed')));
+});
+
 // ---------------------------------------------------------------------------
 // 非阻断不变量与边界（R-02-005）
 // ---------------------------------------------------------------------------

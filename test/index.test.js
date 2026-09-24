@@ -319,7 +319,7 @@ test('session/event 只承载 reset 类事件；冷却倒数改由 agent/turn-st
     assert.equal(services.delivery.status().cooldowns.s1, undefined);
 });
 
-test('agent/turn-stopping 冷却口径：完成门送达/反对不倒数，自由收口才倒数（评审轮修正，不锚定 AC）', async () => {
+test('agent/turn-stopping 冷却口径：完成门送达/反对不倒数，自由收口才倒数（不锚定 AC）', async () => {
     const llm = createFakeLlm([answer('severity: nit\n可以收尾。')]);
     const { ctx, subscriptions } = makeCtx({ llm });
     const services = apply(ctx, {
