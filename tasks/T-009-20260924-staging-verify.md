@@ -46,4 +46,19 @@ T-008 关闭时显性记录「真机四门实弹复验待宿主重启」为后�
 
 ## 终态与证据
 
-（执行中）
+- 实现: staging 实弹验证轮（af-verify 一次性 profile，headless 组合 + 本插件软链）收敛三处断缝——① `llm.stream` 请求的 `messages[].content` 改 ContentBlock 数组（宿主 dsh-llm 消息契约；原字符串 content 在适配器内容遍历抛 `content.some is not a function`，即首轮探针 ADVISOR_FAILED 的根因）；② 用量台账字段对齐宿主 TokenUsage（`cacheReadTokens`/`cacheWriteTokens`/`totalTokens` 离散计数，原 `cacheTokens` 字段在宿主契约中不存在）；③ ask_advisor 渲染输出补 adviceId 行（首轮实测意见文本可回查性缺失）。
+- 测试: `npm test` 177/177 全绿；`python3 tools/agentmap_lint.py --report` 全绿（test-anchored 30/30）；staging 实弹三轮探针（af-verify profile 真实会话）：
+  - 第二轮（咨询形状修复后）：循环门实弹通过——3 次等价 bash 第 3 次执行前 17s 同步咨询、`[advisor:nit]`（adv-1）送达、动作放行；完成门实弹通过——回合收口触发咨询、`[advisor:concern]`（adv-2）经 steer 送达、宿主续步一轮后闭合（去重有界，恰好一次咨询）。
+  - 第三轮：ask_advisor 返回含 `（adviceId: adv-1）` 行；失败门实弹通过——`read` 不存在路径首次 `isError:true` 计数后，同参二次调用执行前 13s 咨询、`[advisor:nit]` 送达后放行。
+- SOLUTION 对照: 咨询消息契约与用量字段契约补入横切约束载体清单（T-008 轮已建立该节，本轮两处增补）；PRD 零改动；map-code 无漂移。
+- 已知事实与边界（记录，非缺陷）: bash 工具的非零退出在宿主契约中 `isError:false`（退出码在内容里）——失败门对 shell 级失败不敏感，仅对真正 error 的工具结果计数（staging 实测：read isError 触发、exit 7 不触发）；plan 门真机流程（exit_plan_mode 经 plan mode）留待东家日常使用验证，判定逻辑已由单测与接线测试覆盖。
+- 残余与后续: 咨询素材装配缺口——顾问收到的素材在默认隐私档位下仅含问题文本，无会话历史/工作摘要（收口评审时顾问报「无可评审素材」）；SOLUTION 会话观察模块声称维护转写增量但实现未投喂——是否立项补齐（涉及隐私档位与素材装配语义）待东家裁决，暂记 TODO。
+- commit: 8d3410d
+- commit: 72e513b
+- commit 证据注记: 咨询契约修复最初以 ec70ff3 提交（正文引 T-008——立项时序失误），随后 T-009 task 书经 amend 并入该提交形成 8d3410d；按 Git 纪律不重写历史，以本条目映射 ec70ff3 → 8d3410d 供反查。
+- review:
+  - 审核方: 双轴独立评审子代理（Standards 轴、Spec 轴，code-review skill 流程；T-009 增量评审一轮，覆盖 8d3410d 咨询契约修复与 72e513b 渲染修复）
+  - 目的理解: 本 task 目标是在 staging 真实 LLM 流上验证 T-008 修复并收敛残余断缝；reviewer 需核验咨询消息契约与宿主 GenerateOptions 一致、用量字段与 TokenUsage 一致、staging 实测发现均有回归钉或显性记录
+  - 执行方式: code-review skill 双轴并行子代理；评审基线 2aecfc3..72e513b（含 ec70ff3 咨询形状修复、72e513b adviceId 渲染）
+  - 问题与修复: 实现方自查修复——content 块数组（staging ADVISOR_FAILED 实证）、usage 五字段离散承载、adviceId 渲染回查行；测试断言同步改形（messages content 块数组、TokenUsage 五字段、render adviceId 行）
+  - 复审结论: （待本轮评审填入）

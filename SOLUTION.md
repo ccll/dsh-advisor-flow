@@ -410,6 +410,8 @@ flowchart TD
 - 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时 fail-open；完成门的内联等待挂在 `agent/turn-stopping` 串行派发上，收口等待同样受 `callTimeoutMs` 约束、超时放行收口。
 - 观察与判定不读会话持久化文件，只依赖事件流与投影。
 - 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；回合收口缝 `agent/turn-stopping`（payload `{turn, signal, agent}`，serial 派发、steer 数据反对）；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`。
+- LLM 请求契约（T-009 staging 实测，dsh-llm GenerateOptions）：`messages[].content` 为 ContentBlock 数组（字符串 content 在适配器内容遍历抛 `content.some is not a function`）；`system` 为字符串（一次性调用方）；流 chunk 为 `text-delta`/`usage`/`finish`。
+- 用量契约（T-009 staging 核对，dsh-llm TokenUsage）：`inputTokens`（未缓存输入）/`outputTokens`/`cacheReadTokens`/`cacheWriteTokens`/`totalTokens?`/`reasoningTokens?` 离散计数，无 `cacheTokens` 与 `cost` 字段；台账未收到的字段记 unavailable（R-02-002/AC-02）。
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、tools/result、session/event、agent/turn-stopping、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（approval/commands/typert/settings）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径（client 装载器按 `<包名>/client` 解析插件 client 半区；缺失则宿主半区正常装载而设置卡静默不出现）。

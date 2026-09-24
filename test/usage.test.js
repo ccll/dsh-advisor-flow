@@ -11,6 +11,7 @@ test('R-02-002/AC-01 咨询完成后逐项 token 与成本明细记录并归入�
         inputTokens: 100,
         outputTokens: 50,
         cacheReadTokens: 20,
+        totalTokens: 170,
         cost: 0.25,
     });
     ledger.record({
@@ -19,7 +20,8 @@ test('R-02-002/AC-01 咨询完成后逐项 token 与成本明细记录并归入�
         session: 's1',
         inputTokens: 30,
         outputTokens: 10,
-        cacheWriteTokens: 5,
+        cacheWriteTokens: 3,
+        totalTokens: 45,
         cost: 0.05,
     });
     const totals = ledger.totals();
@@ -27,7 +29,9 @@ test('R-02-002/AC-01 咨询完成后逐项 token 与成本明细记录并归入�
     assert.equal(totals.total.inputTokens, 130);
     assert.equal(totals.total.outputTokens, 60);
     assert.equal(totals.total.cacheReadTokens, 20);
-    assert.equal(totals.total.cacheWriteTokens, 5);
+    assert.equal(totals.total.cacheWriteTokens, 3);
+    assert.equal(totals.total.totalTokens, 215);
+    assert.equal(totals.total.reasoningTokens, 'unavailable'); // 未上报字段 unavailable 而非零（R-02-002/AC-02）
     assert.ok(Math.abs(totals.total.cost - 0.30) < 1e-9);
     const [first, second] = ledger.records();
     assert.equal(first.adviceId, 'adv-1');
