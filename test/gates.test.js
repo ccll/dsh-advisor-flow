@@ -235,8 +235,8 @@ test('R-01-005/AC-03 block-session 封锁态可用 resetSession 撤除（会话�
     assert.equal(after.kind, 'allow'); // 封锁态清除后恢复正常判定
 });
 
-test('R-01-005/AC-04 咨询失败按阻断模式处置：warn-and-continue 放行且错误留痕', async () => {
-    const { engine, consultCalls, logs, next } = makeGate({
+test('R-01-005/AC-04 咨询失败按阻断模式处置：warn-and-continue 放行、失败通告经 steer 送达且错误留痕', async () => {
+    const { engine, consultCalls, logs, delivered, next } = makeGate({
         loop: { enabled: true, threshold: 1 },
         consultImpl: () => ({ ok: false, code: 'ADVISOR_TIMEOUT', reason: 'advisor call timed out', category: 'provider-error' }),
     });
@@ -244,6 +244,8 @@ test('R-01-005/AC-04 咨询失败按阻断模式处置：warn-and-continue 放�
     assert.equal(decision.kind, 'allow'); // warn-and-continue：失败也放行，主循环不停摆
     assert.equal(consultCalls.length, 1);
     assert.ok(logs.error.some((entry) => entry.fields.category === 'provider-error'));
+    assert.equal(delivered.length, 1); // 失败通告经 steer 送达执行者（零可见防回归）
+    assert.ok(delivered[0].text.startsWith('[advisor:loop-gate]'));
 });
 
 test('R-01-005/AC-04 咨询失败 × block-tool：该次调用被拦截，原因含失败类别', async () => {
@@ -388,7 +390,7 @@ test('R-01-005/AC-01 阈值缺省回落：loop 配置缺 threshold 时按缺省 
 });
 
 
-test('R-01-005/AC-03 评审修复回归：引擎禁用时门不计数不咨询（R-02-001/AC-03 前置守卫）', async () => {
+test('R-02-001/AC-03 引擎禁用时循环门不计数不咨询（前置守卫，评审修复回归）', async () => {
     const { engine, consultCalls, nextCalls, next } = makeGate({
         loop: { enabled: true, threshold: 1 },
         disabled: true,
@@ -418,9 +420,7 @@ test('R-01-005/AC-05 评审修复：blocked 与 revise 不重置等价计数（p
 });
 
 test('R-02-005/AC-02 评审修复回归：压缩/重写路径不再调用已退役的 delivery.reset（TypeError 防回归）', () => {
-    const resetless = { registerAgent() {}, unregisterAgent() {}, steerAdvice() {}, status: () => ({}) };
     const wired = createAdviceDelivery({ logger: { info() {}, warn() {}, error() {} } });
     assert.equal(typeof wired.reset, 'undefined'); // 新送达面无 reset（冷却已退役）
     assert.equal(typeof wired.steerAdvice, 'function');
-    void resetless;
 });
