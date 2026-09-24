@@ -51,7 +51,7 @@ const result = await esbuild.build({
     bundle: true,
     format: 'cjs',
     platform: 'browser',
-    target: 'es2020',
+    target: 'es2019', // 移动端旧 webview（X5/旧 Android）不识别 ES2020 的 ??.??. 降级为三目/展开
     // react is answered by the loader module table (see dsh-advisor's
     // CLIENT_EXTERNALS); the client code itself has no other externals.
     external: ['react'],
