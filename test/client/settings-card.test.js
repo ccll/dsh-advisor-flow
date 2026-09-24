@@ -220,12 +220,24 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.equal(headerOpen.attrs['aria-expanded'], 'true');
     assert.equal(byTag(headerOpen, 'svg').length, 1); // 展开态同款 SVG（旋转切换）
     const htmlOpen = JSON.stringify(container);
-    assert.ok(htmlOpen.includes('Advisor provider'));
+    // 文案统一为中文规范名（T-007）：无 camelCase/中英混排标题
+    assert.ok(htmlOpen.includes('顾问提供方'));
+    assert.ok(htmlOpen.includes('顾问模型'));
+    assert.ok(htmlOpen.includes('推理档位'));
+    assert.ok(!htmlOpen.includes('reasoningEffort'), 'camelCase 连写词不再出现在卡片文案');
+    assert.ok(!htmlOpen.includes('Advisor provider'));
     assert.ok(htmlOpen.includes('启用 Advisor Flow'));
+    assert.ok(htmlOpen.includes('关闭后 ask_advisor 工具与四类门控一并停用')); // 主开关说明
     assert.ok(htmlOpen.includes('密钥脱敏'));
-    assert.ok(htmlOpen.includes('启用 Plan 门')); // 门名在开关 toggleRow 文字（legend 已删）
-    assert.ok(htmlOpen.includes('启用 Completion 门'));
+    assert.ok(htmlOpen.includes('开启后，密钥形状的值在发送给顾问前替换为占位符')); // 脱敏说明
+    assert.ok(htmlOpen.includes('启用计划门')); // 门名在开关 toggleRow 文字（legend 已删）
+    assert.ok(htmlOpen.includes('启用完成门'));
+    assert.ok(htmlOpen.includes('退出计划模式（计划定稿）前先经顾问评审')); // 门触发时机说明
+    assert.ok(htmlOpen.includes('评审放行（review）')); // 下拉选项「中文（原值）」双写
+    assert.ok(htmlOpen.includes('拦截并停止会话（block-session）'));
     assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
+    assert.ok(htmlOpen.includes('不发送（off）')); // 隐私档位选项双写
+    assert.ok(htmlOpen.includes('随咨询发送的会话历史范围')); // 档位说明
     assert.ok(htmlOpen.includes('placeholder":"默认 3"')); // 阈值空值=用默认（目验 ③）
     // footer 右对齐按钮组
     assert.ok(htmlOpen.includes('advisor-flow-save'));
@@ -463,14 +475,14 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
         persist: async (raw) => writes.push(raw),
     });
     expandCard(container);
-    // 渲染含 effort 字段与回退提示
+    // 渲染含 effort 字段与回退提示（T-007：中文标题 + 说明 hint）
     const html = JSON.stringify(container);
-    assert.ok(html.includes('advisor reasoningEffort'));
+    assert.ok(html.includes('推理档位'));
+    assert.ok(html.includes('顾问模型的推理力度；留空跟随模型默认，模型不支持的档位自动回退默认'));
     assert.ok(html.includes('不指定（跟随模型默认）'));
     assert.ok(html.includes('低 (low)'));
     assert.ok(html.includes('最大 (max)'));
     assert.ok(html.includes('关闭 (off)'));
-    assert.ok(html.includes('模型不支持的档位将回退模型默认'));
 
     // 选择档位 → 经 setField 进入 patch → save 往返保留（id 定位）
     const effortSelect = findById(container, 'advisor-reasoning-effort');
@@ -589,7 +601,7 @@ test('R-02-001 目录 RPC 挂起不得阻塞表单：ready 立即达成，表单
     assert.equal(controller.getState().catalogReady, false); // 目录未达
     expandCard(container);
     const html = JSON.stringify(container);
-    assert.ok(html.includes('Advisor provider'), '表单在目录挂起时照常渲染');
+    assert.ok(html.includes('顾问提供方'), '表单在目录挂起时照常渲染');
 });
 
 test('R-02-001/AC-01 load 瞬态失败自动重试一次：再失败才落 error（自愈优先）', async () => {
@@ -674,7 +686,7 @@ test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、ef
     // 回退形态：provider/model 仍为自由文本输入
     const textInputs = findAll(container, (node) => node.tag === 'input' && node.attrs.type === 'text');
     const labels = findAll(container, (node) => node.tag === 'label');
-    assert.ok(JSON.stringify(container).includes('Advisor provider'));
+    assert.ok(JSON.stringify(container).includes('顾问提供方'));
     // effort 回退硬编码档位
     assert.ok(JSON.stringify(container).includes('关闭 (off)'));
     // 一次性显性化：连续 load 不重复 warn
