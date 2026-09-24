@@ -188,7 +188,7 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(htmlOpen.includes('Advisor provider'));
     assert.ok(htmlOpen.includes('启用 Advisor Flow'));
     assert.ok(htmlOpen.includes('密钥脱敏'));
-    assert.ok(htmlOpen.includes('启用 Plan 门')); // 门名只在 checkbox 文字（legend 已删）
+    assert.ok(htmlOpen.includes('启用 Plan 门')); // 门名在开关 toggleRow 文字（legend 已删）
     assert.ok(htmlOpen.includes('启用 Completion 门'));
     assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
     assert.ok(htmlOpen.includes('placeholder":"默认 3"')); // 阈值空值=用默认（目验 ③）
@@ -266,15 +266,17 @@ test('R-02-001/AC-01 discard 放弃修改：patch 清空且无 gateway 写入', 
     assert.equal(rpc.calls.filter((call) => call.method === 'advisor-flow/set').length, 1);
 });
 
-test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径（checkboxRow 兄弟结构）', async () => {
+test('R-02-001/AC-01 卡片开关与下拉编辑映射到正确配置路径（官方 Switch + toggleRow 结构）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
-    // checkboxRow 兄弟结构（对齐 dsh-advisor）：label(htmlFor) 与 input 分立
-    const enabledBox = findById(container, 'advisor-enabled');
-    assert.ok(enabledBox, 'enabled 复选框存在（id 定位）');
-    enabledBox.listeners.change[0]({ target: { checked: false } });
+    // 主开关为官方 Switch 复刻（button[role=switch]，id 定位保留）
+    const enabledSwitch = findById(container, 'advisor-enabled');
+    assert.ok(enabledSwitch, 'enabled 开关存在（id 定位）');
+    assert.equal(enabledSwitch.attrs.role, 'switch');
+    assert.equal(enabledSwitch.attrs['aria-checked'], 'true');
+    enabledSwitch.listeners.click[0]();
     assert.equal(controller.getState().patch.enabled, false);
-    // 门策略下拉：id 定位（fieldset+legend 内）
+    // 门策略下拉：id 定位
     const planSelect = findById(container, 'advisor-gate-plan-policy');
     assert.ok(planSelect, 'plan 门策略下拉存在');
     planSelect.listeners.change[0]({ target: { value: 'block' } });
@@ -285,27 +287,32 @@ test('R-02-001/AC-01 卡片勾选与下拉编辑映射到正确配置路径（ch
     assert.equal(controller.getState().patch.privacy.history, 'off');
 });
 
-test('R-02-001/AC-01 视觉轨道本体可点：点击轨道翻转启用值（目验「点开关无反应」）', async () => {
+test('R-02-001/AC-01 官方 Switch 本体可点：点击翻转启用值（目验「点开关无反应」）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
-    // RAW enabled=true → 点击轨道应翻转为 false（入 patch）
-    const track = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_switchTrack'))[0];
-    assert.ok(track, '轨道节点存在');
-    assert.ok(track.listeners.click?.length > 0, '轨道绑定点击');
-    track.listeners.click[0]();
+    // RAW enabled=true → 点击 Switch 应翻转为 false（入 patch）
+    const mainSwitch = findById(container, 'advisor-enabled');
+    assert.ok(mainSwitch.listeners.click?.length > 0, 'Switch 绑定点击');
+    mainSwitch.listeners.click[0]();
     assert.equal(controller.getState().patch.enabled, false);
     // 再点一次回到 true（翻转语义）
-    const track2 = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_switchTrack'))[0];
-    track2.listeners.click[0]();
+    const mainSwitch2 = findById(container, 'advisor-enabled');
+    mainSwitch2.listeners.click[0]();
     assert.equal(controller.getState().patch.enabled, true);
+    // 门子开关（启用态）点击映射到 gates.<kind>.enabled；密钥脱敏同 Switch 形态
+    const planGateSwitch = findById(container, 'advisor-gate-plan-enabled');
+    assert.equal(planGateSwitch.attrs.role, 'switch', '门子开关为官方 Switch 形态');
+    planGateSwitch.listeners.click[0]();
+    assert.equal(controller.getState().patch.gates.plan.enabled, false);
+    assert.equal(findById(container, 'advisor-privacy-redact-secrets').attrs.role, 'switch', '密钥脱敏为官方 Switch 形态');
 });
 
 test('R-02-001 关闭启用开关不抛错：fieldset 附加 disabledGroup（目验「详情消失」真凶——桩私有 attrs.class 曾使真实 DOM 崩）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
-    // 模拟真实点击路径：checkbox change → setField → emit → refresh 全链
-    const enabledBox = findById(container, 'advisor-enabled');
-    enabledBox.listeners.change[0]({ target: { checked: false } });
+    // 模拟真实点击路径：Switch click → setField → emit → refresh 全链
+    const enabledSwitch = findById(container, 'advisor-enabled');
+    enabledSwitch.listeners.click[0]();
     assert.equal(controller.getState().patch.enabled, false);
     // refresh 后不抛（曾抛 TypeError: Cannot read properties of undefined (reading 'class')）
     const gateFieldset = findAll(container, (node) => node.tag === 'fieldset' && (node.attrs.class ?? '').includes('advisorflow_fieldset'))[0];
@@ -314,6 +321,15 @@ test('R-02-001 关闭启用开关不抛错：fieldset 附加 disabledGroup（目
     assert.equal((gateFieldset.getAttribute?.('class') ?? gateFieldset.attrs.class).includes('advisorflow_disabledGroup'), false, '门 fieldset 自身不带禁用类（加在门块 div 上）');
     const disabledGroups = findAll(container, (node) => (node.getAttribute?.('class') ?? node.attrs.class ?? '').includes('advisorflow_disabledGroup'));
     assert.ok(disabledGroups.length >= 4, '四门块与隐私组带禁用标注');
+    // 总开关关闭后 effort 下拉一并禁用（东家问题 1 的回归钉）
+    const effortSelect = findById(container, 'advisor-reasoning-effort');
+    assert.equal(effortSelect.attrs.disabled, 'disabled', 'effort 下拉随总开关禁用');
+    // 关闭态下门子开关进入 disabled 且点击被守卫拦截（不产生 patch）
+    const planGateSwitch = findById(container, 'advisor-gate-plan-enabled');
+    assert.equal(planGateSwitch.attrs.role, 'switch', '门子开关为官方 Switch 形态');
+    assert.equal(planGateSwitch.attrs.disabled, 'disabled');
+    planGateSwitch.listeners.click[0]();
+    assert.equal(controller.getState().patch.gates?.plan?.enabled, undefined, '禁用态门开关点击不生效');
 });
 
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
