@@ -166,7 +166,13 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(chevron, 'chevron 容器存在');
     assert.equal(byTag(chevron, 'svg').length, 1);
     const path = byTag(chevron, 'path')[0];
-    assert.equal(path.attrs.d, 'M3 4.5L6 7.5L9 4.5'); // dsh-advisor 同款路径
+    // 官方 IconChevronDownOutline14 同款：14 系实心 fill（与其他插件卡片视觉一致）
+    assert.equal(path.attrs.d.startsWith('M11.8486 5.5'), true);
+    assert.equal(path.attrs.fill, 'currentColor');
+    assert.equal(path.attrs.stroke, undefined);
+    const svgNode = byTag(chevron, 'svg')[0];
+    assert.equal(svgNode.attrs.viewBox, '0 0 14 14');
+    assert.equal(svgNode.attrs.width, '14');
 
     // 展开（T-006 ④）：表单层级齐全（refresh 重建 DOM——重新查询节点）
     expandCard(container);
