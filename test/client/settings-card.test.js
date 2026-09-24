@@ -332,6 +332,25 @@ test('R-02-001 关闭启用开关不抛错：fieldset 附加 disabledGroup（目
     assert.equal(controller.getState().patch.gates?.plan?.enabled, undefined, '禁用态门开关点击不生效');
 });
 
+test('R-02-001 门开关联动：本门关闭时该门策略禁用，其它门不受影响（东家目验）', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    // RAW: plan/failure 门均 enabled → 关闭 plan 门
+    findById(container, 'advisor-gate-plan-enabled').listeners.click[0]();
+    assert.equal(controller.getState().patch.gates.plan.enabled, false);
+    // 本门控件随门开关闭用（refresh 后重新定位）
+    const planPolicy = findById(container, 'advisor-gate-plan-policy');
+    assert.equal(planPolicy.attrs.disabled, 'disabled', '本门关闭后策略禁用');
+    // 其它门独立联动：failure 门默认关闭（RAW 未配置）→ 控件禁用；点开后恢复
+    assert.equal(findById(container, 'advisor-gate-failure-policy').attrs.disabled, 'disabled', '默认关闭的门控件禁用');
+    findById(container, 'advisor-gate-failure-enabled').listeners.click[0]();
+    assert.equal(findById(container, 'advisor-gate-failure-policy').attrs.disabled, undefined, 'failure 门开启后其控件恢复可用');
+    // 重新开启 plan 门 → 控件恢复可用
+    findById(container, 'advisor-gate-plan-enabled').listeners.click[0]();
+    const planPolicy2 = findById(container, 'advisor-gate-plan-policy');
+    assert.equal(planPolicy2.attrs.disabled, undefined, '门重新开启后策略恢复可用');
+});
+
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
