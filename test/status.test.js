@@ -12,23 +12,23 @@ function config(raw) {
     return result.config;
 }
 
-test('R-02-003/AC-02 状态快照展示启用态、模型路由、门状态、待处理数与最近活动', async () => {
-    const llm = createFakeLlm([{ hangUntilReleased: true }, answer('重试后的意见。')]);
+test('R-02-003/AC-02 状态快照展示启用态、模型路由、守则开关、循环门配置、待处理数与最近活动', async () => {
+    const llm = createFakeLlm([{ ...answer('恢复后的意见。', { usage: { inputTokens: 3, outputTokens: 2 } }), hangUntilReleased: true }]);
     const usageLedger = createUsageLedger();
     const enabled = config({
         enabled: true,
         advisor: { provider: 'gpu', model: 'glm-5.3-flash', reasoningEffort: 'high', maxTokens: 16384, callTimeoutMs: 180000 },
-        gates: { plan: { enabled: true, policy: 'review' }, failure: { enabled: true, policy: 'block-session', threshold: 2 } },
+        gates: { plan: { enabled: true }, loop: { enabled: true, threshold: 5 } },
+        failureMode: 'block-tool',
     });
     const engine = createConsultationEngine({
         llm,
         config: enabled,
         logger: { info() {}, warn() {} },
         usageLedger,
-        sleep: async () => {},
     });
     const pending = engine.consult({ entry: 'tool', question: 'q' });
-    // 让引擎进入流式等待后再取快照（ensure the stream call has started）
+    // 让引擎进入流式等待后再取快照
     await new Promise((resolve) => setTimeout(resolve, 5));
     const provider = createStatusProvider({ config: enabled, engine, usageLedger });
 
@@ -37,8 +37,10 @@ test('R-02-003/AC-02 状态快照展示启用态、模型路由、门状态、�
     assert.equal(snapshot.advisor.provider, 'gpu');
     assert.equal(snapshot.advisor.model, 'glm-5.3-flash');
     assert.equal(snapshot.advisor.reasoningEffort, 'high');
+    // 守则三门开关 + 循环门配置 + 阻断模式随活配置回显
     assert.equal(snapshot.gates.plan.enabled, true);
-    assert.equal(snapshot.gates.failure.threshold, 2);
+    assert.equal(snapshot.gates.loop.threshold, 5);
+    assert.equal(snapshot.failureMode, 'block-tool');
     assert.equal(snapshot.pending, 1);
     assert.deepEqual(snapshot.usage.total, usageLedger.totals().total);
 
@@ -50,7 +52,7 @@ test('R-02-003/AC-02 状态快照展示启用态、模型路由、门状态、�
     assert.equal(after.sessions[0].runtime, 'active');
 });
 
-test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-reason）', () => {
+test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-reason）；阻断模式可查询', () => {
     const disabled = config({ enabled: true, advisor: { provider: 'p' } });
     const provider = createStatusProvider({ config: disabled });
     const snapshot = provider.snapshot();
@@ -58,4 +60,5 @@ test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-rea
     assert.equal(snapshot.reason, 'missing-advisor-model');
     assert.equal(snapshot.pending, 0);
     assert.equal(snapshot.lastActivity, undefined);
+    assert.equal(snapshot.failureMode, 'warn-and-continue');
 });

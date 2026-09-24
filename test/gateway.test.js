@@ -5,7 +5,8 @@ import { advisorFlowTypertContribution, createConfigGateway, mergeAdvisorFlowCon
 const BASE = {
     enabled: true,
     advisor: { provider: 'p', model: 'm', maxTokens: 4096 },
-    gates: { plan: { enabled: true, policy: 'review' }, loop: { enabled: true, policy: 'ask', threshold: 5 } },
+    gates: { plan: { enabled: true }, loop: { enabled: true, threshold: 5 } },
+    failureMode: 'warn-and-continue',
 };
 
 function makeGateway(raw = structuredClone(BASE)) {
@@ -78,15 +79,16 @@ test('R-02-001/AC-03 enabled 但缺 provider/model 的保存被阻断并给出�
 test('R-02-001/AC-02 mergeAdvisorFlowConfig：section 按键合并、gates 按门合并，不抹兄弟键', () => {
     const merged = mergeAdvisorFlowConfig(structuredClone(BASE), {
         advisor: { model: 'x' },
-        gates: { plan: { policy: 'block' }, completion: { enabled: true, policy: 'ask' } },
+        gates: { plan: { enabled: false }, completion: { enabled: true } },
+        failureMode: 'block-session',
         privacy: { history: 'off' },
     });
     assert.equal(merged.advisor.provider, 'p'); // 兄弟键保留
     assert.equal(merged.advisor.model, 'x');
-    assert.equal(merged.gates.plan.enabled, true); // plan 只改 policy
-    assert.equal(merged.gates.plan.policy, 'block');
+    assert.equal(merged.gates.plan.enabled, false); // plan 只改 enabled
     assert.equal(merged.gates.loop.threshold, 5); // 未触碰的 gate 原样
     assert.equal(merged.gates.completion.enabled, true); // 新 gate 键按门合并
+    assert.equal(merged.failureMode, 'block-session'); // 顶层键直接替换
     assert.equal(merged.privacy.history, 'off');
 });
 
@@ -196,7 +198,7 @@ test('R-02-001/AC-01 持久写：set 成功时经写缝落 settings.yaml（merge
     assert.equal(writes.length, 1);
     assert.equal(writes[0].advisor.model, 'm2');
     assert.equal(writes[0].advisor.provider, 'p');
-    assert.equal(writes[0].gates.plan.policy, 'review');
+    assert.equal(writes[0].gates.plan.enabled, true);
     // 其他顶层键未被触碰（merge 语义由缝承载）
     assert.equal(doc.other.keep, true);
 });

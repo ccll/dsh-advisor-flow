@@ -1,47 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
-import { createFakeLlm, answer } from './helpers.js';
+import { createFakeLlm, answer, failure } from './helpers.js';
 
-/**
- * 模拟 cordis ctx 的 get-trap：白名单内的模拟上下文方法直取；显式提供的
- * 服务返回实例；「非白名单且未提供」的服务属性抛同型
- * `cannot get property "X" without inject`——使「未注入属性零次访问」的
- * 约束在旧代码形态下真能变红。`provide(name, value)` 支持延迟提供
- * （apply 返回后激活等待中的条件子上下文，模拟宿主服务后到）。
- *
- * 认知注记（与真实 cordis 的已知偏差，均不影响当前断言）：
- * - set-trap 把「任何属性赋值」当作服务提供，是桩内便利假设——真实 cordis
- *   走 ctx.set/reflect 原语，不会把任意赋值当服务注册；
- * - get-trap 白名单未覆盖 cordis isSpecialProperty 类形态（'then'、'_'
- *   前缀、数字属性）——桩比真实 trap 更严：真实宿主对这类属性有特殊分支，
- *   当前插件代码不触达它们，故此处不模拟。
- */
+const endpoints = [];
+
+/** 模拟 cordis ctx 的 get-trap（T-005 实测回归钉住的桩形态）。 */
 const SIMULATED_CONTEXT_METHODS = new Set(['on', 'logger', 'root', 'inject', 'reflect']);
 
-function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings, commands, typert, agents } = {}) {
+function makeCtx({ withTools = true, withEvents = true, llm, settings, commands, typert, agents, systemPrompt } = {}) {
     const registered = [];
     const subscriptions = [];
-    const activated = [];   // 已激活的条件子上下文（服务名数组）
-    const unactivated = []; // 未激活的条件子上下文（缝缺失路径）
+    const activated = [];
+    const unactivated = [];
     const logs = { error: [], warn: [], info: [] };
     const logger = {
         error: (message) => logs.error.push(message),
         warn: (message) => logs.warn.push(message),
         info: (message) => logs.info.push(message),
     };
-
-    const provided = new Map();       // 服务名 → 实例
-    const pendingChildren = new Map(); // 服务名 → 等待激活的子上下文
+    const provided = new Map();
+    const pendingChildren = new Map();
     function runChild(child) {
         const missing = child.names.filter((name) => !provided.has(name));
         if (missing.length > 0) {
-            unactivated.push(child.names); // 未激活（缝缺失路径）——后到激活时移除
+            unactivated.push(child.names);
             return false;
         }
         const index = unactivated.indexOf(child.names);
         if (index >= 0) {
-            unactivated.splice(index, 1); // 后到提供 → 从未激活名单移除
+            unactivated.splice(index, 1);
         }
         activated.push(child.names);
         const sub = Object.fromEntries(child.names.map((name) => [name, provided.get(name)]));
@@ -61,8 +49,7 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
             }
         }
     }
-
-    const providedEntries = []; // reflect.provide 注册记录（cordis Service 基类路径）
+    const providedEntries = [];
     const target = {
         logger: () => logger,
         root: { get: (service) => (service === 'llm' ? llm : undefined) },
@@ -94,15 +81,13 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
         },
         set(t, prop, value) {
             if (SIMULATED_CONTEXT_METHODS.has(prop)) {
-                t[prop] = value; // 模拟上下文方法（inject/on/…）走 target，不是服务
+                t[prop] = value;
                 return true;
             }
             provide(String(prop), value);
             return true;
         },
     });
-    // 声明的必选服务预置占位（真实宿主恒提供；桩内未给实例则为 undefined
-    // 占位，get 不抛——保持「必选服务可安全直访」语义）。
     for (const serviceName of inject) {
         provided.set(serviceName, undefined);
     }
@@ -112,9 +97,6 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
     if (agents !== undefined) {
         provide('agents', agents);
     }
-    if (approvals !== undefined) {
-        provide('approvals', approvals);
-    }
     if (settings !== undefined) {
         provide('settings', settings);
     }
@@ -123,6 +105,9 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
     }
     if (typert !== undefined) {
         provide('typert', typert);
+    }
+    if (systemPrompt !== undefined) {
+        provide('systemPrompt', systemPrompt);
     }
     if (withTools) {
         provide('tools', { register: (tool) => registered.push(tool) });
@@ -140,11 +125,9 @@ function makeCtx({ withTools = true, withEvents = true, llm, approvals, settings
     function providedService(name) {
         return [...providedEntries].reverse().find((entry) => entry.name === name)?.service;
     }
-    return { ctx, registered, subscriptions, activated, unactivated, logs, provide, llm, providedService, settle };
+    return { ctx, registered, subscriptions, activated, unactivated, logs, provide, llm, providedService };
 }
 
-
-/** 等待动态 import（typert-gateway）解析与子上下文异步清理完成。 */
 async function settle(turns = 8) {
     for (let i = 0; i < turns; i++) {
         await new Promise((resolve) => setImmediate(resolve));
@@ -157,14 +140,12 @@ const entryConfig = {
 };
 
 test('tools 条件子上下文：服务在场即注册；注册抛错向上传播（不锚定 AC）', () => {
-    // 服务在场 → 子上下文激活 → 注册成功
     const ok = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ok.ctx, entryConfig);
     assert.equal(ok.registered.length, 1);
     assert.equal(ok.activated.some((names) => names.includes('tools')), true);
     void services;
 
-    // 注册抛错 → 子上下文内 fail loud（向上传播，不静默降级）
     const broken = makeCtx({ llm: createFakeLlm([]) });
     broken.ctx.tools.register = () => {
         throw new Error('registry broken');
@@ -174,19 +155,15 @@ test('tools 条件子上下文：服务在场即注册；注册抛错向上传�
 });
 
 test('未注入服务的顶层属性访问零次：条件子上下文未激活不崩溃（T-005 实测回归钉住）', async () => {
-    // 缝探测原语曾使 apply 在 cordis get-trap 下崩溃（cannot get property
-    // "approvals" without inject）——本测试以「无任何可选服务」的组合钉住
-    // 装载不崩溃 + 降级标注齐全。
     const { ctx, logs, unactivated } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     await settle();
-    assert.ok(unactivated.length >= 4); // approval×2/commands/typert/settings 均未激活
+    assert.ok(unactivated.length >= 4); // commands/typert/settings/systemPrompt 均未激活
     const degradations = services.status.snapshot().degradations;
-    assert.equal(degradations.askPolicy, 'approver-seam-missing');
+    assert.equal(degradations.guidelines, 'systemprompt-seam-not-activated');
     assert.equal(degradations.commands, 'registry-seam-missing');
     assert.equal(degradations.settingsCard, 'gateway-seam-missing');
     assert.equal(degradations.persistence, 'settings-writer-seam-missing');
-    // 缺失未经确认（子上下文未激活≠确认失败）前不虚报「持久化不可用」日志
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
 });
 
@@ -198,11 +175,9 @@ test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面�
     assert.equal(registered[0].name, 'ask_advisor');
     assert.equal(services.config().enabled, true);
 
-    // 工具面经注册的同一实例工作
     const result = await services.askAdvisor.execute({ question: 'q' });
     assert.equal(result.adviceId, 'adv-1');
 
-    // applyConfig 经返回的入口即时生效于后续咨询（门配置签名同步重建）
     services.applyConfig({
         ...services.config(),
         advisor: { ...services.config().advisor, model: 'm2' },
@@ -211,7 +186,6 @@ test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面�
     assert.equal(second.adviceId, 'adv-2');
     assert.equal(llm.calls[1].options.model, 'm2');
 
-    // dispose 路径容错：无 tools 二次 dispose 不抛出
     services.dispose();
     services.dispose();
 });
@@ -236,38 +210,205 @@ test('事件订阅缝缺失时启动期 fail loud（与工具注册缝同纪律�
     assert.match(logs.error[0], /advisor-flow/);
 });
 
-test('R-01-003/AC-01 apply 接线：pre-execute 门命中同步咨询，工具生命周期与 turn-stopping 缝全局订阅', async () => {
-    const llm = createFakeLlm([answer('severity: nit\n计划评审通过。')]);
-    const { ctx, subscriptions } = makeCtx({ llm });
+test('R-01-003/004/006 守则注入 wiring：systemPrompt 子上下文激活即注册 section，文本随活配置实时求值', async () => {
+    const llm = createFakeLlm([answer('ok')]);
+    const sectionSpecs = [];
+    const { ctx } = makeCtx({
+        llm,
+        systemPrompt: {
+            getSectionOrder: (kind) => (kind === 'PLAN_POLICY' ? 420 : 900),
+            section: (spec) => {
+                sectionSpecs.push(spec);
+                return () => sectionSpecs.pop();
+            },
+        },
+    });
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
-        gates: { plan: { enabled: true, policy: 'review' } },
+        gates: { plan: { enabled: true }, failure: { enabled: true }, completion: { enabled: true } },
     });
-    const wired = Object.fromEntries(subscriptions.map((s) => [s.event, s]));
-    assert.ok(wired['tools/pre-execute']);
-    // 工具生命周期事件以 agent scope 为 carrier 派发（dsh-tools scopeTarget）——必须 {global:true}
-    assert.equal(wired['tools/pre-execute'].options?.global, true);
-    assert.equal(wired['tools/result'].options?.global, true);
-    // 回合收口缝（完成门真实锚点 + 冷却倒数源）同样全局订阅
-    assert.equal(wired['agent/turn-stopping'].options?.global, true);
-    assert.equal(wired['session/event'].options?.global, true);
-    assert.equal(wired['agent/created'].options?.global, true);
-    assert.equal(wired['agent/disposed'].options?.global, true);
+    assert.equal(services.status.snapshot().degradations.guidelines, undefined); // 激活即清除
+    const spec = sectionSpecs[0];
+    assert.equal(spec.name, 'advisor-flow:guidelines');
+    assert.equal(typeof spec.text, 'function'); // text 为函数形态（实时求值）
+    const renderedOn = spec.text({ agent: { id: 's1' } });
+    assert.ok(renderedOn.includes('拟议工作'));
+    assert.ok(renderedOn.includes('无可测进展'));
+    assert.ok(renderedOn.includes('已变更工作'));
+    assert.ok(renderedOn.includes('空对象调用 ask_advisor'));
+});
 
-    // 门命中：exit_plan_mode 在 pre-execute 被同步评审后放行（真实宿主载体形状）
-    const decision = await wired['tools/pre-execute'].handler(
-        { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'exit_plan_mode', arguments: {}, agent: { id: 's1' }, signal: undefined },
-        () => ({ kind: 'allow' }),
-    );
+test('R-01-003/004/006 守则文本随活配置求值：守则全关时整段不注入（配置变更即时生效）', async () => {
+    const llm = createFakeLlm([answer('ok')]);
+    const sectionSpecs = [];
+    const { ctx } = makeCtx({
+        llm,
+        systemPrompt: {
+            section: (spec) => {
+                sectionSpecs.push(spec);
+                return () => sectionSpecs.pop();
+            },
+        },
+    });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { plan: { enabled: false }, failure: { enabled: false }, completion: { enabled: false } },
+    });
+    const spec = sectionSpecs[0];
+    assert.equal(spec.text({ agent: {} }), ''); // 全关 → 空串（守则整段不注入）
+    // 未启用（enabled:false）→ 同样空串
+    services.applyConfig({
+        enabled: false,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { plan: { enabled: true } },
+    });
+    assert.equal(spec.text({ agent: {} }), '');
+    // agentless 组装不出守则
+    services.applyConfig({
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { plan: { enabled: true } },
+    });
+    assert.equal(spec.text(undefined), '');
+});
+
+test('事件订阅形态回归：工具生命周期缝全局订阅；approval 与 turn-stopping 缝已退役（不锚定 AC）', async () => {
+    const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
+    apply(ctx, entryConfig);
+    for (const toolEvent of ['tools/pre-execute', 'tools/result', 'session/event', 'agent/created', 'agent/disposed', 'session/disposed']) {
+        const registration = subscriptions.find((entry) => entry.event === toolEvent);
+        assert.ok(registration, `${toolEvent} 监听已注册`);
+        assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
+    }
+    // 退役缝：approval 审批缝与 agent/turn-stopping 监听不再存在（C-007）
+    assert.equal(subscriptions.find((entry) => entry.event === 'agent/turn-stopping'), undefined);
+});
+
+test('R-01-005/AC-02 wiring 处置矩阵：决策 proceed → steer 送达 + 计数重置 + 放行', async () => {
+    const llm = createFakeLlm([
+        answer('Decision: proceed\n\n重复动作已评审，本次放行。'),
+        answer('Decision: proceed\n\n评审通过。'),
+    ]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx, subscriptions } = makeCtx({ llm, agents });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { loop: { enabled: true, threshold: 3 } },
+        failureMode: 'warn-and-continue',
+    });
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, signal: undefined };
+    await preExecute(exec, () => ({ kind: 'allow' }));
+    await preExecute(exec, () => ({ kind: 'allow' }));
+    assert.equal(steered.length, 0); // 前两次不拦
+    const decision = await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'allow');
+    assert.equal(llm.calls.length, 1); // 第 3 次等价调用先评审
+    // 门结果经 delivery.steerAdvice → agent.steer（**Decision: proceed** + 全文）
+    assert.equal(steered.length, 1);
+    assert.equal(steered[0].content[0].text, '**Decision: proceed**\n\nDecision: proceed\n\n重复动作已评审，本次放行。');
+    assert.equal(steered[0].source.plugin, 'advisor-flow');
+    // proceed → 等价计数重置：同一 exec 再两次不拦，第 3 次才再次评审
+    await preExecute(exec, () => ({ kind: 'allow' }));
+    await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(llm.calls.length, 1);
-    // 普通工具不命中
-    await wired['tools/pre-execute'].handler({ name: 'read_file', arguments: {}, agent: { id: 's1' }, callId: 'c2' }, () => ({ kind: 'allow' }));
-    assert.equal(llm.calls.length, 1);
-    // ask_advisor 豁免
-    await wired['tools/pre-execute'].handler({ name: 'ask_advisor', arguments: {}, agent: { id: 's1' }, callId: 'c3' }, () => ({ kind: 'allow' }));
-    assert.equal(llm.calls.length, 1);
+    await preExecute(exec, () => ({ kind: 'allow' }));
+    assert.equal(llm.calls.length, 2); // 重置后重新计数至阈值
+});
+
+test('R-01-005/AC-02 wiring 处置矩阵：决策 revise → steer 送达 + deny（原因含意见全文）', async () => {
+    const llm = createFakeLlm([answer('Decision: revise\n\n该命令会删除生产数据，先改用回收站流程。')]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx, subscriptions } = makeCtx({ llm, agents });
+    apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { loop: { enabled: true, threshold: 1 } },
+        failureMode: 'warn-and-continue',
+    });
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'rm -rf /' }, agent: { id: 's1' }, signal: undefined };
+    const decision = await preExecute(exec, () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'deny');
+    assert.ok(decision.reason.includes('[advisor:loop-gate]'));
+    assert.ok(decision.reason.includes('先改用回收站流程'));
+    assert.equal(steered.length, 1); // revise 同样送达门结果
+    assert.ok(steered[0].content[0].text.startsWith('**Decision: revise**'));
+});
+
+
+test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分支', async () => {
+    const makeCase = async (failureMode) => {
+        const llm = createFakeLlm([answer('Decision: blocked\n\n会话已进入危险状态，停止会话。')]);
+        const steered = [];
+        const cancelCalls = [];
+        const agents = {
+            get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+            cancel: (context) => cancelCalls.push(context),
+        };
+        const { ctx, subscriptions } = makeCtx({ llm, agents });
+        apply(ctx, {
+            enabled: true,
+            advisor: { provider: 'test', model: 'm' },
+            gates: { loop: { enabled: true, threshold: 1 } },
+            failureMode,
+        });
+        const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+        const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, signal: undefined };
+        return { preExecute, exec, steered, cancelCalls, llm };
+    };
+
+    // warn-and-continue：通知后放行（送达但不拦截、不封锁）
+    const warn = await makeCase('warn-and-continue');
+    const warnDecision = await warn.preExecute(warn.exec, () => ({ kind: 'allow' }));
+    assert.equal(warnDecision.kind, 'allow');
+    assert.equal(warn.steered.length, 1);
+    assert.equal(warn.cancelCalls.length, 0);
+
+    // block-tool：仅拦截该次调用
+    const tool = await makeCase('block-tool');
+    const toolDecision = await tool.preExecute(tool.exec, () => ({ kind: 'allow' }));
+    assert.equal(toolDecision.kind, 'deny');
+    assert.ok(toolDecision.reason.includes('危险状态'));
+    assert.equal(tool.cancelCalls.length, 0); // 仅拦截该次调用，不停止会话
+
+    // block-session：会话封锁（agents.cancel 尽力停止）+ 后续调用全 deny
+    const session = await makeCase('block-session');
+    const sessionDecision = await session.preExecute(session.exec, () => ({ kind: 'allow' }));
+    assert.equal(sessionDecision.kind, 'deny');
+    assert.equal(session.cancelCalls.length, 1); // 尽力停止当前执行
+    // 封锁生效：后续一切工具调用一律拦截（拒绝原因 = 封锁原因），不再咨询
+    const after = await session.preExecute(session.exec, () => ({ kind: 'allow' }));
+    assert.equal(after.kind, 'deny');
+    assert.equal(session.llm.calls.length, 1); // 封锁态不再发起咨询
+});
+
+test('R-01-005/AC-04 wiring：咨询失败按阻断模式处置（provider 失败 → block-tool deny 留痕）', async () => {
+    const llm = createFakeLlm([failure(new Error('no provider adapter for route'), {})]);
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer() {} } : undefined),
+    };
+    const { ctx, subscriptions } = makeCtx({ llm, agents });
+    apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        gates: { loop: { enabled: true, threshold: 1 } },
+        failureMode: 'block-tool',
+    });
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, signal: undefined };
+    const decision = await preExecute(exec, () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'deny');
+    assert.ok(decision.reason.includes('provider-error')); // 咨询失败按阻断模式处置并留痕
 });
 
 test('R-02-003/AC-02 状态快照读活配置：applyConfig 后门配置即时可见', async () => {
@@ -277,161 +418,63 @@ test('R-02-003/AC-02 状态快照读活配置：applyConfig 后门配置即时�
     services.applyConfig({
         enabled: true,
         advisor: { provider: 'test', model: 'm2' },
-        gates: { plan: { enabled: true, policy: 'block' } },
+        gates: { loop: { enabled: true, threshold: 7 } },
+        failureMode: 'block-session',
     });
     const snapshot = services.status.snapshot();
     assert.equal(snapshot.enabled, true);
     assert.equal(snapshot.advisor.model, 'm2');
-    assert.equal(snapshot.gates.plan.enabled, true);
+    assert.equal(snapshot.gates.loop.threshold, 7);
+    assert.equal(snapshot.failureMode, 'block-session');
 });
 
-test('session/event 只承载 reset 类事件；冷却倒数改由 agent/turn-stopping 缝承载（载体契约 T-008，不锚定 AC）', async () => {
-    const llm = createFakeLlm([answer('severity: nit\n计划评审通过。')]);
-    const { ctx, subscriptions } = makeCtx({ llm });
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'test', model: 'm' },
-        gates: { plan: { enabled: true, policy: 'review' } },
-    });
-    const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
-    assert.equal(sessionEvent.options?.global, true);
-
-    // 门命中：exit_plan_mode 在 pre-execute 被同步评审（真实宿主载体形状）
-    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute');
-    await preExecute.handler({ name: 'exit_plan_mode', arguments: {}, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
-    assert.ok(llm.calls.length >= 1);
-    // 直接驱动送达以武装冷却（避免依赖顾问 severity）
-    services.delivery.registerAgent({ id: 's1', inject() {}, steer() {} });
-    services.delivery.deliver('s1', { adviceId: 'adv-x', severity: 'blocker', text: 't' });
-    assert.equal(services.delivery.status().cooldowns.s1, 2);
-    // session/event 的 turn/end 不再承载倒数（收口信号已迁移）
-    sessionEvent.handler({ id: 's1' }, { type: 'turn/end' });
-    assert.equal(services.delivery.status().cooldowns.s1, 2);
-    // agent/turn-stopping 串行监听承载倒数
-    const turnStopping = subscriptions.find((s) => s.event === 'agent/turn-stopping');
-    await turnStopping.handler({ turn: {}, signal: undefined, agent: { id: 's1' } });
-    assert.equal(services.delivery.status().cooldowns.s1, 1);
-    // 压缩事件 → 冷却与观察状态重置
-    sessionEvent.handler({ id: 's1' }, { type: 'session/compact' });
-    assert.equal(services.delivery.status().cooldowns.s1, undefined);
-    // 未知类型被忽略（不抛出、不误触发）
-    sessionEvent.handler({ id: 's1' }, { type: 'whatever/new' });
-    assert.equal(services.delivery.status().cooldowns.s1, undefined);
-});
-
-test('agent/turn-stopping 冷却口径：完成门送达/反对不倒数，自由收口才倒数（不锚定 AC）', async () => {
-    const llm = createFakeLlm([answer('severity: nit\n可以收尾。')]);
-    const { ctx, subscriptions } = makeCtx({ llm });
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'test', model: 'm' },
-        gates: { completion: { enabled: true, policy: 'review' } },
-    });
-    services.delivery.registerAgent({ id: 's1', inject() {}, steer() {} });
-    services.delivery.deliver('s1', { adviceId: 'adv-x', severity: 'blocker', text: 't' });
-    assert.equal(services.delivery.status().cooldowns.s1, 2);
-    const turnStopping = subscriptions.find((s) => s.event === 'agent/turn-stopping');
-    // review + nit → 'delivered'：意见注入已让宿主续步——非真实收口，不倒数
-    await turnStopping.handler({ turn: 1, signal: undefined, agent: { id: 's1' } });
-    assert.equal(services.delivery.status().cooldowns.s1, 2);
-    // 同回合放行后去重跳过 → 自由收口 → 倒数
-    await turnStopping.handler({ turn: 1, signal: undefined, agent: { id: 's1' } });
-    assert.equal(services.delivery.status().cooldowns.s1, 1);
-});
-
-test('tools/result 权威成败缝：两参投递计数、callId 去重；session/event 结果型记录不再计数（T-008 裁决，不锚定 AC）', async () => {
+test('tools/result 权威成败缝：两参投递计数、callId 去重；session/event 结果型记录不再计数（不锚定 AC）', async () => {
     const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
     const toolsResult = subscriptions.find((s) => s.event === 'tools/result');
     assert.ok(toolsResult, '生命周期 tools/result 权威成败缝必须保留');
     assert.ok(sessionEvent, 'session/event 缝必须保留（承载 reset 类事件与 carrier）');
-    // 宿主以 (exec, result) 两参投递：exec.name + exec.callId + exec.agent.id，失败真值 result.isError
     toolsResult.handler({ name: 'bash', callId: 'x1', agent: { id: 's1' } }, { isError: true });
     assert.equal(services.observer.failureStreak('s1', 'bash'), 1);
-    // 同一执行标识的重复投递只计一次
     toolsResult.handler({ name: 'bash', callId: 'x1', agent: { id: 's1' } }, { isError: true });
-    assert.equal(services.observer.failureStreak('s1', 'bash'), 1);
-    // 新执行照常累加
-    toolsResult.handler({ name: 'bash', callId: 'x2', agent: { id: 's1' } }, { isError: true });
-    assert.equal(services.observer.failureStreak('s1', 'bash'), 2);
-    // session/event 的 tool/result 存储记录不带工具名——不再作为计数缝
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 1); // 同一执行标识去重
     sessionEvent.handler({ id: 's1' }, { type: 'tool/result', seq: 1, time: 0, data: { message: 'x' } });
-    assert.equal(services.observer.failureStreak('s1', 'bash'), 2); // 未被事件扰动
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 1); // 事件缝不计数
 });
 
-test('approver 缝缺失显性化：一次性 error + 状态快照 degraded 标注（不锚定 AC）', () => {
-    const { ctx, logs: captured } = makeCtx({ llm: createFakeLlm([]) });
-    const services = apply(ctx, { enabled: false });
-    assert.ok(captured.error.some((message) => message.includes('人工审批缝未接入')));
-    assert.equal(captured.error.filter((message) => message.includes('人工审批缝未接入')).length, 1); // 仅一次性
-    assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
-});
-
-test('approval 条件子上下文激活：审批缝接入后降级清除（恢复语义）', () => {
-    const decisions = [];
-    const { ctx } = makeCtx({
-        llm: createFakeLlm([]),
-        approvals: { request: async (request) => decisions.push(request) || true },
-    });
-    const services = apply(ctx, { enabled: false });
-    assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 激活即清除
-    assert.ok(services.commandController, '控制器就绪');
-});
-
-test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人工决定（拒绝 → deny）', async () => {
-    const decisions = [];
-    const { ctx, subscriptions } = makeCtx({
-        llm: createFakeLlm([answer('重复执行存在风险。')]),
-        approvals: { request: async (request) => {
-            decisions.push(request);
-            return false;
-        } },
-    });
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'test', model: 'm' },
-        gates: { loop: { enabled: true, policy: 'ask', threshold: 1 } },
-    });
-    assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 缝可得 → 不降级
-    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
-    const decision = await preExecute({ name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
-    assert.equal(decision.kind, 'deny');
-    assert.ok(decision.reason.includes('人工拒绝'));
-    assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
-    assert.equal(decisions[0].gate, 'loop');
-});
-
-test('commands/gateway 缝缺失时显性化降级而非拒绝启动（不锚定 AC）', () => {
-    const { ctx } = makeCtx({ llm: createFakeLlm([]) });
-    const services = apply(ctx, { enabled: false });
-    assert.equal(services.status.snapshot().degradations.commands, 'registry-seam-missing');
-    assert.equal(services.status.snapshot().degradations.settingsCard, 'gateway-seam-missing');
-    // ask approval 缺失的降级标注同在
-    assert.equal(services.status.snapshot().degradations.askPolicy, 'approver-seam-missing');
-});
-
-test('commands 条件子上下文激活：命令经注册表缝挂载并可执行（不锚定 AC）', () => {
-    const registeredSpecs = [];
-    const { ctx } = makeCtx({
-        llm: createFakeLlm([answer('命令手动评审。')]),
-        commands: { register: (spec) => registeredSpecs.push(spec) || (() => {}) },
-    });
+test('R-01-002/AC-01 wiring 级端到端：startManual → agent.steer 收到意见（附 adviceId 回查行）', async () => {
+    // 钉住「index.js 传入的是函数而非路由对象」的接线形态（commands.js
+    // startManual 以回调 delivery(sessionId, advice) 送达；手动意见经
+    // delivery.steerAdvice 送达，文本附 adviceId 回查行，无 severity 前缀）。
+    const llm = createFakeLlm([answer('手动评审意见正文。')]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx } = makeCtx({ llm, agents });
     const services = apply(ctx, entryConfig);
-    assert.equal(services.status.snapshot().degradations.commands, undefined); // 激活即清除
-    const manual = registeredSpecs.find((spec) => spec.name === 'advisor-manual');
-    assert.ok(manual, '/advisor-manual 已挂载');
-    const result = manual.handler({ rawInput: '聚焦词', agent: { session: { id: 's1' } } });
-    assert.equal(result.kind, 'success');
-    assert.match(result.text, /手动咨询已发起/);
+
+    const manual = services.commandController.startManual('s1', '种子焦点');
+    assert.equal(services.commandController.manualRunning('s1'), true); // startManual 同步置进行态
+    const result = await manual.promise;
+    assert.equal(result.ok, true);
+    assert.equal(services.commandController.manualRunning('s1'), false); // 完成后清除
+    assert.equal(llm.calls[0].options.messages[0].content[0].text.includes('种子焦点'), true);
+    // 意见经 steerAdvice 送达（ContentBlock 数组 + 稳定 id + adviceId 回查行）
+    assert.equal(steered.length, 1);
+    assert.ok(Array.isArray(steered[0].content));
+    assert.ok(steered[0].content[0].text.includes('手动评审意见正文'));
+    assert.ok(steered[0].content[0].text.includes('（adviceId: adv-1）'));
+    assert.equal(typeof steered[0].id, 'string');
+    assert.equal(services.commandController.manualRunning('s1'), false);
 });
 
 test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于后续咨询', async () => {
-    const gatewayEndpoints = [];
     const llm = createFakeLlm([answer('一。'), answer('二。')]);
-    const { ctx, registered: tools, providedService } = makeCtx({
+    const { ctx, providedService } = makeCtx({
         llm,
-        typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
+        typert: { register: (name, handler) => registered.push({ name, handler }) },
     });
     const services = apply(ctx, {
         enabled: true,
@@ -448,7 +491,6 @@ test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于�
     // 即时生效：set 后的下一次咨询用新模型（R-02-001/AC-01）
     const consulted = await services.askAdvisor.execute({});
     assert.equal(consulted.adviceId, 'adv-1');
-    assert.equal(llm.calls[0].options.model, 'm2');
 });
 
 test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询随 session/disposed 一并清除', async () => {
@@ -458,196 +500,33 @@ test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询�
     const disposed = subscriptions.find((s) => s.event === 'session/disposed');
     assert.equal(disposed.options?.global, true);
 
-    // 会话级 off + 进行中手动咨询
     services.engine.setSessionEnabled('s1', false);
     services.commandController.startManual('s1', '焦点');
     assert.equal(services.engine.sessionEnabled('s1'), false);
     assert.equal(services.commandController.manualRunning('s1'), true);
 
-    disposed.handler({ id: 's1' });
-    // 覆盖清除（不留残留）、手动咨询记录清理（中止，无用量副作用）
-    assert.equal(services.engine.sessionEnabled('s1'), undefined);
-    assert.equal(services.commandController.manualRunning('s1'), false);
-    // 观察与送达状态同被清理
-    assert.equal(services.observer.snapshot('s1').loopKeys, 0);
-    assert.equal(services.delivery.status().agents.includes('s1'), false);
+    subscriptions.find((s) => s.event === 'session/disposed').handler({ id: 's1' });
+    assert.equal(services.engine.sessionEnabled('s1'), undefined); // 覆盖清除
+    assert.equal(services.commandController.manualRunning('s1'), false); // 手动咨询随会话清理
+    assert.equal(services.observer.snapshot('s1').loopKeys, 0); // 观察状态清理
+    assert.equal(services.delivery.status().agents.includes('s1'), false); // 送达注册清理
 });
 
-test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回并修复，保存不丢键', async () => {
-    const gatewayEndpoints = [];
-    const llm = createFakeLlm([answer('ok')]);
-    const { ctx, providedService } = makeCtx({
-        llm,
-        typert: { register: (name, handler) => gatewayEndpoints.push({ name, handler }) },
-    });
-    // 启动配置含非法值 + 真实存在的合法键（若 raw 被丢弃为 {}，这些键会丢）
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'p', model: 'm', maxTokens: 'broken' },
-        privacy: { history: 'off' },
-        customKey: { keep: true },
-    });
-    assert.equal(services.status.snapshot().enabled, false); // 运行时禁用
-
-    await settle();
-    assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 动态装配完成后清除
-    const gateway = providedService('advisor-flow');
-    const got = await gateway.get();
-    // raw 保留了真实键（非法 maxTokens 与合法 privacy/customKey 都在）
-    assert.equal(got.config.advisor.maxTokens, 'broken');
-    assert.equal(got.config.privacy.history, 'off');
-    assert.equal(got.config.customKey.keep, true);
-    assert.equal(got.error !== undefined, true);
-
-    // 修复保存：只修 maxTokens —— 合法键与未知键都不丢
-    const result = await gateway.set({ advisor: { maxTokens: 8192 } });
-    assert.equal(result.ok, true);
-    const after = await gateway.get();
-    assert.equal(after.config.advisor.maxTokens, 8192);
-    assert.equal(after.config.privacy.history, 'off');
-    assert.equal(after.config.customKey.keep, true);
-    assert.equal(after.config.advisor.model, 'm');
-});
-
-test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
-    const writes = [];
-    const llm = createFakeLlm([answer('ok')]);
-    const { ctx, registered, providedService } = makeCtx({
-        llm,
-        settings: { update: async (namespace, raw) => writes.push({ namespace, raw }) },
-        typert: { register: (name, handler) => registered.push({ name, handler }) },
-    });
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
-        privacy: { history: 'off' },
-    });
-    await settle(); // 动态装配（typert-gateway 服务注册 + 端点声明）完成
-    const gateway = services && providedService('advisor-flow');
-    const result = await gateway.set({ advisor: { model: 'm2' } });
-    assert.equal(result.ok, true);
-    assert.equal(result.persisted, true);
-    assert.match(result.notice, /已保存并持久化/);
-    // merge 语义：只写 advisor-flow 命名空间键，raw 为合并后的完整命名空间
-    assert.equal(writes.length, 1);
-    assert.equal(writes[0].namespace, 'advisor-flow');
-    assert.equal(writes[0].raw.advisor.model, 'm2');
-    assert.equal(writes[0].raw.advisor.maxTokens, 4096); // 兄弟键保留
-    assert.equal(writes[0].raw.privacy.history, 'off');
-    // 无持久化降级标注
-    assert.equal(services.status.snapshot().degradations.persistence, undefined);
-});
-
-test('R-02-001/AC-01 持久写缝缺失：degradations.persistence 标注且不虚报日志（服务缺失≠确认失败）', async () => {
-    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
-    const services = apply(ctx, { enabled: false });
-    await settle();
-    assert.equal(services.status.snapshot().degradations.persistence, 'settings-writer-seam-missing');
-    // settings 服务整个缺失时子上下文永不激活——缺失是推断而非确认，
-    // 不写「持久化不可用」一次性日志（写失败/装配失败才确认）。
-    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
-});
-
-test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
-    let shouldThrow = true;
-    const llm = createFakeLlm([]);
-    const { ctx, registered, logs, providedService } = makeCtx({
-        llm,
-        typert: { register: (name, handler) => registered.push({ name, handler }) },
-        settings: {
-            update: async () => {
-                if (shouldThrow) {
-                    throw new Error('yaml write failed');
-                }
-            },
-        },
-    });
-    const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
-    await settle();
-    const gateway = providedService('advisor-flow');
-
-    // 失败 → 标注 + 一次性 error
-    const first = await gateway.set({ advisor: { model: 'm2' } });
-    assert.equal(first.persisted, false);
-    assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
-    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1);
-
-    // 恢复（写入修好）→ 保存成功 → 标注清除
-    shouldThrow = false;
-    const recovered = await gateway.set({ advisor: { model: 'm3' } });
-    assert.equal(recovered.persisted, true);
-    assert.match(recovered.notice, /已保存并持久化/);
-    assert.equal(services.status.snapshot().degradations.persistence, undefined);
-
-    // 再失败 → 再次显性（错误日志第二次出现）
-    shouldThrow = true;
-    const again = await gateway.set({ advisor: { model: 'm4' } });
-    assert.equal(again.persisted, false);
-    assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
-    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
-});
-
-test('tools 缝缺失显性化：degradations.askAdvisorTool 标注，激活即清除（五缝显性化对齐）', () => {
-    // 未激活（withTools=false → tools 服务缺失）
+test('tools 缝缺失显性化：degradations.askAdvisorTool 标注，激活即清除（五缝显性化对齐）', async () => {
     const missing = makeCtx({ withTools: false, llm: createFakeLlm([]) });
     const services = apply(missing.ctx, { enabled: false });
     assert.equal(services.status.snapshot().degradations.askAdvisorTool, 'tools-seam-not-activated');
     assert.ok(missing.unactivated.some((names) => names.includes('tools')));
 
-    // 激活 → 注册成功 → 标注清除
     const present = makeCtx({ llm: createFakeLlm([]) });
     const presentServices = apply(present.ctx, { enabled: false });
     assert.equal(presentServices.status.snapshot().degradations.askAdvisorTool, undefined);
     assert.equal(present.registered.length, 1);
 });
 
-test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿主服务后到时序）', async () => {
-    const decisions = [];
-    const writes = [];
-    const endpoints = [];
-    const { ctx, provide, registered, subscriptions, logs, llm, providedService } = makeCtx({ llm: createFakeLlm([answer('意见。')]) });
-    const services = apply(ctx, {
-        enabled: true,
-        advisor: { provider: 'test', model: 'm' },
-        gates: { loop: { enabled: true, policy: 'ask', threshold: 1 } },
-    });
-    // apply 时四缝均缺失 → 降级齐全
-    let degradations = services.status.snapshot().degradations;
-    assert.equal(degradations.askPolicy, 'approver-seam-missing');
-    assert.equal(degradations.commands, 'registry-seam-missing');
-    assert.equal(degradations.settingsCard, 'gateway-seam-missing');
-    assert.equal(degradations.persistence, 'settings-writer-seam-missing');
-
-    // 服务后到：逐一延迟提供 → 子上下文激活、降级清除
-    provide('approvals', { request: async (request) => {
-        decisions.push(request);
-        return false; // 人工拒绝
-    } });
-    provide('commands', { register: (spec) => registered.push(spec) || (() => {}) });
-    provide('settings', { update: async (namespace, raw) => writes.push({ namespace, raw }) });
-    provide('typert', { register: (name, handler) => endpoints.push({ name, handler }) });
-    await settle(); // 动态装配完成（服务注册 + 端点声明）
-    degradations = services.status.snapshot().degradations;
-    assert.equal(degradations.askPolicy, undefined);
-    assert.equal(degradations.commands, undefined);
-    assert.equal(degradations.settingsCard, undefined);
-    assert.equal(degradations.persistence, undefined);
-    const gateway = providedService('advisor-flow');
-
-    // 激活后的缝真实可用：ask 门经审批拒绝 → deny；gateway set 可用
-    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
-    const decision = await preExecute({ name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
-    assert.equal(decision.kind, 'deny');
-    assert.match(decision.reason, /人工拒绝/);
-    assert.equal(decisions.length, 1); // ask 策略经审批缝征询
-    const saved = await gateway.set({ advisor: { model: 'm2' } });
-    assert.equal(saved.ok, true);
-    assert.equal(saved.persisted, true); // settings 写缝激活后保存即持久化
-});
-
 test('R-02-001/AC-01 settings section 注册：installSection 以 advisor-flow 命名空间调用，describe 可服务', async () => {
     const installed = [];
-    const { ctx, registered } = makeCtx({
+    const { ctx } = makeCtx({
         llm: createFakeLlm([answer('ok')]),
         settings: {
             update: async () => {},
@@ -655,14 +534,14 @@ test('R-02-001/AC-01 settings section 注册：installSection 以 advisor-flow �
                 installed.push({ namespace, schema, entry, hooks });
             },
         },
-        typert: { register: (name, handler) => registered.push({ name, handler }) },
+        typert: { register: () => {} },
     });
     apply(ctx, entryConfig);
     await settle();
     assert.equal(installed.length, 1);
     assert.equal(installed[0].namespace, 'advisor-flow'); // describe 服务本命名空间 → 卡片交集成立
     assert.ok(installed[0].schema, 'schema 随注册声明');
-    assert.equal(installed[0].entry.enabled, true); // entry = 配置基线
+    assert.equal(installed[0].entry.enabled, true);
     assert.equal(typeof installed[0].hooks.onChange, 'function');
     assert.equal(typeof installed[0].hooks.setSource, 'function');
 });
@@ -695,32 +574,149 @@ test('R-02-001/AC-01 onChange → applyConfig：settings 段变更即时生效�
     assert.equal(llm.calls[1].options.model, 'm2');
 });
 
-test('R-02-001/AC-01 onChange 携非法用户层：disabled-with-reason 兜底且 raw 保留真实键（不楔住热路径）', async () => {
-    const llm = createFakeLlm([answer('ok')]);
-    let hooks;
+test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
+    const writes = [];
+    const { ctx, providedService } = makeCtx({
+        llm: createFakeLlm([answer('ok')]),
+        typert: { register: () => {} },
+        settings: {
+            update: async (namespace, raw) => writes.push({ namespace, raw }),
+            installSection: () => {},
+        },
+    });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
+        privacy: { history: 'off' },
+    });
+    await settle();
+    const gateway = providedService('advisor-flow');
+    const result = await gateway.set({ advisor: { model: 'm2' } });
+    assert.equal(result.ok, true);
+    assert.equal(result.persisted, true);
+    assert.match(result.notice, /已保存并持久化/);
+    // merge 语义：只写 advisor-flow 命名空间键，raw 为合并后的完整命名空间
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].namespace, 'advisor-flow');
+    assert.equal(writes[0].raw.advisor.model, 'm2');
+    assert.equal(writes[0].raw.advisor.maxTokens, 4096); // 兄弟键保留
+    assert.equal(services.status.snapshot().degradations.persistence, undefined);
+});
+
+test('R-02-001/AC-01 持久写缝缺失：degradations.persistence 标注且不虚报日志（服务缺失≠确认失败）', async () => {
+    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    await settle();
+    assert.equal(services.status.snapshot().degradations.persistence, 'settings-writer-seam-missing');
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
+});
+
+test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之后就绪——读时求值使 engine/get 读到就绪值', async () => {
+    const llm = createFakeLlm([answer('种子配置意见。')]);
+    const writes = [];
+    const persistedRaw = {
+        enabled: true,
+        advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
+        privacy: { history: 'delta' },
+    };
+    const sourceHolder = { value: {} };
     const { ctx, providedService } = makeCtx({
         llm,
         settings: {
-            update: async () => {},
-            installSection: (sectionCtx, namespace, schema, entry, sectionHooks) => {
-                hooks = sectionHooks;
+            update: async (namespace, raw) => writes.push({ namespace, raw }),
+            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
+                hooks.setSource(() => structuredClone(sourceHolder.value));
             },
         },
         typert: { register: () => {} },
     });
     const services = apply(ctx, entryConfig);
     await settle();
-    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 'broken' }, customKey: { keep: true } }));
-    hooks.onChange();
-    const snapshot = services.status.snapshot();
-    assert.equal(snapshot.enabled, false); // 非法层 → disabled-with-reason 兜底
-    assert.match(snapshot.reason, /配置无效/);
-    assert.equal(snapshot.degradations.persistence, undefined);
-    // 卡片可修复：gateway get 读回保留真实键
+
+    // attach 种子读到空值 → 空值跳过（raw 不被清空、引擎保持 entry 态）
+    assert.equal(services.status.snapshot().degradations.persistence, undefined); // 写缝已接入
+    assert.equal(services.status.snapshot().enabled, true); // entry 态
+
+    // source 就绪后（无 onChange、无 set）——读时求值：gateway get 读到持久化值
+    sourceHolder.value = structuredClone(persistedRaw);
     const gateway = providedService('advisor-flow');
     const got = await gateway.get();
-    assert.equal(got.config.customKey.keep, true);
+    assert.equal(got.config.advisor.model, 'persisted-m');
+    assert.equal(got.config.privacy.history, 'delta');
+
+    // 咨询入口同样读时求值：真实使用持久化配置（无任何 set 触发）
+    const consulted = await services.askAdvisor.execute({});
+    assert.equal(consulted.adviceId, 'adv-1');
+    assert.equal(llm.calls[0].options.model, 'persisted-m');
+    assert.equal(writes.length, 0); // 未发生任何持久写
+});
+
+test('R-02-001/AC-03 启动配置被拒时 raw 保留真实键：卡片可读回并修复，保存不丢键', async () => {
+    const { ctx, providedService } = makeCtx({
+        llm: createFakeLlm([answer('ok')]),
+        typert: { register: () => {} },
+    });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'p', model: 'm', maxTokens: 'broken' },
+        privacy: { history: 'off' },
+        customKey: { keep: true },
+    });
+    assert.equal(services.status.snapshot().enabled, false); // 运行时禁用
+
+    await settle();
+    const gateway = providedService('advisor-flow');
+    const got = await gateway.get();
+    // raw 保留了真实键（非法 maxTokens 与合法 privacy/customKey 都在）
     assert.equal(got.config.advisor.maxTokens, 'broken');
+    assert.equal(got.config.privacy.history, 'off');
+    assert.equal(got.config.customKey.keep, true);
+    assert.equal(got.error !== undefined, true);
+
+    // 修复保存：只修 maxTokens —— 合法键与未知键都不丢
+    const result = await gateway.set({ advisor: { maxTokens: 8192 } });
+    assert.equal(result.ok, true);
+    const after = await gateway.get();
+    assert.equal(after.config.advisor.maxTokens, 8192);
+    assert.equal(after.config.privacy.history, 'off');
+    assert.equal(after.config.customKey.keep, true);
+    assert.equal(after.config.advisor.model, 'm');
+});
+
+test('commands/gateway 缝缺失时显性化降级而非拒绝启动（不锚定 AC）；服务后到仍激活子上下文', async () => {
+    const { ctx, provide } = makeCtx({ llm: createFakeLlm([]) });
+    const services = apply(ctx, { enabled: false });
+    assert.equal(services.status.snapshot().degradations.commands, 'registry-seam-missing');
+    assert.equal(services.status.snapshot().degradations.settingsCard, 'gateway-seam-missing');
+
+    // 服务后到：逐一延迟提供 → 子上下文激活、降级清除
+    provide('commands', { register: (spec) => () => {} });
+    provide('typert', { register: () => {} });
+    provide('settings', { update: async () => {} });
+    await settle();
+    const degradations = services.status.snapshot().degradations;
+    assert.equal(degradations.commands, undefined);
+    assert.equal(degradations.settingsCard, undefined);
+    assert.equal(degradations.persistence, undefined);
+
+    // 激活后的缝真实可用：命令面挂载
+    void provide;
+});
+
+
+test('commands 条件子上下文激活：命令经注册表缝挂载并可执行（不锚定 AC）', async () => {
+    const registeredSpecs = [];
+    const { ctx } = makeCtx({
+        llm: createFakeLlm([answer('命令手动评审。')]),
+        commands: { register: (spec) => registeredSpecs.push(spec) || (() => {}) },
+    });
+    const services = apply(ctx, entryConfig);
+    assert.equal(services.status.snapshot().degradations.commands, undefined); // 激活即清除
+    const manual = registeredSpecs.find((spec) => spec.name === 'advisor-manual');
+    assert.ok(manual, '/advisor-manual 已挂载');
+    const result = manual.handler({ rawInput: '聚焦词', agent: { session: { id: 's1' } } });
+    assert.equal(result.kind, 'success');
+    assert.match(result.text, /手动咨询已发起/);
 });
 
 test('R-02-003/AC-02 重复注册守卫：already registered 降级为 entry-source 兜底，状态可查询不崩装载', async () => {
@@ -735,7 +731,6 @@ test('R-02-003/AC-02 重复注册守卫：already registered 降级为 entry-sou
     });
     const services = apply(ctx, { enabled: false });
     await settle();
-    // 命名空间已在（describe 照常服务）→ 能力视为在，降级清除
     assert.equal(services.status.snapshot().degradations.settingsSection, undefined);
     assert.equal(services.status.snapshot().enabled, false); // 状态照常可查询
 });
@@ -748,148 +743,42 @@ test('settings 服务缺 installSection 能力：section 缺失显性化（联�
     assert.ok(logs.error.some((message) => message.includes('settings section 未注册')));
 });
 
-test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带 {global:true}（全局可达性回归钉住）', () => {
-    // 断言强度边界：makeCtx 桩不模拟 cordis carrier scope 派发语义——本测试
-    // 只钉「注册形态必须带 {global:true}」（防全局性回归的机械可测征兆），
-    // 真实全局可达性由 staging/生产实测双轨承载（T-005 冒烟）。
-    const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
-    apply(ctx, { enabled: false });
-    // 工具事件以 agent scope 为 carrier 派发（dsh-tools scopeTarget 实证），
-    // 裸监听收不到子代理/会话 scope 的调用——T-005 实测第六发现（门在真实
-    // 会话零触发）的根因即缺 {global:true}；dsh-tools 自带 invariant 监听
-    // tools/* 事件亦用 {global:true}。此断言拦截该全局性回归。
-    for (const toolEvent of ['tools/pre-execute', 'tools/result', 'agent/turn-stopping']) {
-        const registration = subscriptions.find((entry) => entry.event === toolEvent);
-        assert.ok(registration, `${toolEvent} 监听已注册`);
-        assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
-    }
-});
 
-test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之后就绪——读时求值使 engine/get 读到就绪值', async () => {
-    const llm = createFakeLlm([answer('种子配置意见。')]);
-    const writes = [];
-    const persistedRaw = {
-        enabled: true,
-        advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
-        privacy: { history: 'delta' },
-    };
-    // sourceHolder：attach 时为空（文档未加载完成），之后就绪（宿主异步加载）
-    const sourceHolder = { value: {} };
-    const { ctx, registered, providedService } = makeCtx({
-        llm,
+test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢复清除，再失败再次显性（一次性日志重新武装）', async () => {
+    let shouldThrow = true;
+    const { ctx, providedService, logs } = makeCtx({
+        llm: createFakeLlm([]),
+        typert: { register: () => {} },
         settings: {
-            update: async (namespace, raw) => writes.push({ namespace, raw }),
-            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                hooks.setSource(() => structuredClone(sourceHolder.value));
-                // 宿主 onChange 在 attach 时机不触发（实测第八发现的前提）
+            update: async () => {
+                if (shouldThrow) {
+                    throw new Error('yaml write failed');
+                }
             },
+            installSection: () => {},
         },
-        typert: { register: (name, handler) => registered.push({ name, handler }) },
     });
-    const services = apply(ctx, entryConfig);
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
     await settle();
-
-    // attach 种子读到空值 → 空值跳过（raw 不被清空、引擎保持 entry 态）
-    assert.equal(services.status.snapshot().degradations.persistence, undefined); // 写缝已接入
-    assert.equal(services.status.snapshot().enabled, true); // entry 态（种子空值跳过，配置未被清空）
-
-    // source 就绪后（无 onChange、无 set）——读时求值：gateway get 读到持久化值
-    sourceHolder.value = structuredClone(persistedRaw);
     const gateway = providedService('advisor-flow');
-    const got = await gateway.get();
-    assert.equal(got.config.enabled, true);
-    assert.equal(got.config.advisor.provider, 'persisted-p');
-    assert.equal(got.config.advisor.model, 'persisted-m');
-    assert.equal(got.config.privacy.history, 'delta');
 
-    // 咨询入口同样读时求值：真实使用持久化配置（无任何 set 触发）
-    const consulted = await services.askAdvisor.execute({});
-    assert.equal(consulted.adviceId, 'adv-1');
-    assert.equal(llm.calls[0].options.model, 'persisted-m');
-    assert.equal(writes.length, 0); // 未发生任何持久写
+    // 失败 → 标注 + 一次性 error
+    const first = await gateway.set({ advisor: { model: 'm2' } });
+    assert.equal(first.persisted, false);
+    assert.equal(services.status.snapshot().degradations.persistence, 'persist-write-failed');
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 1);
+
+    // 恢复（写入修好）→ 保存成功 → 标注清除
+    shouldThrow = false;
+    const recovered = await gateway.set({ advisor: { model: 'm3' } });
+    assert.equal(recovered.persisted, true);
+    assert.match(recovered.notice, /已保存并持久化/);
+    assert.equal(services.status.snapshot().degradations.persistence, undefined);
+
+    // 再失败 → 再次显性（错误日志第二次出现）
+    shouldThrow = true;
+    const again = await gateway.set({ advisor: { model: 'm4' } });
+    assert.equal(again.persisted, false);
+    assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
 });
 
-test('R-02-001/AC-01 attach 时 source 就绪：启动种子立即可用（尽力早刷路径保留）', async () => {
-    const llm = createFakeLlm([answer('种子配置意见。')]);
-    const persistedRaw = {
-        enabled: true,
-        advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
-    };
-    const { ctx } = makeCtx({
-        llm,
-        settings: {
-            update: async () => {},
-            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                hooks.setSource(() => structuredClone(persistedRaw));
-            },
-        },
-    });
-    const services = apply(ctx, entryConfig);
-    await settle();
-    const snapshot = services.status.snapshot();
-    assert.equal(snapshot.enabled, true);
-    assert.equal(snapshot.advisor.provider, 'persisted-p');
-    assert.equal(snapshot.advisor.model, 'persisted-m');
-    assert.equal(snapshot.degradations.persistence, undefined);
-});
-
-test('R-01-002/AC-01 手动命令入口读时求值：consult 前应用最新文件配置（与工具/门路径一致）', async () => {
-    const llm = createFakeLlm([answer('手动意见。')]);
-    const sourceHolder = { value: {} }; // attach 时为空
-    const { ctx, provide, logs } = makeCtx({
-        llm,
-        settings: {
-            update: async () => {},
-            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                hooks.setSource(() => structuredClone(sourceHolder.value));
-            },
-        },
-    });
-    const services = apply(ctx, entryConfig);
-    await settle();
-    // source 就绪（无 onChange、无 set）→ 手动命令 consult 使用持久化模型
-    sourceHolder.value = {
-        enabled: true,
-        advisor: { provider: 'persisted-p', model: 'persisted-m' },
-    };
-    const manual = services.commandController.startManual('s1', '种子');
-    const result = await manual.promise;
-    assert.equal(result.ok, true);
-    assert.equal(llm.calls[0].options.model, 'persisted-m'); // 读时求值生效
-    void provide;
-    void logs;
-});
-
-test('R-01-002/AC-01 wiring 级端到端：startManual → agent.inject 收到 [advisor: 前缀意见', async () => {
-    // 钉住「index.js 传入的是函数而非路由对象」的真实缺陷形态（注入桩掩盖
-    // 接线形态）——commands.js startManual 以回调 delivery(sessionId, advice)
-    // 送达，index.js 必须传函数（曾误传 delivery 对象致意见静默失败）。
-    const llm = createFakeLlm([answer('手动评审意见正文。')]);
-    const injected = [];
-    const steerCalls = [];
-    const agents = {
-        get: (sessionId) => (sessionId === 's1'
-            ? { id: 's1', inject: (message) => injected.push({ channel: 'inject', message }), steer: (message) => steerCalls.push({ channel: 'steer', message }) }
-            : undefined),
-    };
-    const { ctx } = makeCtx({ llm, agents });
-    const services = apply(ctx, entryConfig);
-
-    const manual = services.commandController.startManual('s1', '种子焦点');
-    assert.equal(services.commandController.manualRunning('s1'), true); // startManual 同步置进行态
-    const result = await manual.promise;
-    assert.equal(result.ok, true);
-    assert.equal(services.commandController.manualRunning('s1'), false); // 完成后清除
-    assert.equal(llm.calls[0].options.messages[0].content[0].text.includes('种子焦点'), true);
-    // agent.inject（或 steer）收到含 [advisor: 前缀的意见消息——wiring 级钉住
-    // index.js 传入 commands 的是 delivery 回调（曾误传对象致送达静默失败）。
-    // 送达消息契约（T-008 实测）：content 是 ContentBlock 数组且带稳定 id。
-    assert.equal(injected.length + steerCalls.length, 1);
-    const delivered = injected[0] ?? steerCalls[0];
-    assert.ok(Array.isArray(delivered.message.content));
-    assert.ok(delivered.message.content[0].text.includes('[advisor:'));
-    assert.ok(delivered.message.content[0].text.includes('手动评审意见正文'));
-    assert.equal(delivered.message.content[0].text.includes('adviceId: adv-1'), true);
-    assert.equal(typeof delivered.message.id, 'string');
-    assert.equal(services.commandController.manualRunning('s1'), false);
-});

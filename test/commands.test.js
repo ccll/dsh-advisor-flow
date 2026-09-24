@@ -11,7 +11,6 @@ import {
 import { createConsultationEngine } from '../lib/consultation.js';
 import { createUsageLedger } from '../lib/usage.js';
 import { createStatusProvider } from '../lib/status.js';
-import { createAdviceDelivery } from '../lib/delivery.js';
 import { createFakeLlm, answer } from './helpers.js';
 
 /** Build a controller wired to a real engine + fake llm + recorder delivery. */
@@ -27,9 +26,6 @@ function makeController({ raw = { enabled: true, advisor: { provider: 'test', mo
     const usageLedger = createUsageLedger({ clock: () => 1000 });
     const engine = createConsultationEngine({ llm, config, logger, usageLedger, sleep: async () => {} });
     const delivered = [];
-    const delivery = createAdviceDelivery({ logger, immuneTurns: 0 });
-    const agent = { id: 's1', inject: () => {}, steer: () => {} };
-    delivery.registerAgent(agent);
     const statusProvider = createStatusProvider({ config: () => config, engine, usageLedger });
     const controller = createCommandController({
         engine,
@@ -94,7 +90,8 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     const raw = {
         enabled: true,
         advisor: { provider: 'gpu', model: 'glm-5.3-flash' },
-        gates: { plan: { enabled: true, policy: 'review' }, failure: { enabled: true, policy: 'block-session', threshold: 2 } },
+        gates: { plan: { enabled: true }, failure: { enabled: true }, loop: { enabled: true, threshold: 5 } },
+        failureMode: 'block-tool',
     };
     const { controller } = makeController({ raw });
     const registryCalls = [];
@@ -105,15 +102,19 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     const text = result.text;
     assert.match(text, /Advisor: enabled/);
     assert.match(text, /模型: gpu\/glm-5.3-flash/);
-    assert.match(text, /plan=on\(review\)/);
-    assert.match(text, /failure=on\(block-session\) threshold=2/);
+    assert.match(text, /plan=on/);
+    assert.match(text, /failure=on/);
+    assert.match(text, /loop=on threshold=5/);
+    assert.match(text, /completion=off/);
     assert.match(text, /待处理: 0/);
     assert.match(text, /最近活动: 无/);
     assert.match(text, /用量累计: calls=0 inputTokens=unavailable/); // 缺失项呈现不可得
     // gates 只读回读
     const gates = advisor.handler(invocation(' gates'));
     assert.match(gates.text, /门配置（只读回读）/);
-    assert.match(gates.text, /loop=off\(review\) threshold=3/);
+    assert.match(gates.text, /plan=on/);
+    assert.match(gates.text, /loop=on threshold=5/);
+    assert.match(gates.text, /failureMode=block-tool/);
 });
 
 test('R-02-001/AC-03 enabled 但缺 provider/model 时命令面给出明确原因且状态可查询', async () => {

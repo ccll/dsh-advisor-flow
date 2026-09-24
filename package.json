@@ -30,9 +30,9 @@
       "seams": [
         "tools/pre-execute",
         "tools/result",
-        "agent/turn-stopping",
         "session/event",
-        "agent.inject/steer",
+        "systemPrompt.section",
+        "agent.steer",
         "tools.register(output)",
         "settings.installSection",
         "GatewayService RPC",

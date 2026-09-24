@@ -43,10 +43,10 @@ id: T-010
 
 | 维度 | 适用性/理由 | 可执行证据 |
 |---|---|---|
-| 成功 | 适用：循环门 Decision 三值处置与守则注入 | `test/gates.test.js::真实宿主形状回归`、`test/ask-advisor.test.js::R-01-001/AC-01` |
-| 异常 | 适用：决策行失败类别与阻断模式处置 | `test/gates.test.js::R-02-005/AC-02 门组件抛错` |
-| 边界配置 | 适用：旧配置键保留、守则全关、预算耗尽 | `test/config.test.js::R-02-001/AC-02` |
-| 副作用 | 适用：会话封锁状态与送达文本契约 | `test/delivery.test.js::R-01-003/AC-03 消息形态` |
+| 成功 | 适用：循环门 Decision 三值处置与守则注入 | `test/gates.test.js::R-01-005/AC-01 真实宿主形状回归：同参三次等价调用，第 3 次执行前拦截并触发咨询`、`test/ask-advisor.test.js::R-01-001/AC-01` |
+| 异常 | 适用：决策行失败类别与阻断模式处置 | `test/gates.test.js::R-02-005/AC-02 门组件抛错：按放行处置该次工具调用并记录错误，不悬挂` |
+| 边界配置 | 适用：旧配置键保留、守则全关、预算耗尽 | `test/config.test.js::R-02-001/AC-02 未知键收集为警告并保留透传（含旧键 policy 与 retryAttempts），不阻断其他配置生效` |
+| 副作用 | 适用：会话封锁状态与送达文本契约 | `test/delivery.test.js::R-01-005/AC-03 送达通道抛错被包含：steerAdvice 不外抛、返回 false` |
 
 ## 终态与证据
 

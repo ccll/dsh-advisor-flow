@@ -21,8 +21,6 @@ test('R-01-001/AC-01 工具调用成功返回意见文本与 adviceId', async ()
     const result = await tool.execute({ question: '这个补丁可以吗？' });
     assert.equal(result.ok, true);
     assert.equal(result.adviceId, 'adv-1');
-    assert.ok(result.text.includes('先补测试'));
-    assert.equal(result.severity, 'nit');
 
     // 零参调用 → 一般性评审
     const general = await tool.execute({});
@@ -41,22 +39,22 @@ test('R-01-001/AC-02 未配置模型时工具返回可诊断错误，不抛出�
     assert.ok(typeof result.reason === 'string' && result.reason.length > 0);
 });
 
-test('R-01-001/AC-02 路由失败与失败分类经工具面转译为诊断码', async () => {
+test('R-01-001/AC-02 路由失败经工具面转译为可诊断错误（无重试无停机）', async () => {
     const llm = createFakeLlm([failure(new Error('no provider adapter'), {})]);
-    const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger, sleep: async () => {} });
+    const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger });
     const tool = createAskAdvisorTool({ engine });
     const result = await tool.execute({});
     assert.equal(result.ok, false);
-    assert.equal(result.code, 'ADVISOR_ROUTE_MISSING');
+    assert.equal(result.code, 'ADVISOR_FAILED');
+    assert.ok(typeof result.reason === 'string' && result.reason.length > 0);
 });
 
-test('R-01-001/AC-03 失败后执行者可重试：下一次工具调用照常成功', async () => {
+test('R-01-001/AC-03 失败后执行者可重试：下一次工具调用单次尝试照常成功', async () => {
     const llm = createFakeLlm([
-        failure({ code: 'ECONNRESET', message: 'boom' }),
         failure({ code: 'ECONNRESET', message: 'boom' }),
         answer('重试成功的意见。'),
     ]);
-    const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger, sleep: async () => {} });
+    const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger });
     const tool = createAskAdvisorTool({ engine });
     const failed = await tool.execute({});
     assert.equal(failed.ok, false);
@@ -84,14 +82,14 @@ test('R-01-001 工具参数校验：非法参数返回错误结果而不进入�
 });
 
 test('R-01-001/AC-01 工具定义携带 output {schema, render}——宿主 tools.register 强制契约（T-008 实测回归钉住）', () => {
-    const tool = createAskAdvisorTool({ engine: { consult: async () => ({ ok: true, adviceId: 'a', severity: 'nit', text: 't' }) } });
+    const tool = createAskAdvisorTool({ engine: { consult: async () => ({ ok: true, adviceId: 'a', text: 't' }) } });
     // 宿主注册校验（dsh-tools 0.1.5-rc.2）：定义缺 output {schema, render} 即 TypeError
     assert.throws(() => validateHostRegister({ name: 'broken', parameters: {}, execute() {} }), TypeError);
     // 插件工具体满足契约：可过宿主校验，render 出 text 块
     const registered = validateHostRegister(tool);
     assert.equal(registered.name, 'ask_advisor');
     assert.ok(tool.output.schema, 'output.schema 随定义声明');
-    const blocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', severity: 'nit', text: '意见正文。' });
+    const blocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', text: '意见正文。' });
     assert.deepEqual(blocks, [{ type: 'text', text: '意见正文。\n（adviceId: adv-1）' }]); // adviceId 随渲染输出（staging 实测裁决：结果必须可回查）
     const failureBlocks = tool.output.render({}, { ok: false, code: 'NO_ADVISOR_MODEL', reason: 'advisor 模型未配置' });
     assert.equal(failureBlocks[0].type, 'text');

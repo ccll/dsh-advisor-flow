@@ -1,109 +1,91 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAdviceDelivery, buildAdviceMessage } from '../lib/delivery.js';
+import { createAdviceDelivery } from '../lib/delivery.js';
+
+/**
+ * 意见送达契约（R-01-005；SOLUTION.md#意见送达，C-007）：
+ * - 门结果一律 steer（唤醒式，pi 原生语义：无 severity 分流、无冷却）；
+ * - 消息为 user 角色、content 为 ContentBlock 数组且带稳定 id，插件身份在
+ *   `source.plugin`；
+ * - 无 agent 的会话丢弃消息并留 warn（advisory only）；
+ * - 送达路由绝不抛出：通道损坏不得让门 fail-open 崩溃。
+ */
 
 function makeAgent({ steerThrows = false } = {}) {
     const calls = [];
     const agent = {
         id: 's1',
-        inject: (message) => calls.push({ channel: 'inject', message }),
         ...(steerThrows
             ? { steer: () => { throw new Error('steer broken'); } }
-            : { steer: (message) => calls.push({ channel: 'steer', message }) }),
+            : { steer: (message) => calls.push(message) }),
     };
     return { agent, calls };
 }
 
-function advice(overrides = {}) {
-    return { adviceId: 'adv-1', severity: 'nit', text: '建议先补测试。', ...overrides };
-}
-
-test('R-01-003/AC-03 review 意见经送达到达会话：nit 走 inject 非唤醒通道', () => {
+test('R-01-005/AC-02 门结果一律 steer 送达：块数组、稳定 id、插件身份与折叠摘要', () => {
     const { agent, calls } = makeAgent();
     const delivery = createAdviceDelivery({});
     delivery.registerAgent(agent);
-    const channel = delivery.deliver('s1', advice());
-    assert.equal(channel, 'inject');
+    assert.equal(delivery.steerAdvice('s1', '**Decision: revise**\n\n先改用回收站流程。'), true);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].channel, 'inject');
-    // 送达消息契约（T-008 实测）：content 是 ContentBlock 数组且带稳定 id
-    const message = calls[0].message;
-    assert.ok(Array.isArray(message.content));
-    assert.ok(message.content[0].text.startsWith('[advisor:nit] 建议先补测试。'));
-    assert.ok(message.content[0].text.includes('adviceId: adv-1')); // 意见正文附 adviceId 引用
+    const message = calls[0];
     assert.equal(message.role, 'user');
-    assert.equal(typeof message.id, 'string');
+    assert.equal(typeof message.id, 'string'); // 宿主消息契约带稳定 id
+    assert.ok(Array.isArray(message.content)); // content 是 ContentBlock 数组
+    assert.equal(message.content[0].type, 'text');
+    assert.equal(message.content[0].text, '**Decision: revise**\n\n先改用回收站流程。');
+    assert.equal(message.source.kind, 'plugin');
     assert.equal(message.source.plugin, 'advisor-flow');
-    assert.ok(message.source.summary.length <= 120);
+    assert.equal(message.source.form, 'notice');
+    assert.ok(message.source.summary.length <= 120); // 折叠行摘要有界
 });
 
-test('R-01-003/AC-03 冷却窗口内仅压制同级 interrupting；不同级照常唤醒送达', () => {
+test('R-01-005/AC-02 steerAdvice 一律 steer：无 severity 路由、无冷却（连续送达不压制）', async () => {
     const { agent, calls } = makeAgent();
-    const delivery = createAdviceDelivery({ immuneTurns: 2 });
+    const delivery = createAdviceDelivery({});
     delivery.registerAgent(agent);
-
-    assert.equal(delivery.deliver('s1', advice({ severity: 'concern' })), 'steer');
-    // 冷却窗口内：同级 concern 降级为 inject（「不再送同级」）
-    assert.equal(delivery.deliver('s1', advice({ severity: 'concern' })), 'inject');
-    // 窗口内不同级 blocker：照常唤醒送达，并以 blocker 重新武装冷却
-    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'steer');
-    // 窗口内同级 blocker 降级
-    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'inject');
-    // 冷却耗尽后恢复 steer
-    delivery.onSteppedTurnEnd('s1');
-    delivery.onSteppedTurnEnd('s1');
-    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), 'steer');
-    assert.equal(calls.filter((c) => c.channel === 'steer').length, 3);
-    assert.equal(calls.filter((c) => c.channel === 'inject').length, 2);
-    // nit 永远 inject，不受冷却影响
-    assert.equal(delivery.deliver('s1', advice({ severity: 'nit' })), 'inject');
+    for (let i = 0; i < 3; i++) {
+        assert.equal(delivery.steerAdvice('s1', `**Decision: revise**\n\n第 ${i} 次意见。`), true);
+    }
+    assert.equal(calls.length, 3); // 一律 steer，无冷却压制
 });
 
-test('R-01-003/AC-03 无 agent 的会话意见被丢弃并留 warn，不抛出', () => {
+test('R-01-005/AC-02 无 agent 的会话意见被丢弃并留 warn，不抛出；注册表回退命中即可送达', () => {
     const logs = [];
     const delivery = createAdviceDelivery({ logger: { warn: (m) => logs.push(m) } });
-    assert.equal(delivery.deliver('nobody', advice()), undefined);
-    assert.equal(logs.length, 1);
+    assert.equal(delivery.steerAdvice('nobody', '**Decision: proceed**\n\nok'), false);
+    assert.equal(logs.length, 1); // 丢弃留 warn，不静默
     // 注册表回退：lookupAgent 命中即可送达
     const { agent, calls } = makeAgent();
     const withFallback = createAdviceDelivery({ lookupAgent: (sessionId) => (sessionId === 's1' ? agent : undefined) });
-    assert.equal(withFallback.deliver('s1', advice()), 'inject');
+    assert.equal(withFallback.steerAdvice('s1', '**Decision: proceed**\n\nok'), true);
     assert.equal(calls.length, 1);
 });
 
-test('R-01-003/AC-03 送达通道抛错被包含：deliver 不外抛、返回 undefined', () => {
+test('R-01-005/AC-03 送达通道抛错被包含：steerAdvice 不外抛、返回 false', () => {
     const { agent } = makeAgent({ steerThrows: true });
     const logs = [];
     const delivery = createAdviceDelivery({ logger: { error: (m) => logs.push(m) } });
     delivery.registerAgent(agent);
-    assert.equal(delivery.deliver('s1', advice({ severity: 'blocker' })), undefined);
+    assert.equal(delivery.steerAdvice('s1', '**Decision: blocked**\n\n停止。'), false);
     assert.equal(logs.length, 1);
 });
 
-test('R-01-003/AC-03 agent/disposed 清理会话冷却；压缩重置冷却', () => {
-    const { agent } = makeAgent();
-    const delivery = createAdviceDelivery({ immuneTurns: 3 });
+test('R-01-005 非法文本输入容错：非字符串文本被 String() 归一，消息契约不破坏', () => {
+    const { agent, calls } = makeAgent();
+    const delivery = createAdviceDelivery({});
     delivery.registerAgent(agent);
-    delivery.deliver('s1', advice({ severity: 'concern' })); // steer, 冷却=3
-    assert.equal(delivery.status().cooldowns.s1, 3);
-    delivery.reset('s1');
-    assert.equal(delivery.deliver('s1', advice({ severity: 'concern' })), 'steer'); // 冷却重置后再次 steer
+    assert.equal(delivery.steerAdvice('s1', 42), true); // 非字符串归一为 String()
+    assert.equal(calls[0].content[0].text, '42');
+    assert.equal(typeof calls[0].id, 'string');
+    assert.equal(delivery.status().agents.includes('s1'), true);
     delivery.unregisterAgent('s1');
     assert.equal(delivery.status().agents.length, 0);
-    assert.equal(delivery.deliver('s1', advice()), undefined); // agent 已移除
+    assert.equal(delivery.steerAdvice('s1', 'x'), false); // agent 已移除 → 丢弃
 });
 
-test('R-01-003/AC-03 消息形态：severity 标签 + 摘要有界 + 插件身份 + 块数组与 id', () => {
-    const message = buildAdviceMessage(advice({ severity: 'blocker', text: '长'.repeat(300) }));
-    assert.ok(Array.isArray(message.content)); // content 是 ContentBlock 数组（宿主消息契约）
-    assert.ok(message.content[0].text.startsWith('[advisor:blocker] '));
-    assert.equal(message.role, 'user');
-    assert.equal(typeof message.id, 'string'); // 消息带稳定 id
-    assert.equal(message.source.kind, 'plugin');
-    assert.equal(message.source.form, 'notice'); // 插件送达形态标注
-    assert.ok(message.source.summary.endsWith('…'));
-    // 非法 severity 归一为 nit
-    const nit = buildAdviceMessage(advice({ severity: 'catastrophic' }));
-    assert.ok(Array.isArray(nit.content));
-    assert.ok(nit.content[0].text.startsWith('[advisor:nit] '));
+test('C-007 契约面单点：不再有 deliver 方法与 severity 路由（退役面显性回归钉住）', () => {
+    const delivery = createAdviceDelivery({});
+    assert.equal(typeof delivery.deliver, 'undefined'); // 旧 deliver 分流已退役
+    assert.equal(typeof delivery.onSteppedTurnEnd, 'undefined'); // 冷却倒数已退役
 });

@@ -30,7 +30,8 @@ function makeRpc({ handlers }) {
 const RAW = {
     enabled: true,
     advisor: { provider: 'p', model: 'm' },
-    gates: { plan: { enabled: true, policy: 'review' } },
+    gates: { plan: { enabled: true }, failure: { enabled: true }, loop: { enabled: true, threshold: 5 } },
+    failureMode: 'block-tool',
     privacy: { history: 'window' },
 };
 
@@ -230,20 +231,22 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(htmlOpen.includes('关闭后 ask_advisor 工具与四类门控一并停用')); // 主开关说明
     assert.ok(htmlOpen.includes('密钥脱敏'));
     assert.ok(htmlOpen.includes('开启后，密钥形状的值在发送给顾问前替换为占位符')); // 脱敏说明
-    assert.ok(htmlOpen.includes('启用计划门')); // 门名在开关 toggleRow 文字（legend 已删）
-    assert.ok(htmlOpen.includes('启用完成门'));
-    assert.ok(htmlOpen.includes('退出计划模式（计划定稿）前先经顾问评审')); // 门触发时机说明
-    // 门触发时机句式与实现语义一致（T-007 评审修正：循环门计数含当前调用，
-    // 达到阈值的那次调用本身受审；失败门只计既往结果，下一次调用受审）
+    assert.ok(htmlOpen.includes('启用计划守则')); // 守则名在开关 toggleRow 文字（legend 已删）
+    assert.ok(htmlOpen.includes('启用失败守则'));
+    assert.ok(htmlOpen.includes('启用完成守则'));
+    assert.ok(htmlOpen.includes('启用循环门'));
+    assert.ok(htmlOpen.includes('制定有实质影响的计划前先调用 ask_advisor 并附上草稿')); // 计划守则说明
+    assert.ok(htmlOpen.includes('等价尝试连续失败或无可测进展时先咨询')); // 失败守则说明
+    assert.ok(htmlOpen.includes('宣告完成前先调用 ask_advisor')); // 完成守则说明
+    // 循环门句式与实现语义一致（计数含当前调用，达到阈值的那次调用本身受审）
     assert.ok(htmlOpen.includes('等价工具调用重复达到阈值的那次调用，执行前先经顾问评审'));
-    assert.ok(htmlOpen.includes('同一工具连续失败达到阈值时，下一次调用先经顾问评审'));
-    assert.ok(!htmlOpen.includes('等价工具调用重复达到阈值时，下一次调用'), '循环门句式不得误用失败门的「下一次」语形');
-    assert.ok(htmlOpen.includes('评审放行（review）')); // 下拉选项「中文（原值）」双写
-    assert.ok(htmlOpen.includes('拦截并停止会话（block-session）'));
-    // 策略/阈值/仓库上下文 hint 抽样补钉（T-007 评审）
-    assert.ok(htmlOpen.includes('review：意见随动作送达，不拦截；ask：评审后请示人工；block：blocker 级意见拦截本次动作'));
-    assert.ok(htmlOpen.includes('同一工具连续失败达到该次数后，下一次调用先经评审'));
+    // 阻断模式下拉选项「中文（原值）」双写
+    assert.ok(htmlOpen.includes('警告并放行（warn-and-continue）'));
+    assert.ok(htmlOpen.includes('拦截本次调用（block-tool）'));
+    assert.ok(htmlOpen.includes('封锁会话（block-session）'));
+    // 阈值/阻断模式/仓库上下文 hint 抽样补钉（T-007 评审）
     assert.ok(htmlOpen.includes('等价工具调用重复达到该次数的那次调用即受审'));
+    assert.ok(htmlOpen.includes('循环门 blocked 决策与咨询失败的统一处置档位'));
     assert.ok(htmlOpen.includes('patch 含当前变更补丁（受字节上限）'));
     assert.ok(!htmlOpen.includes('评审门')); // legend 冗余已删（T-006 目验 ①）
     assert.ok(htmlOpen.includes('不发送（off）')); // 隐私档位选项双写
@@ -333,11 +336,11 @@ test('R-02-001/AC-01 卡片开关与下拉编辑映射到正确配置路径（�
     assert.equal(enabledSwitch.attrs['aria-checked'], 'true');
     enabledSwitch.listeners.click[0]();
     assert.equal(controller.getState().patch.enabled, false);
-    // 门策略下拉：id 定位
-    const planSelect = findById(container, 'advisor-gate-plan-policy');
-    assert.ok(planSelect, 'plan 门策略下拉存在');
-    planSelect.listeners.change[0]({ target: { value: 'block' } });
-    assert.equal(controller.getState().patch.gates.plan.policy, 'block');
+    // 阻断模式下拉：id 定位（全局统一处置档位）
+    const failureModeSelect = findById(container, 'advisor-failure-mode');
+    assert.ok(failureModeSelect, '阻断模式下拉存在');
+    failureModeSelect.listeners.change[0]({ target: { value: 'block-session' } });
+    assert.equal(controller.getState().patch.failureMode, 'block-session');
     // 隐私档位下拉 id 定位
     const historySelect = findById(container, 'advisor-privacy-history');
     historySelect.listeners.change[0]({ target: { value: 'off' } });
@@ -389,23 +392,23 @@ test('R-02-001 关闭启用开关不抛错：fieldset 附加 disabledGroup（目
     assert.equal(controller.getState().patch.gates?.plan?.enabled, undefined, '禁用态门开关点击不生效');
 });
 
-test('R-02-001 门开关联动：本门关闭时该门策略禁用，其它门不受影响（东家目验）', async () => {
+test('R-02-001 循环门阈值随门开关联动禁用；守则门块无策略/阈值控件（东家目验）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
-    // RAW: plan/failure 门均 enabled → 关闭 plan 门
-    findById(container, 'advisor-gate-plan-enabled').listeners.click[0]();
-    assert.equal(controller.getState().patch.gates.plan.enabled, false);
-    // 本门控件随门开关闭用（refresh 后重新定位）
-    const planPolicy = findById(container, 'advisor-gate-plan-policy');
-    assert.equal(planPolicy.attrs.disabled, 'disabled', '本门关闭后策略禁用');
-    // 其它门独立联动：failure 门默认关闭（RAW 未配置）→ 控件禁用；点开后恢复
-    assert.equal(findById(container, 'advisor-gate-failure-policy').attrs.disabled, 'disabled', '默认关闭的门控件禁用');
-    findById(container, 'advisor-gate-failure-enabled').listeners.click[0]();
-    assert.equal(findById(container, 'advisor-gate-failure-policy').attrs.disabled, undefined, 'failure 门开启后其控件恢复可用');
-    // 重新开启 plan 门 → 控件恢复可用
-    findById(container, 'advisor-gate-plan-enabled').listeners.click[0]();
-    const planPolicy2 = findById(container, 'advisor-gate-plan-policy');
-    assert.equal(planPolicy2.attrs.disabled, undefined, '门重新开启后策略恢复可用');
+    // RAW: loop 门 enabled + threshold=5 → 关闭循环门
+    findById(container, 'advisor-gate-loop-enabled').listeners.click[0]();
+    assert.equal(controller.getState().patch.gates.loop.enabled, false);
+    // 循环门阈值随门开关联动禁用（refresh 后重新定位）
+    const loopThreshold = findById(container, 'advisor-gate-loop-threshold');
+    assert.equal(loopThreshold.attrs.disabled, 'disabled', '循环门关闭后阈值禁用');
+    // 重新开启循环门 → 阈值恢复可用
+    findById(container, 'advisor-gate-loop-enabled').listeners.click[0]();
+    const loopThreshold2 = findById(container, 'advisor-gate-loop-threshold');
+    assert.equal(loopThreshold2.attrs.disabled, undefined, '循环门重新开启后阈值恢复可用');
+    // 守则门块（plan/failure/completion）不含策略/阈值控件
+    assert.equal(findById(container, 'advisor-gate-plan-policy'), undefined);
+    assert.equal(findById(container, 'advisor-gate-failure-policy'), undefined);
+    assert.equal(findById(container, 'advisor-gate-completion-policy'), undefined);
 });
 
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
