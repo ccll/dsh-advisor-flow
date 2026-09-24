@@ -5,7 +5,7 @@ id: T-009
 ---
 # staging 实弹验证与咨询链路残缝收敛
 
-状态: active
+状态: completed
 关联: R-01-001、R-01-003、R-01-004、R-01-005、R-01-006、R-02-002、R-02-005（验证面）
 风险等级: standard
 
@@ -61,4 +61,4 @@ T-008 关闭时显性记录「真机四门实弹复验待宿主重启」为后�
   - 目的理解: 本 task 目标是在 staging 真实 LLM 流上验证 T-008 修复并收敛残余断缝；reviewer 需核验咨询消息契约与宿主 GenerateOptions 一致、用量字段与 TokenUsage 一致、staging 实测发现均有回归钉或显性记录
   - 执行方式: code-review skill 双轴并行子代理；评审基线 2aecfc3..72e513b（含 ec70ff3 咨询形状修复、72e513b adviceId 渲染）
   - 问题与修复: 实现方自查修复——content 块数组（staging ADVISOR_FAILED 实证）、usage 五字段离散承载、adviceId 渲染回查行；测试断言同步改形（messages content 块数组、TokenUsage 五字段、render adviceId 行）
-  - 复审结论: （待本轮评审填入）
+  - 复审结论: 复审通过，无残余发现——五项发现全部 confirmed 已解决（SOLUTION 两行契约对照 dsh-llm types.d.ts 事实准确、TOKEN_FIELDS 单点维护、hash 映射注记、TODO 登记、totalTokens/reasoningTokens 断言算术复核）；残余风险两条已显性记录（素材装配缺口待东家裁决、单测层无宿主适配器形状桩——请求向契约由 staging 实弹钉住）
