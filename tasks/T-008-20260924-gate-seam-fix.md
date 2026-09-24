@@ -5,7 +5,7 @@ id: T-008
 ---
 # 门控接缝对齐真实宿主载体——四门零触发修复
 
-状态: active
+状态: completed
 关联: R-01-003、R-01-004、R-01-005、R-01-006、R-01-001、R-02-005
 风险等级: standard
 
@@ -63,4 +63,17 @@ SOLUTION 的「会话观察」「门控服务」「咨询工具」「横切约�
 
 ## 终态与证据
 
-（执行中）
+- 实现: 门控接缝对齐真实宿主载体（dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2 实测裁决）——① pre-execute 载体契约改 `exec.name`/`exec.arguments`/`exec.agent.id`（含 plan.js judge 旧字段修复）；② 失败计数单一权威缝 `tools/result`（两参 `(exec, result)`、失败真值 `result.isError`、`exec.callId` 去重），session/event 收缩为 reset 缝（其存储记录无工具名，双缝去重议题裁决关闭）；③ `ask_advisor` 工具定义补宿主强制 `output {schema, render}`，value 契约 `{ok,adviceId,severity,text}|{ok:false,code,reason}`；④ 完成门改锚 `agent/turn-stopping` 回合收口串行派发（宿主无名为 concludesTurn 的工具），反对以 steer 数据表达，去重标记只在放行收口后落、反对不落（AC-02 不被同回合再收口绕过）、反对未发出按事实降级（block 路径自由收口 / ask 路径按已送达 fail-open 放行落标记）；⑤ 送达消息改 ContentBlock 数组 + id；⑥ 送达冷却只在自由收口倒数（送达/反对续步不倒数）；⑦ package.json 声明实测接缝清单；SOLUTION 同步入图与模块条目（横切约束合并单节、完成门收口时序图）。
+- 测试: `npm test` 177/177 全绿（基线 166 净 +11：真实宿主形状回归组 + 完成门 turn-stopping 三 AC + 回合去重边界 + 反对降级两分支 + ask fail-open 三分支 + 冷却口径）；`python3 tools/agentmap_lint.py --report` 全绿（test-anchored 30/30）。
+- SOLUTION 对照: 载体契约、完成门锚点、权威缝裁决、收口去重与降级语义已同步入 SOLUTION（横切约束/门控服务/会话观察/咨询工具/运行时语义/交互图）；PRD 零改动（R-01-003～R-01-006 承诺不变，机制锚点按宿主现实收敛）；map-code 无漂移。
+- 残余与后续: 真机四门实弹复验待宿主重启载入新码后执行（生产宿主重启属东家操作；复验清单见测试计划）；`stopSession`（agents.cancel）真实签名与 `classifySessionEvent` turn-end 死分支清理归 T-002 联调清单；完成门启用时每回合收口一次咨询的成本由 budget.maxPerSession 与门开关调节。
+- commit: 4364b6d
+- commit: 46550a2
+- commit: 3c9e38b
+- commit: 4dc9ec8
+- review:
+  - 审核方: 双轴独立评审子代理（Standards 轴、Spec 轴，code-review skill 流程，同步委派各自成会话；基线评审一轮 + 修复复审三轮，末轮 Standards+Spec 合并终确认）
+  - 目的理解: 本 task 目标是让四门与 ask_advisor 在真实宿主载体上按 R-01-001/003/004/005/006 与 R-02-005 的 AC 语义工作；reviewer 需核验载体契约改写与宿主源码事实一致、SOLUTION 同步无漂移、fail-open 非阻断不变量不被破坏、测试锚定真实形状
+  - 执行方式: code-review skill 双轴并行子代理；评审基线 d88887c..4364b6d（首轮）→ 4364b6d..46550a2（二轮）→ 46550a2..3c9e38b（三轮）→ 3c9e38b..4dc9ec8（终确认）
+  - 问题与修复: 首轮 Standards 三项硬/判断题（task 重复标题、observer 双叠 JSDoc 过期句、forgetSession 命名偏离动词族）与两项保留判断（处置阶梯不提取——两处置通道实质不同；五处缝面注释非复制）均经复审裁定；首轮 Spec 核心发现——完成门（会话，回合）去重使同回合 blocker 反对可被立即再收口绕过（AC-02 失效）→ 修复为放行落标记/反对不落标记；二轮发现冷却按派发次数倒数口径漂移 → 修复为仅自由收口倒数；二轮 Spec 完成门时序图只补一半 → 补 sequenceDiagram；三轮发现 steer 降级返回 'objected' 与「收口已发生」事实不符、ask fail-open 已送达却返回 undefined 误倒数、ask 拒绝且反对未发出支路与 fail-open 支路处置不一致 → 统一按已送达事实处置（markReviewed + 'delivered'）、反对未发出且无投递按自由收口（undefined）；测试 AC 锚点错位（ask fail-open 误锚 R-01-006/AC-02）→ 改 R-02-005/AC-02。施工期另有测试代理上报 plan.js judge 旧字段遗漏（计划门真实载体失明）→ 实现方修复后用例恢复。
+  - 复审结论: 终确认轮双轴「复审通过，无残余发现」；残余风险两条已记录（ask fail-open 依赖 budget 兜底的拉锯成本、steer 瞬态抛错的冷却偏差窗口）+ 真机复验待宿主重启（非代码工作）
