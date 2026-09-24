@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGateEngine, ADVISOR_TOOL_NAME, failureSummary } from '../lib/gates/index.js';
+import { createAdviceDelivery } from '../lib/delivery.js';
 import { createSessionObserver } from '../lib/observer.js';
 
 /**
@@ -14,7 +15,7 @@ import { createSessionObserver } from '../lib/observer.js';
  */
 
 /** 门引擎夹具：可编程咨询结果 + 送达/停止记录 + 日志捕获。 */
-function makeGate({ loop = { enabled: false }, failureMode = 'warn-and-continue', results = [], consultImpl, stopSession, observer = createSessionObserver({ logger: { info() {}, error() {} } }) } = {}) {
+function makeGate({ loop = { enabled: false }, disabled = false, failureMode = 'warn-and-continue', results = [], consultImpl, stopSession, observer = createSessionObserver({ logger: { info() {}, error() {} } }) } = {}) {
     const logs = { error: [], info: [], warn: [] };
     const logger = {
         error: (message, fields) => logs.error.push({ message, fields }),
@@ -39,7 +40,7 @@ function makeGate({ loop = { enabled: false }, failureMode = 'warn-and-continue'
         consult,
         observer,
         delivery: (sessionId, text) => delivered.push({ sessionId, text }),
-        getConfig: () => ({ enabled: true, gates: { loop }, failureMode }),
+        getConfig: () => ({ enabled: disabled !== true, gates: { loop }, failureMode }),
         stopSession,
         logger,
     });
@@ -384,4 +385,42 @@ test('R-01-005/AC-01 阈值缺省回落：loop 配置缺 threshold 时按缺省 
     const decision = await engine.handlePreExecute(exec, next);
     assert.equal(decision.kind, 'allow');
     assert.equal(consultCalls.length, 1); // 第 3 次等价调用命中
+});
+
+
+test('R-01-005/AC-03 评审修复回归：引擎禁用时门不计数不咨询（R-02-001/AC-03 前置守卫）', async () => {
+    const { engine, consultCalls, nextCalls, next } = makeGate({
+        loop: { enabled: true, threshold: 1 },
+        disabled: true,
+    });
+    await engine.handlePreExecute(hostExec('bash', {}, 's1', 'c1'), next);
+    assert.equal(consultCalls.length, 0); // 禁用态不触发咨询
+    assert.equal(nextCalls.length, 1); // 动作照常放行
+});
+
+test('R-01-005/AC-05 评审修复：blocked 与 revise 不重置等价计数（pi 语义），仅 proceed 重置', async () => {
+    const { engine, consultCalls, next } = makeGate({
+        loop: { enabled: true, threshold: 3 },
+        results: [
+            { ok: true, adviceId: 'a1', decision: 'blocked', markdown: '需要用户介入。' },
+            { ok: true, adviceId: 'a2', decision: 'blocked', markdown: '仍需介入。' },
+        ],
+    });
+    for (let i = 0; i < 2; i++) {
+        await engine.handlePreExecute(hostExec('bash', { command: 'echo x' }, 's1', `b${i}`), next);
+    }
+    assert.equal(consultCalls.length, 0); // 前两次不拦
+    await engine.handlePreExecute(hostExec('bash', { command: 'echo x' }, 's1', 'b2'), next);
+    assert.equal(consultCalls.length, 1); // 第 3 次命中评审（blocked×warn 放行不重置）
+    // 第 4 次等价调用：计数未重置 → 仍受审（blocked 不重置）
+    await engine.handlePreExecute(hostExec('bash', { command: 'echo x' }, 's1', 'b4'), next);
+    assert.equal(consultCalls.length, 2); // 无重置 → 第 4 次仍命中评审
+});
+
+test('R-02-005/AC-02 评审修复回归：压缩/重写路径不再调用已退役的 delivery.reset（TypeError 防回归）', () => {
+    const resetless = { registerAgent() {}, unregisterAgent() {}, steerAdvice() {}, status: () => ({}) };
+    const wired = createAdviceDelivery({ logger: { info() {}, warn() {}, error() {} } });
+    assert.equal(typeof wired.reset, 'undefined'); // 新送达面无 reset（冷却已退役）
+    assert.equal(typeof wired.steerAdvice, 'function');
+    void resetless;
 });
