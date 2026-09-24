@@ -10,7 +10,7 @@ test('R-02-002/AC-01 咨询完成后逐项 token 与成本明细记录并归入�
         session: 's1',
         inputTokens: 100,
         outputTokens: 50,
-        cacheTokens: 20,
+        cacheReadTokens: 20,
         cost: 0.25,
     });
     ledger.record({
@@ -19,14 +19,15 @@ test('R-02-002/AC-01 咨询完成后逐项 token 与成本明细记录并归入�
         session: 's1',
         inputTokens: 30,
         outputTokens: 10,
-        cacheTokens: 5,
+        cacheWriteTokens: 5,
         cost: 0.05,
     });
     const totals = ledger.totals();
     assert.equal(totals.total.calls, 2);
     assert.equal(totals.total.inputTokens, 130);
     assert.equal(totals.total.outputTokens, 60);
-    assert.equal(totals.total.cacheTokens, 25);
+    assert.equal(totals.total.cacheReadTokens, 20);
+    assert.equal(totals.total.cacheWriteTokens, 5);
     assert.ok(Math.abs(totals.total.cost - 0.30) < 1e-9);
     const [first, second] = ledger.records();
     assert.equal(first.adviceId, 'adv-1');
@@ -39,7 +40,9 @@ test('R-02-002/AC-02 提供方未给出的用量项显示为不可得而非零',
     ledger.record({ adviceId: 'adv-1', entry: 'tool', session: 's1', outputTokens: 12 });
     const [record] = ledger.records();
     assert.equal(record.inputTokens, 'unavailable');
-    assert.equal(record.cacheTokens, 'unavailable');
+    assert.equal(record.cacheReadTokens, 'unavailable');
+    assert.equal(record.cacheWriteTokens, 'unavailable');
+    assert.equal(record.totalTokens, 'unavailable');
     assert.equal(record.cost, 'unavailable');
     assert.equal(record.outputTokens, 12);
 

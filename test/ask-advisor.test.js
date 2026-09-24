@@ -79,8 +79,8 @@ test('R-01-001 工具参数校验：非法参数返回错误结果而不进入�
     const ok = await tool.execute({ question: 'q', draft: 'd' });
     assert.equal(ok.ok, true);
     assert.equal(llm.calls.length, 1);
-    assert.ok(llm.calls[0].options.messages[0].content.includes('q'));
-    assert.ok(llm.calls[0].options.messages[0].content.includes('d'));
+    assert.ok(llm.calls[0].options.messages[0].content[0].text.includes('q'));
+    assert.ok(llm.calls[0].options.messages[0].content[0].text.includes('d'));
 });
 
 test('R-01-001/AC-01 工具定义携带 output {schema, render}——宿主 tools.register 强制契约（T-008 实测回归钉住）', () => {

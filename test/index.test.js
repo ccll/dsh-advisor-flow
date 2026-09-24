@@ -880,7 +880,7 @@ test('R-01-002/AC-01 wiring 级端到端：startManual → agent.inject 收到 [
     const result = await manual.promise;
     assert.equal(result.ok, true);
     assert.equal(services.commandController.manualRunning('s1'), false); // 完成后清除
-    assert.equal(llm.calls[0].options.messages[0].content.includes('种子焦点'), true);
+    assert.equal(llm.calls[0].options.messages[0].content[0].text.includes('种子焦点'), true);
     // agent.inject（或 steer）收到含 [advisor: 前缀的意见消息——wiring 级钉住
     // index.js 传入 commands 的是 delivery 回调（曾误传对象致送达静默失败）。
     // 送达消息契约（T-008 实测）：content 是 ContentBlock 数组且带稳定 id。

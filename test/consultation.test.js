@@ -45,7 +45,7 @@ test('R-01-001/AC-01 咨询成功返回含 adviceId 的意见文本，adviceId �
     assert.equal(call.options.model, 'test-model');
     assert.equal(call.options.system, ADVISOR_SYSTEM_PROMPT);
     assert.equal(call.options.messages.length, 1);
-    assert.ok(call.options.messages[0].content.includes('这个方案稳吗？'));
+    assert.ok(call.options.messages[0].content[0].text.includes('这个方案稳吗？'));
     assert.equal(typeof call.options.maxTokens, 'number');
     assert.ok(call.options.signal instanceof AbortSignal);
     assert.equal(call.options.reasoningEffort, undefined);
@@ -312,7 +312,8 @@ test('R-02-002 咨询完成时用量进入台账；缺失项 unavailable（引�
     assert.equal(totals.total.calls, 2);
     assert.equal(totals.total.inputTokens, 10);
     assert.equal(totals.total.outputTokens, 5);
-    assert.equal(totals.total.cacheTokens, 'unavailable'); // 提供方未给出 → 不可得
+    assert.equal(totals.total.cacheReadTokens, 'unavailable'); // 提供方未给出 → 不可得
+    assert.equal(totals.total.cacheWriteTokens, 'unavailable');
     assert.equal(totals.byEntry.manual.calls, 1);
     assert.equal(totals.byEntry.manual.inputTokens, 'unavailable');
 });
@@ -346,7 +347,7 @@ test('R-01-001 咨询素材经隐私裁剪与脱敏后发送（引擎集成）',
             files: [{ path: 'a.js', content: 'sk-Abc12345_-XYZ98765' }],
         },
     });
-    const sent = llm.calls[0].options.messages[0].content;
+    const sent = llm.calls[0].options.messages[0].content[0].text;
     assert.ok(!sent.includes('supersecret123'));
     assert.ok(sent.includes('token: [REDACTED]'));
     assert.ok(!sent.includes('仓库摘要'));
@@ -496,7 +497,7 @@ test('R-01-002/AC-01 手动入口携带聚焦词时咨询素材包含该聚焦�
     const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
     const result = await engine.consult({ entry: 'manual', question: '聚焦：审查重试退避策略' });
     assert.equal(result.ok, true);
-    const sent = llm.calls[0].options.messages[0].content;
+    const sent = llm.calls[0].options.messages[0].content[0].text;
     assert.ok(sent.includes('聚焦：审查重试退避策略'));
     assert.equal(llm.calls[0].options.messages.length, 1);
 });

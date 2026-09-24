@@ -62,7 +62,7 @@ test('R-01-002/AC-01 /advisor-manual 携带聚焦词时咨询素材包含该聚�
         await new Promise((resolve) => setTimeout(resolve, 5));
     }
     assert.ok(llm.calls.length >= 1);
-    assert.ok(llm.calls[0].options.messages[0].content.includes('重点审查退避策略'));
+    assert.ok(llm.calls[0].options.messages[0].content[0].text.includes('重点审查退避策略'));
     assert.equal(delivered.length, 1); // 意见经送达进入会话
     assert.equal(controller.manualRunning('s1'), false);
 });
