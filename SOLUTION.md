@@ -292,7 +292,7 @@ flowchart TD
 
 - **咨询工具** `ask_advisor`：
   - 入参：`question?: string`、`draft?: string`；均可省略（一般性评审）。
-  - 返回：意见文本 + `adviceId`；失败返回带诊断码的错误（`NO_ADVISOR_MODEL` / `ADVISOR_ROUTE_MISSING` / `ADVISOR_TIMEOUT` 等）。
+  - 返回：意见文本 + `adviceId`；失败返回带诊断码的错误（`NO_ADVISOR_MODEL` / `ADVISOR_TIMEOUT` / `ADVISOR_FAILED` / `ADVISOR_GATE_INVALID` / `ADVISOR_BUDGET_EXHAUSTED`）。
 - **命令**：
   - `/advisor-manual [focus]`：立即咨询；进行中可取消。
   - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要。

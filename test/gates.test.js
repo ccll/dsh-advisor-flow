@@ -39,7 +39,7 @@ function makeGate({ loop = { enabled: false }, failureMode = 'warn-and-continue'
         consult,
         observer,
         delivery: (sessionId, text) => delivered.push({ sessionId, text }),
-        getConfig: () => ({ gates: { loop }, failureMode }),
+        getConfig: () => ({ enabled: true, gates: { loop }, failureMode }),
         stopSession,
         logger,
     });

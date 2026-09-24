@@ -166,7 +166,7 @@ test('R-01-001 同会话咨询串行（FIFO），满则丢新并记录；门入�
     assert.equal(secondResult.adviceId, 'adv-2');
 });
 
-test('R-01-005/AC-04 门入口咨询队列满：失败带 budget-exhausted 类别（预算耗尽归类）', async () => {
+test('R-01-005/AC-04 门入口咨询队列满：失败按容量错误归类（budget-exhausted 仅归真实预算耗尽）', async () => {
     const llm = createFakeLlm([
         { ...answer('first 的意见。'), hangUntilReleased: true },
         answer('排队的意见。'),
@@ -184,11 +184,25 @@ test('R-01-005/AC-04 门入口咨询队列满：失败带 budget-exhausted 类�
     const dropped = await engine.consult({ entry: 'gate', session: 's1' });
     assert.equal(dropped.ok, false);
     assert.equal(dropped.code, 'ADVISOR_FAILED');
-    assert.equal(dropped.category, 'budget-exhausted'); // gate 入口丢弃 → 预算耗尽类别
+    assert.equal(dropped.category, 'provider-error'); // 队列满是容量/提供方侧错误，非预算耗尽
     llm.release(0);
     const [firstResult, secondResult] = await Promise.all([first, second]);
     assert.equal(firstResult.ok, true);
     assert.equal(secondResult.ok, true);
+});
+
+test('R-01-005/AC-04 预算执行：maxPerSession 耗尽后门入口咨询带 budget-exhausted 类别（pi reserveAdvisorCall 语义）', async () => {
+    const engine = createConsultationEngine({
+        llm: createFakeLlm([answer('预算内的意见。')]),
+        config: resolvedConfig({ budget: { maxPerSession: 1 } }),
+        logger: quietLogger,
+    });
+    const first = await engine.consult({ entry: 'tool', session: 's1', question: 'first' });
+    assert.equal(first.ok, true);
+    const gateOver = await engine.consult({ entry: 'gate', session: 's1', question: 'over' });
+    assert.equal(gateOver.ok, false);
+    assert.equal(gateOver.code, 'ADVISOR_BUDGET_EXHAUSTED');
+    assert.equal(gateOver.category, 'budget-exhausted'); // 预算耗尽 → 门按阻断模式处置
 });
 
 test('R-01-001 effort 能力门控：仅在 resolveModelInfo 声明该档位时发送', async () => {
