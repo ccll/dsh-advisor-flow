@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSettingsCardController } from '../../lib/client/card-state.js';
 import { renderSettingsCard } from '../../lib/client/render.js';
+import { pump } from '../helpers.js';
 
 /** Fake RPC over canned handlers（信封形态与 dsh-client-connection 契约一致）. */
 function makeRpc({ handlers }) {
@@ -402,12 +403,17 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     // 直接以信封形态 resolve（connection.rpc.call 的失败也是 resolve 非 reject）：
     // get 失败验证 load 路径，set 失败验证 save 路径（分两个控制器）。
     const envelope = (message) => ({ ok: false, error: { code: 'gateway/internal', message } });
+    let getShouldFail = true;
     const getFail = {
         calls: [],
         call: async (channel, method) => {
             getFail.calls.push({ channel, method });
             if (method === 'advisor-flow/get') {
-                return envelope('settings service unavailable');
+                // 前两次失败（首帧 + 重试），之后恢复——error 态必须可自愈
+                if (getShouldFail) {
+                    return envelope('settings service unavailable');
+                }
+                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
             }
             throw new Error(`no endpoint ${method}`);
         },
@@ -421,6 +427,16 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     assert.match(controller.getState().error, /settings service unavailable/); // error.message 显性化
     const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
     assert.ok(errorNodes[0].textContent.includes('settings service unavailable'));
+    // error 态无表单（内容消失形态）但必须提供重试——无恢复手段则表单永久
+    // 消失且 header 点击永远回不来（东家目验缺陷）
+    assert.equal(byTag(container, 'fieldset').length, 0);
+    const retry = byTag(container, 'button').find((node) => node.textContent === '重试');
+    assert.ok(retry, 'error 态渲染重试按钮');
+    getShouldFail = false;
+    retry.listeners.click[0](); // void controller.load()——异步
+    await pump();
+    assert.equal(controller.getState().status, 'ready');
+    assert.ok(findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_form')).length > 0, '重试成功后表单恢复');
 
     // save 路径：load 成功、set 信封失败 → 保存失败显性化并区分 error.code
     const setFail = {
