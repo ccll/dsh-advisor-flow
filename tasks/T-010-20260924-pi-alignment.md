@@ -64,7 +64,7 @@ id: T-010
 - commit: acbaa03
 - commit: 7f5ea89
 - commit: e664aae
-- commit: 29d3ea3
+- commit: 0a9bacf
 - review:
   - 审核方: 双轴独立评审子代理（Standards 轴、Spec 轴，code-review skill 流程；T-010 全量评审一轮 + 双轴修复复审一轮 + 终确认二轮）
   - 目的理解: 本 task 目标是按 C-007 全面退役 dsh-advisor 谱系并把门控/送达/解析对齐 pi-advisor-flow 0.8.1 原生模型；reviewer 需核验 pi 协议逐行等价（Decision 解析对抗性、failureMode 处置矩阵、守则文案）、SOLUTION 同步无漂移、staging 实测发现均有回归钉或显性记录
@@ -76,4 +76,4 @@ id: T-010
 - commit: e664aae
 - commit: 7f5ea89
 - commit: 0375c43
-- commit: 29d3ea3
+- commit: 0a9bacf
