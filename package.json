@@ -25,6 +25,20 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
+    "compat": {
+      "dsh": "0.1.5-rc.1",
+      "seams": [
+        "tools/pre-execute",
+        "tools/result",
+        "agent/turn-stopping",
+        "session/event",
+        "agent.inject/steer",
+        "tools.register(output)",
+        "settings.installSection",
+        "GatewayService RPC",
+        "commands.register"
+      ]
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-store",

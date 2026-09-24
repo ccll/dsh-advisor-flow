@@ -26,10 +26,15 @@ test('R-01-003/AC-03 review 意见经送达到达会话：nit 走 inject 非唤�
     assert.equal(channel, 'inject');
     assert.equal(calls.length, 1);
     assert.equal(calls[0].channel, 'inject');
-    assert.ok(calls[0].message.content.startsWith('[advisor:nit] 建议先补测试。'));
-    assert.ok(calls[0].message.content.includes('adviceId: adv-1')); // 意见正文附 adviceId 引用
-    assert.equal(calls[0].message.source.plugin, 'advisor-flow');
-    assert.ok(calls[0].message.source.summary.length <= 120);
+    // 送达消息契约（T-008 实测）：content 是 ContentBlock 数组且带稳定 id
+    const message = calls[0].message;
+    assert.ok(Array.isArray(message.content));
+    assert.ok(message.content[0].text.startsWith('[advisor:nit] 建议先补测试。'));
+    assert.ok(message.content[0].text.includes('adviceId: adv-1')); // 意见正文附 adviceId 引用
+    assert.equal(message.role, 'user');
+    assert.equal(typeof message.id, 'string');
+    assert.equal(message.source.plugin, 'advisor-flow');
+    assert.ok(message.source.summary.length <= 120);
 });
 
 test('R-01-003/AC-03 冷却窗口内仅压制同级 interrupting；不同级照常唤醒送达', () => {
@@ -88,11 +93,17 @@ test('R-01-003/AC-03 agent/disposed 清理会话冷却；压缩重置冷却', ()
     assert.equal(delivery.deliver('s1', advice()), undefined); // agent 已移除
 });
 
-test('R-01-003/AC-03 消息形态：severity 标签 + 摘要有界 + 插件身份', () => {
+test('R-01-003/AC-03 消息形态：severity 标签 + 摘要有界 + 插件身份 + 块数组与 id', () => {
     const message = buildAdviceMessage(advice({ severity: 'blocker', text: '长'.repeat(300) }));
-    assert.ok(message.content.startsWith('[advisor:blocker] '));
+    assert.ok(Array.isArray(message.content)); // content 是 ContentBlock 数组（宿主消息契约）
+    assert.ok(message.content[0].text.startsWith('[advisor:blocker] '));
+    assert.equal(message.role, 'user');
+    assert.equal(typeof message.id, 'string'); // 消息带稳定 id
     assert.equal(message.source.kind, 'plugin');
+    assert.equal(message.source.form, 'notice'); // 插件送达形态标注
     assert.ok(message.source.summary.endsWith('…'));
     // 非法 severity 归一为 nit
-    assert.ok(buildAdviceMessage(advice({ severity: 'catastrophic' })).content.startsWith('[advisor:nit] '));
+    const nit = buildAdviceMessage(advice({ severity: 'catastrophic' }));
+    assert.ok(Array.isArray(nit.content));
+    assert.ok(nit.content[0].text.startsWith('[advisor:nit] '));
 });

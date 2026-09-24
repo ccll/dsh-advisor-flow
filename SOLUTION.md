@@ -154,6 +154,7 @@ sequenceDiagram
 ```
 
 - 门内联等待有硬上限（`callTimeoutMs`）；超时按非阻断放行并记录。
+- 完成门不在工具调用时序内：它挂在 `agent/turn-stopping`（回合收口前的串行派发）上，反对以 steer 数据表达（收口被拒 → inbox 续步）。
 
 ## 数据视图
 
@@ -303,7 +304,7 @@ flowchart TD
 | R-01-003 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/plan.js |
 | R-01-004 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/failure.js |
 | R-01-005 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/loop.js |
-| R-01-006 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/completion.js |
+| R-01-006 | 门控服务 | SOLUTION.md#门控服务 | lib/gates/index.js（handleTurnStopping） |
 | R-02-001 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/config.js；lib/client/card-state.js；lib/client/render.js |
 | R-02-002 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/usage.js |
 | R-02-003 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/status.js |
@@ -324,21 +325,22 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 门控服务
-- 职责: 注册 `tools/pre-execute` waterfall 监听，对计划/失败/循环/完成四门做前置判定与处置（承接 R-01-003～R-01-006）
+- 职责: 注册 `tools/pre-execute` waterfall 监听对计划/失败/循环三门做前置判定与处置；注册 `agent/turn-stopping` 串行监听承载完成门的回合收口评审（承接 R-01-003～R-01-006）
 - 关键内部结构:
   - 判定数据来自会话观察器维护的每会话 `GateState`。
-  - 计划门锚定 `exit_plan_mode` 类工具；完成门锚定 `concludesTurn` 工具；失败/循环门锚定观察器计数。
-  - 命中即同步 `await` 咨询，处置按门策略：review 放行+送达；ask 转 approval 通道；block 且 blocker 即 deny(reason)。
-  - 门组件异常 fail-open（放行 + 记录），咨询超时同此。
+  - 计划门锚定 `exit_plan_mode` 工具名；失败/循环门锚定观察器计数；完成门锚定 `agent/turn-stopping`（宿主无名为 concludesTurn 的工具，回合收口是串行事件 + steer 反对语义，T-008 实测裁决）。
+  - 载体契约（dsh-tools 0.1.5-rc.2 实测）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`；结果缝 `(exec, result)` 两参、失败真值 `result.isError`。
+  - 命中即同步 `await` 咨询，处置按门策略：review 放行+送达；ask 转 approval 通道；block 且 blocker 即 deny(reason)。完成门的反对经 `agent.steer` 表达（serial 派发无返回值否决通道）。
+  - 门组件异常 fail-open（放行 + 记录），咨询超时同此；收口路径任何异常 contained，不得打断宿主收口流程。
 - 代码位置: lib/gates/
 - 实现: 单端（宿主）
 
 ### 会话观察
-- 职责: 全局订阅 `session/event`，维护有界转写增量与工具调用/结果统计，供咨询上下文组装与门判定（承接 R-01-004、R-01-005 的观测面）
+- 职责: 全局订阅 `session/event` 与 `tools/result`，维护有界转写增量与工具调用/结果统计，供咨询上下文组装与门判定（承接 R-01-004、R-01-005 的观测面）
 - 关键内部结构:
   - 监听必须 `{ global: true }`（跨 scope 会话事件）。
+  - 成败计数的权威缝是 `tools/result` 生命周期事件（`(exec, result)` 两参：`exec.name`、`result.isError`、`exec.callId` 去重）；session/event 的 `tool/result` 存储记录不带工具名，只承载压缩/重写 reset 类事件（T-008 实测裁决，双缝去重议题关闭）。
   - 压缩/重写事件重置观察游标与计数。
-  - 消费 `tools/pre-execute|result` 生命周期事件维护失败计数与循环等价表。
 - 代码位置: lib/observer.js
 - 实现: 单端（宿主）
 
@@ -363,7 +365,7 @@ flowchart TD
 
 ### 咨询工具
 - 职责: 注册 `ask_advisor` 工具面，参数校验与错误转译（承接 R-01-001）
-- 关键内部结构: 工具体仅转发咨询服务，不含判定逻辑。
+- 关键内部结构: 工具体仅转发咨询服务，不含判定逻辑；定义必须声明 `output { schema, render }`（宿主 tools.register 强制，缺失即注册失败），value 契约 `{ok:true,adviceId,severity,text} | {ok:false,code,reason}`，render 出 text 块。
 - 代码位置: lib/tools/ask-advisor.js
 - 实现: 单端（宿主）
 
@@ -380,23 +382,25 @@ flowchart TD
 ## 横切约束
 
 - 非阻断性优先于功能完整：任何 advisor 路径不得 park 主循环（见 DOMAIN 不变量）。
-- 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时 fail-open。
+- 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时 fail-open；完成门的内联等待挂在 `agent/turn-stopping` 串行派发上，收口等待同样受 `callTimeoutMs` 约束、超时放行收口。
 - 观察与判定不读会话持久化文件，只依赖事件流与投影。
-- 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、session/event、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
+- 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；回合收口缝 `agent/turn-stopping`（payload `{turn, signal, agent}`，serial 派发、steer 数据反对）；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`。
+- 插件零宿主补丁、零 postinstall；对 dsh 插件接缝（pre-execute、tools/result、session/event、agent/turn-stopping、inject/steer、settings、gateway RPC、命令注册）的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`（缺任一整插件不装载）；可选服务（approval/commands/typert/settings）一律条件 `ctx.inject` 子上下文——未激活即缝缺失路径，降级标注保留、激活时清除，绝不以 try/catch 探测 ctx 代理属性（cordis 下不可靠，曾致装载崩溃）。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 是唯一用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径（client 装载器按 `<包名>/client` 解析插件 client 半区；缺失则宿主半区正常装载而设置卡静默不出现）。
 
 ## 运行时、并发与失败语义
 
-- **门内联等待**：门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 180s，可配）；超时/失败按放行处置并记录（R-02-005 AC-02）。`ask` 策略走宿主 approval 通道，拒绝即 deny。
+- **门内联等待**：门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 180s，可配）；超时/失败按放行处置并记录（R-02-005 AC-02）。`ask` 策略走宿主 approval 通道，拒绝即 deny。完成门的内联等待在 `agent/turn-stopping` 串行派发内：收口被 block/blocker 意见反对时以 `agent.steer` 数据表达，宿主重读 inbox 续步；监听器全 contained，异常不打断收口。
 - **失败分类**：transient → 重试 1 次（1s 退避）→ 丢弃并记录；quota → 暂停并保留待处理；permanent（NO_ADAPTER、模型不存在、凭证无效）→ halt 顾问（门按放行处置，工具调用返回诊断错误）。
 - **丢弃可见性**：每次丢弃记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；不同会话并行互不影响。
 - **重入防护**：咨询工具自身被门拦截豁免（防止门触发咨询的工具调用自递归）；顾问调用不经过工具层。
+- **完成门与收口去重**：`agent/turn-stopping` 对同一回合的每次收口尝试都会再派发，而完成门的送达本身（inject/steer 落 next-step inbox）就是一次续步——完成门按（会话，回合号）去重，每回合只评审一次；同回合的后续收口尝试直接放行，杜绝「咨询→注入→续步→再咨询」的同回合循环（T-008 实测发现）。
 - **恢复**：paused 由 `/advisor on` 原地恢复；halted 由命令重建运行时；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
 
 ## 横切约束
 
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('session/event', …, {global:true})`、`agent.inject/steer`、settings bridge `onChange`、GatewayService RPC、命令注册表。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`（两参成败缝）、`ctx.on('agent/turn-stopping')`、`ctx.on('session/event', …, {global:true})`、`agent.inject/steer`、settings bridge `onChange`、GatewayService RPC、命令注册表。
 - 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
 - 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。

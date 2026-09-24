@@ -223,8 +223,9 @@ test('R-02-005/AC-01 禁用配置下 apply 仍可用：工具返回 NO_ADVISOR_M
     assert.equal(services.config().enabled, false);
     assert.equal(registered[0].name, 'ask_advisor');
     const result = await services.askAdvisor.execute({});
-    assert.equal(result.error, true);
+    assert.equal(result.ok, false);
     assert.equal(result.code, 'NO_ADVISOR_MODEL');
+    assert.ok(typeof result.reason === 'string' && result.reason.length > 0);
     assert.equal(name, 'dsh-advisor-flow');
     assert.deepEqual(inject, ['agents', 'llm']);
 });
@@ -235,7 +236,7 @@ test('事件订阅缝缺失时启动期 fail loud（与工具注册缝同纪律�
     assert.match(logs.error[0], /advisor-flow/);
 });
 
-test('R-01-003/AC-01 apply 接线：pre-execute 门命中同步咨询，session/event 全局订阅', async () => {
+test('R-01-003/AC-01 apply 接线：pre-execute 门命中同步咨询，工具生命周期与 turn-stopping 缝全局订阅', async () => {
     const llm = createFakeLlm([answer('severity: nit\n计划评审通过。')]);
     const { ctx, subscriptions } = makeCtx({ llm });
     const services = apply(ctx, {
@@ -245,19 +246,27 @@ test('R-01-003/AC-01 apply 接线：pre-execute 门命中同步咨询，session/
     });
     const wired = Object.fromEntries(subscriptions.map((s) => [s.event, s]));
     assert.ok(wired['tools/pre-execute']);
+    // 工具生命周期事件以 agent scope 为 carrier 派发（dsh-tools scopeTarget）——必须 {global:true}
+    assert.equal(wired['tools/pre-execute'].options?.global, true);
+    assert.equal(wired['tools/result'].options?.global, true);
+    // 回合收口缝（完成门真实锚点 + 冷却倒数源）同样全局订阅
+    assert.equal(wired['agent/turn-stopping'].options?.global, true);
     assert.equal(wired['session/event'].options?.global, true);
     assert.equal(wired['agent/created'].options?.global, true);
     assert.equal(wired['agent/disposed'].options?.global, true);
 
-    // 门命中：exit_plan_mode 在 pre-execute 被同步评审后放行
-    const decision = await wired['tools/pre-execute'].handler({ tool: 'exit_plan_mode', args: {}, session: 's1' }, () => ({ kind: 'allow' }));
+    // 门命中：exit_plan_mode 在 pre-execute 被同步评审后放行（真实宿主载体形状）
+    const decision = await wired['tools/pre-execute'].handler(
+        { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'exit_plan_mode', arguments: {}, agent: { id: 's1' }, signal: undefined },
+        () => ({ kind: 'allow' }),
+    );
     assert.equal(decision.kind, 'allow');
     assert.equal(llm.calls.length, 1);
     // 普通工具不命中
-    await wired['tools/pre-execute'].handler({ tool: 'read_file', args: {}, session: 's1' }, () => ({ kind: 'allow' }));
+    await wired['tools/pre-execute'].handler({ name: 'read_file', arguments: {}, agent: { id: 's1' }, callId: 'c2' }, () => ({ kind: 'allow' }));
     assert.equal(llm.calls.length, 1);
     // ask_advisor 豁免
-    await wired['tools/pre-execute'].handler({ tool: 'ask_advisor', args: {}, session: 's1' }, () => ({ kind: 'allow' }));
+    await wired['tools/pre-execute'].handler({ name: 'ask_advisor', arguments: {}, agent: { id: 's1' }, callId: 'c3' }, () => ({ kind: 'allow' }));
     assert.equal(llm.calls.length, 1);
 });
 
@@ -276,8 +285,8 @@ test('R-02-003/AC-02 状态快照读活配置：applyConfig 后门配置即时�
     assert.equal(snapshot.gates.plan.enabled, true);
 });
 
-test('session/event 接线：stepped turn 与压缩事件转调 delivery 冷却与重置（事件形状为联调验证项，不锚定 AC）', async () => {
-    const llm = createFakeLlm([answer('意见。'), answer('意见2。')]);
+test('session/event 只承载 reset 类事件；冷却倒数改由 agent/turn-stopping 缝承载（载体契约 T-008，不锚定 AC）', async () => {
+    const llm = createFakeLlm([answer('severity: nit\n计划评审通过。')]);
     const { ctx, subscriptions } = makeCtx({ llm });
     const services = apply(ctx, {
         enabled: true,
@@ -287,19 +296,20 @@ test('session/event 接线：stepped turn 与压缩事件转调 delivery 冷却�
     const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
     assert.equal(sessionEvent.options?.global, true);
 
-    // blocker 命中 → gate 送达（steer，冷却武装）
+    // 门命中：exit_plan_mode 在 pre-execute 被同步评审（真实宿主载体形状）
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute');
-    const agent = { id: 's1', inject() {}, steer() {} };
-    services.delivery.registerAgent(agent);
-    await preExecute.handler({ tool: 'exit_plan_mode', args: {}, session: 's1' }, () => ({ kind: 'allow' }));
-    // 用 blocker 咨询结果武装冷却
-    const llmPrograms = llm.calls.length;
-    assert.ok(llmPrograms >= 1);
+    await preExecute.handler({ name: 'exit_plan_mode', arguments: {}, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
+    assert.ok(llm.calls.length >= 1);
     // 直接驱动送达以武装冷却（避免依赖顾问 severity）
+    services.delivery.registerAgent({ id: 's1', inject() {}, steer() {} });
     services.delivery.deliver('s1', { adviceId: 'adv-x', severity: 'blocker', text: 't' });
     assert.equal(services.delivery.status().cooldowns.s1, 2);
-    // stepped turn 完成 → 冷却倒数
+    // session/event 的 turn/end 不再承载倒数（收口信号已迁移）
     sessionEvent.handler({ id: 's1' }, { type: 'turn/end' });
+    assert.equal(services.delivery.status().cooldowns.s1, 2);
+    // agent/turn-stopping 串行监听承载倒数
+    const turnStopping = subscriptions.find((s) => s.event === 'agent/turn-stopping');
+    await turnStopping.handler({ turn: {}, signal: undefined, agent: { id: 's1' } });
     assert.equal(services.delivery.status().cooldowns.s1, 1);
     // 压缩事件 → 冷却与观察状态重置
     sessionEvent.handler({ id: 's1' }, { type: 'session/compact' });
@@ -309,20 +319,25 @@ test('session/event 接线：stepped turn 与压缩事件转调 delivery 冷却�
     assert.equal(services.delivery.status().cooldowns.s1, undefined);
 });
 
-test('双缝观测保留：tools/result 与 session/event 均投喂观察器，执行标识去重（缝取舍归联调，不锚定 AC）', async () => {
+test('tools/result 权威成败缝：两参投递计数、callId 去重；session/event 结果型记录不再计数（T-008 裁决，不锚定 AC）', async () => {
     const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
     const toolsResult = subscriptions.find((s) => s.event === 'tools/result');
-    assert.ok(toolsResult, '生命周期 tools/result 缝必须保留投喂');
-    assert.ok(sessionEvent, 'session/event 缝必须投喂');
-    // 两缝投递同一执行 → 失败计数只 +1
-    toolsResult.handler({ type: 'tool/result', session: 's1', tool: 'bash', ok: false, execId: 'x1' });
-    sessionEvent.handler({ id: 's1' }, { type: 'tool/result', tool: 'bash', ok: false, execId: 'x1' });
+    assert.ok(toolsResult, '生命周期 tools/result 权威成败缝必须保留');
+    assert.ok(sessionEvent, 'session/event 缝必须保留（承载 reset 类事件与 carrier）');
+    // 宿主以 (exec, result) 两参投递：exec.name + exec.callId + exec.agent.id，失败真值 result.isError
+    toolsResult.handler({ name: 'bash', callId: 'x1', agent: { id: 's1' } }, { isError: true });
     assert.equal(services.observer.failureStreak('s1', 'bash'), 1);
-    // 仅单缝（session/event）继续投递 → 正常累加
-    sessionEvent.handler({ id: 's1' }, { type: 'tool/result', tool: 'bash', ok: false, execId: 'x2' });
+    // 同一执行标识的重复投递只计一次
+    toolsResult.handler({ name: 'bash', callId: 'x1', agent: { id: 's1' } }, { isError: true });
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 1);
+    // 新执行照常累加
+    toolsResult.handler({ name: 'bash', callId: 'x2', agent: { id: 's1' } }, { isError: true });
     assert.equal(services.observer.failureStreak('s1', 'bash'), 2);
+    // session/event 的 tool/result 存储记录不带工具名——不再作为计数缝
+    sessionEvent.handler({ id: 's1' }, { type: 'tool/result', seq: 1, time: 0, data: { message: 'x' } });
+    assert.equal(services.observer.failureStreak('s1', 'bash'), 2); // 未被事件扰动
 });
 
 test('approver 缝缺失显性化：一次性 error + 状态快照 degraded 标注（不锚定 AC）', () => {
@@ -360,7 +375,7 @@ test('R-01-005/AC-02 接线：宿主 approval 缝可得时 ask 策略接上人�
     });
     assert.equal(services.status.snapshot().degradations.askPolicy, undefined); // 缝可得 → 不降级
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
-    const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
+    const decision = await preExecute({ name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
     assert.ok(decision.reason.includes('人工拒绝'));
     assert.equal(decisions.length, 1); // ask 策略经宿主审批缝征询
@@ -601,7 +616,7 @@ test('服务后到（延迟 provide）仍激活子上下文并清除降级（宿
 
     // 激活后的缝真实可用：ask 门经审批拒绝 → deny；gateway set 可用
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
-    const decision = await preExecute({ tool: 'bash', args: { command: 'npm test' }, session: 's1' }, () => ({ kind: 'allow' }));
+    const decision = await preExecute({ name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, callId: 'c1' }, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
     assert.match(decision.reason, /人工拒绝/);
     assert.equal(decisions.length, 1); // ask 策略经审批缝征询
@@ -723,7 +738,7 @@ test('R-01-005/AC-01 工具生命周期监听注册形态：tools/* 必须携带
     // 裸监听收不到子代理/会话 scope 的调用——T-005 实测第六发现（门在真实
     // 会话零触发）的根因即缺 {global:true}；dsh-tools 自带 invariant 监听
     // tools/* 事件亦用 {global:true}。此断言拦截该全局性回归。
-    for (const toolEvent of ['tools/pre-execute', 'tools/result']) {
+    for (const toolEvent of ['tools/pre-execute', 'tools/result', 'agent/turn-stopping']) {
         const registration = subscriptions.find((entry) => entry.event === toolEvent);
         assert.ok(registration, `${toolEvent} 监听已注册`);
         assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
@@ -848,10 +863,13 @@ test('R-01-002/AC-01 wiring 级端到端：startManual → agent.inject 收到 [
     assert.equal(llm.calls[0].options.messages[0].content.includes('种子焦点'), true);
     // agent.inject（或 steer）收到含 [advisor: 前缀的意见消息——wiring 级钉住
     // index.js 传入 commands 的是 delivery 回调（曾误传对象致送达静默失败）。
+    // 送达消息契约（T-008 实测）：content 是 ContentBlock 数组且带稳定 id。
     assert.equal(injected.length + steerCalls.length, 1);
     const delivered = injected[0] ?? steerCalls[0];
-    assert.ok(delivered.message.content.includes('[advisor:'));
-    assert.ok(delivered.message.content.includes('手动评审意见正文'));
-    assert.equal(delivered.message.content.includes('adviceId: adv-1'), true);
+    assert.ok(Array.isArray(delivered.message.content));
+    assert.ok(delivered.message.content[0].text.includes('[advisor:'));
+    assert.ok(delivered.message.content[0].text.includes('手动评审意见正文'));
+    assert.equal(delivered.message.content[0].text.includes('adviceId: adv-1'), true);
+    assert.equal(typeof delivered.message.id, 'string');
     assert.equal(services.commandController.manualRunning('s1'), false);
 });
