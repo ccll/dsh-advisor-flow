@@ -92,7 +92,7 @@ test('R-01-001/AC-01 工具定义携带 output {schema, render}——宿主 tool
     assert.equal(registered.name, 'ask_advisor');
     assert.ok(tool.output.schema, 'output.schema 随定义声明');
     const blocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', severity: 'nit', text: '意见正文。' });
-    assert.deepEqual(blocks, [{ type: 'text', text: '意见正文。' }]);
+    assert.deepEqual(blocks, [{ type: 'text', text: '意见正文。\n（adviceId: adv-1）' }]); // adviceId 随渲染输出（staging 实测裁决：结果必须可回查）
     const failureBlocks = tool.output.render({}, { ok: false, code: 'NO_ADVISOR_MODEL', reason: 'advisor 模型未配置' });
     assert.equal(failureBlocks[0].type, 'text');
     assert.ok(failureBlocks[0].text.includes('NO_ADVISOR_MODEL'));
