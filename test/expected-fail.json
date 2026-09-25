@@ -6,83 +6,114 @@
       "test": "R-02-001/AC-04 默认值对齐 pi 0.8.2：block-session、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3",
       "ac": "R-02-001/AC-04",
       "kind": "assert",
-      "reason": "默认值未对齐：failureMode 仍 warn-and-continue、三门与循环门仍默认关、redactSecrets 仍 true"
+      "reason": "默认值未对齐：failureMode 仍 warn-and-continue、三门与循环门仍默认关、redactSecrets 仍 true",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-02-001/AC-05 循环门阈值下界：小于 2 的配置被拒绝",
       "ac": "R-02-001/AC-05",
       "kind": "assert",
-      "reason": "threshold=1 仍被接受（下界未收）"
+      "reason": "threshold=1 仍被接受（下界未收）",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-001/AC-04 空意见判失败：顾问返回空文本时按失败处置而非返回空意见",
       "ac": "R-01-001/AC-04",
       "kind": "assert",
-      "reason": "空意见仍以 ok:true 返回"
+      "reason": "空意见仍以 ok:true 返回",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-007/AC-04 工具缝缺失不注入：ask_advisor 未激活时守则文本为空",
       "ac": "R-01-007/AC-04",
       "kind": "assert",
-      "reason": "守则求值无工具缝激活前置，仍注入指向不存在工具的守则"
+      "reason": "守则求值无工具缝激活前置，仍注入指向不存在工具的守则",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-005/AC-06 交错序列归位：不同签名介入后连续计数归 1（连续语义，对齐 pi）",
       "ac": "R-01-005/AC-06",
       "kind": "assert",
-      "reason": "等价计数仍为按键累积制，异签名介入不归位"
+      "reason": "等价计数仍为按键累积制，异签名介入不归位",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-003/AC-01 文案逐字等值：三类守则与公共收尾行等于 pi 0.8.2 英文原文",
       "ac": "R-01-003/AC-01",
       "kind": "assert",
-      "reason": "守则文案仍为中文转写"
+      "reason": "守则文案仍为中文转写",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-001/AC-05 协议系统提示逐字等于 pi 0.8.2 原文（Verdict 与 Decision 两套）",
       "ac": "R-01-001/AC-05",
       "kind": "assert",
-      "reason": "两套顾问系统提示仍为中文转写"
+      "reason": "两套顾问系统提示仍为中文转写",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-01-001/AC-01 咨询工具描述与参数描述逐字等于 pi 0.8.2 原文",
       "ac": "R-01-001/AC-01",
       "kind": "assert",
-      "reason": "工具与参数描述仍为中文转写"
+      "reason": "工具与参数描述仍为中文转写",
+      "expect": "Expected values to be strictly equal"
     },
     {
       "test": "R-02-004/AC-04 先脱敏后截断：截断边界不得残留密钥片段（redactAndCapText）",
       "ac": "R-02-004/AC-04",
       "kind": "import",
-      "reason": "redactAndCapText 未导出（动态导入失败，已隔离不波及同文件既有测试）"
+      "reason": "redactAndCapText 未导出（动态导入解构得 undefined，TypeError）",
+      "expect": "redactAndCapText is not a function"
     },
     {
       "test": "T-014 Scout 二次调用计入用量台账（scout 计量）",
       "ac": "R-02-002/AC-01",
       "kind": "assert",
-      "reason": "台账无 scout 入口聚合（byEntry.scout undefined）"
+      "reason": "台账无 scout 入口聚合（byEntry.scout undefined）",
+      "expect": "Cannot read properties of undefined (reading 'calls')"
     }
   ],
   "files": [
     {
       "file": "test/materials.test.js",
       "reason": "lib/materials.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": ["R-02-006/AC-01", "R-02-006/AC-03"]
+      "acs": [
+        "R-02-006/AC-01",
+        "R-02-006/AC-03"
+      ],
+      "expect": "ERR_TEST_FAILURE",
+      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     },
     {
       "file": "test/git-context.test.js",
       "reason": "lib/git-context.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": ["R-02-006/AC-02"]
+      "acs": [
+        "R-02-006/AC-02"
+      ],
+      "expect": "ERR_TEST_FAILURE",
+      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     },
     {
       "file": "test/outcomes.test.js",
       "reason": "lib/outcomes.js 与 lib/tools/record-outcome.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": ["R-01-008/AC-01", "R-01-008/AC-02", "R-01-008/AC-03", "R-01-008/AC-04"]
+      "acs": [
+        "R-01-008/AC-01",
+        "R-01-008/AC-02",
+        "R-01-008/AC-03",
+        "R-01-008/AC-04"
+      ],
+      "expect": "ERR_TEST_FAILURE",
+      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     },
     {
       "file": "test/scout.test.js",
       "reason": "lib/scout.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": ["T-014 spike 后立项"]
+      "acs": [
+        "T-014 spike 后立项"
+      ],
+      "expect": "ERR_TEST_FAILURE",
+      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     }
-  ]
+  ],
+  "baselineExecuted": 192
 }
