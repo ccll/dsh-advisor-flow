@@ -21,7 +21,7 @@
       "redactText 形状族"
     ],
     "pi_copies_source": "pi 0.8.2 src 逐字函数体（剥离宿主依赖导入；session-state.ts:34-130/git.ts:53-75/prompts.ts:15-67/outcomes.ts adviceDigest/redaction 形状族）",
-    "mutation_check": "已执行注入并确认可证伪：node tools/parity_differential.mjs --mutation-check 实际运行输出「截断边界变异注入被检出（3/8 用例报异；报异者恰为新增加界用例）——单点单向变异可证伪」（变异=capRepositoryContext contentChars +1，单点单向，非任意差异灵敏度声明）",
+    "mutation_check": "已执行注入并确认可证伪（HEAD=e331c15 复跑在案）：「截断边界变异注入被检出（3/8 用例报异；报异者恰为新增加界用例）」。分母 8=capRepositoryContext 全部用例（变异单点仅该函数，与 parity 子集 10 函数 42 用例的口径差=变异仅针对单函数注入）。全等复跑同树输出「parity differential: 全等（同输入同输出，纯逻辑子集抽样）」——42 用例 0 差异在 e331c15 复验",
     "function_case_counts": {
       "capRepositoryContext": "8 用例（原 5 + 新增 3 超通告长度截断边界——总数 39 已含新增）",
       "normalizedToolSignature": "5 用例（空白折叠/引号内保序/tmp 占位/波动键/嵌套键排序）",
@@ -121,9 +121,10 @@
   "uncovered_surface_clause": "宿主强耦合路径（除两处 staged 活缝取值外：git 子进程/事件流/fs 时序的真实宿主形态）与差分抽样未及的纯逻辑部分不在本覆盖声明内",
   "zero_stub_anchor_rephrase": "65 个计入 AC 每项均有行为锚，无未处置项；另两项活缝取值（getCwd 会话工作区缝、tool-result-cap 默认行数 200）经东家裁决 C-013 缓议、不计入 65 项计入 AC。未覆盖面从句：宿主强耦合路径（除两处 staged 活缝取值外）与差分抽样未及的纯逻辑部分不在覆盖声明内。",
   "ac65_scope_note": "65 为裁决后口径（C-013 两项活缝取值不计入计入 AC 集合）；65 枚举与 manifest 记录以 anchor_coverage.py 机械输出为准（prd-ac=65 anchored=65 unanchored=0）",
-  "scout_fourth_case_note": "差分覆盖纯装配面 3 例；第四例（引擎级接线回退红线）由 test/consultation.test.js 用例 「T-014 Scout 引擎接线：scout.enabled 时顾问收到策展脉络；策展失败回退 legacy（不阻断）」承载（runScout 抛错 → legacy 原样出境断言）——覆盖转移有 ID 可查，非缩圈",
+  "scout_fourth_case_note": "scout.test.js/consultation.test.js 用例「T-014 Scout 引擎接线…策展失败回退 legacy（不阻断）」以注入 runScout 驱动——覆盖接线逻辑；真实引擎级宿主路径（runScout→llm 缝→计量）由 HEAD 复探实弹承载（46e32c6d 往返）。manifest completion_verdict 中「scout 引擎级回退红线」指真实宿主路径的持续联调显性化，非该测试未覆盖接线逻辑——两条陈述关系如实写明",
   "shipped_after_last_anchor": [
     "（空——HEAD 复探后无 shipped 变更；42f946c 的 manifest 修正为收口前最后一次文档提交，复探运行于其后树）"
   ],
-  "completion_verdict_v6": "黄金标准验证完成——范围：已测路径（staging 实弹探针覆盖链路，锚=HEAD 复探@42f946c、adviceId=46e32c6d，锚后 shipped=空）+ 65 个计入 AC 每项均有行为锚（220/220 通过于 HEAD 1ffb100 干净树；该两项活缝取值（getCwd 会话工作区缝、tool-result-cap 默认行数 200）经东家裁决 C-013 缓议，该两项不计入这 65 项之内；65 项计入范围内无未处置项，「缓议」为记录在案的排除而非处置完毕）+ parity 差分全等（纯逻辑子集 10 函数 42 用例，已执行截断边界单点变异注入并确认可证伪）+ 未覆盖面从句（宿主强耦合路径——git 子进程/事件流/fs 时序的真实宿主形态——与差分抽样未及的纯逻辑部分不在覆盖声明内；C-013 缓议两项与 scout 引擎级回退红线（consultation.test.js 承载）为已知排除项）+ 复核方式如实标注（同会话子代理三轮循环收敛；核对点以 manifest 记录为准：65 枚举=anchor_coverage 机械输出、哈希终录、probe_freshness 时序）"
+  "shipped_criterion": "shipped=改变 lib/、test/ 或 tools/ 可执行验证资产的提交；纯 manifest/文档提交为非 shipped。manifest 非任何验证工具或实现的输入（parity_differential.mjs 自含 fixtures，grep 无 parity_baseline 引用）——manifest-only 提交对差分全等与变异检出结论无害（adv-26 证据链 1 闭合）",
+  "completion_verdict": null
 }
