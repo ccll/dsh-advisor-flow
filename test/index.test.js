@@ -233,10 +233,11 @@ test('R-01-003/004/006 守则注入 wiring：systemPrompt 子上下文激活即�
     assert.equal(spec.name, 'advisor-flow:guidelines');
     assert.equal(typeof spec.text, 'function'); // text 为函数形态（实时求值）
     const renderedOn = spec.text({ agent: { id: 's1' } });
-    assert.ok(renderedOn.includes('拟议工作'));
-    assert.ok(renderedOn.includes('无可测进展'));
-    assert.ok(renderedOn.includes('已变更工作'));
-    assert.ok(renderedOn.includes('空对象调用 ask_advisor'));
+    assert.ok(renderedOn.includes('proposed work'));
+    assert.ok(renderedOn.includes('no measurable progress'));
+    assert.ok(renderedOn.includes('changed work'));
+    assert.ok(renderedOn.includes('empty object'));
+    assert.ok(renderedOn.startsWith('Advisor invocation settings:\n')); // pi 块头部
 });
 
 test('R-01-003/004/006 守则文本随活配置求值：守则全关时整段不注入（配置变更即时生效）', async () => {

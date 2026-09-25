@@ -3,27 +3,6 @@
   "note": "T-011 红基线预期失败账本（机器可读，C-011）。每项绑定测试标识与 AC；实现落地逐项转绿时必须从本清单移除该条目（expected_fail_check 以集合相等强制），全清单清空且必锚 AC 落齐方可关闭 T-011。",
   "entries": [
     {
-      "test": "R-01-007/AC-04 工具缝缺失不注入：ask_advisor 未激活时守则文本为空",
-      "ac": "R-01-007/AC-04",
-      "kind": "assert",
-      "reason": "守则求值无工具缝激活前置，仍注入指向不存在工具的守则",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
-      "test": "R-01-003/AC-01 文案逐字等值：三类守则与公共收尾行等于 pi 0.8.2 英文原文",
-      "ac": "R-01-003/AC-01",
-      "kind": "assert",
-      "reason": "守则文案仍为中文转写",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
-      "test": "R-01-001/AC-01 咨询工具描述与参数描述逐字等于 pi 0.8.2 原文",
-      "ac": "R-01-001/AC-01",
-      "kind": "assert",
-      "reason": "工具与参数描述仍为中文转写",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
       "test": "R-02-004/AC-04 先脱敏后截断：截断边界不得残留密钥片段（redactAndCapText）",
       "ac": "R-02-004/AC-04",
       "kind": "import",
@@ -80,5 +59,5 @@
       "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     }
   ],
-  "baselineExecuted": 193
+  "baselineExecuted": 196
 }

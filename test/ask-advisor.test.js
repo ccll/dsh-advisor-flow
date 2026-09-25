@@ -89,13 +89,14 @@ test('R-01-001/AC-01 工具定义携带 output {schema, render}——宿主 tool
     const registered = validateHostRegister(tool);
     assert.equal(registered.name, 'ask_advisor');
     assert.ok(tool.output.schema, 'output.schema 随定义声明');
-    const blocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', text: '意见正文。' });
-    assert.deepEqual(blocks, [{ type: 'text', text: '意见正文。\n（adviceId: adv-1）' }]); // adviceId 随渲染输出（staging 实测裁决：结果必须可回查）
+    const blocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', text: '意见正文。', model: 'test/test-model' });
+    // R-01-001/AC-05：结果文本以 `Advisor (model)` 前缀起始并附意见全文；adviceId 随渲染输出（staging 实测裁决：结果必须可回查）
+    assert.deepEqual(blocks, [{ type: 'text', text: 'Advisor (test/test-model)\n\n意见正文。\n（adviceId: adv-1）' }]);
     const failureBlocks = tool.output.render({}, { ok: false, code: 'NO_ADVISOR_MODEL', reason: 'advisor 模型未配置' });
     assert.equal(failureBlocks[0].type, 'text');
     assert.ok(failureBlocks[0].text.includes('NO_ADVISOR_MODEL'));
     const emptyBlocks = tool.output.render({}, undefined);
-    assert.equal(emptyBlocks[0].text, '顾问未返回内容');
+    assert.equal(emptyBlocks[0].text, '(Advisor returned no advice.)'); // pi renderAdvisorResult 兜底文案
 });
 
 /**
