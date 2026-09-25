@@ -85,11 +85,11 @@
     "recorded_as": "RATIONALE C-013（3369002）"
   },
   "artifact_hashes_at_closure": {
-    "head": "3369002f26427499bab0b44f9042976881a6f61f（文档后实现HEAD=a88d27c 系列见 git log）",
+    "head": "1ffb100f723d1221dbf59d4bff0bedfdcf6d8121",
     "lib/index.js": "6978a6bfedd89684129c6b19f81c92edd09740080c4322928c8ea2aac461c933",
     "lib/consultation.js": "b4465d5765c54f42d6e0f5790423351bc3c8cbf26fff6869f9c725286818b878",
     "lib/materials.js": "2a06dab1ab1e5c5f19cd49eea545a73421c31123962b15f85702b3af735207e6",
-    "lib/scout.js": "09bb7d783f1133110acc82e2ee344410187e6f096ebd7eaf1d16931ec44fed4e",
+    "lib/scout.js": "ca629d60d792bf3a10b4945159026c276a638634641a27c40e85b6eb3a161b4a",
     "lib/outcomes.js": "49cbc5c2c8bee572f61c7f47fe023cffaabdc08e497c2a92ca43a90830510c8e"
   },
   "review_independence": "同会话子代理复核（隔离上下文 + 只读纪律），非外部系统——如实标注",
@@ -116,7 +116,7 @@
       "shipped": true
     }
   ],
-  "green_run_tree": "220/220 全绿运行于 HEAD 工作树（修复提交 23fae76/a88d27c/6bbb6a8 之后）；树哈希于收口提交时由 git rev-parse HEAD 记录于终态",
+  "green_run_tree": "220/220 全绿运行于 HEAD=1ffb100f723d1221dbf59d4bff0bedfdcf6d8121 且 git status --porcelain 为空（0 条）——运行时 provenance 已钉住（adv-22 第 4 项）",
   "uncovered_surface_clause": "宿主强耦合路径（除两处 staged 活缝取值外：git 子进程/事件流/fs 时序的真实宿主形态）与差分抽样未及的纯逻辑部分不在本覆盖声明内",
   "zero_stub_anchor_rephrase": "65 个计入 AC 均为行为锚；另两项活缝取值（getCwd/200）经东家裁决缓议（C-013）——不存在「无开口项」的含义；未覆盖面从句：宿主强耦合路径（除两处 staged 活缝取值外）与差分抽样未及的纯逻辑部分不在覆盖声明内"
 }
