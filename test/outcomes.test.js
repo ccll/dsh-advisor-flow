@@ -47,6 +47,6 @@ test('R-01-008/AC-03 回写落盘以 HMAC 哈希承载意见原文，不存明�
     });
     const raw = await fs.readFile(file, 'utf8');
     assert.ok(!raw.includes('意见明文不应落盘'));
-    assert.match(raw, /[0-9a-f]{64}/);
+    assert.match(raw, /[0-9a-f]{16}/); // pi adviceDigest：截断 16 hex（outcomes.ts:125）
     await fs.rm(file, { force: true });
 });

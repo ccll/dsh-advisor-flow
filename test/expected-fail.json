@@ -1,37 +1,7 @@
 {
   "baseline": "a1111c0",
   "note": "T-011 红基线预期失败账本（机器可读，C-011）。每项绑定测试标识与 AC；实现落地逐项转绿时必须从本清单移除该条目（expected_fail_check 以集合相等强制），全清单清空且必锚 AC 落齐方可关闭 T-011。",
-  "entries": [
-    {
-      "test": "T-014 Scout 二次调用计入用量台账（scout 计量）",
-      "ac": "R-02-002/AC-01",
-      "kind": "assert",
-      "reason": "台账无 scout 入口聚合（byEntry.scout undefined）",
-      "expect": "Cannot read properties of undefined (reading 'calls')"
-    }
-  ],
-  "files": [
-    {
-      "file": "test/outcomes.test.js",
-      "reason": "lib/outcomes.js 与 lib/tools/record-outcome.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": [
-        "R-01-008/AC-01",
-        "R-01-008/AC-02",
-        "R-01-008/AC-03",
-        "R-01-008/AC-04"
-      ],
-      "expect": "ERR_TEST_FAILURE",
-      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
-    },
-    {
-      "file": "test/scout.test.js",
-      "reason": "lib/scout.js 未建（ERR_MODULE_NOT_FOUND）",
-      "acs": [
-        "T-014 spike 后立项"
-      ],
-      "expect": "ERR_TEST_FAILURE",
-      "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
-    }
-  ],
-  "baselineExecuted": 204
+  "entries": [],
+  "files": [],
+  "baselineExecuted": 209
 }
