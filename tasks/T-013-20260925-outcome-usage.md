@@ -6,7 +6,7 @@ id: T-013
 # T-013 回写与用量状态面（record_advisor_outcome + 逐次明细 + 决策统计）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-01-008、R-02-002、R-02-003（C-008 ⑧）
 
 ## 背景与目标
@@ -50,4 +50,9 @@ id: T-013
 - SOLUTION 对照: 产品契约与实现一致；需求追溯索引实现位置（lib/outcomes.js、lib/tools/record-outcome.js、lib/status.js、lib/usage.js、lib/consultation.js）与实现收敛。
 - commit: 843a388
 - commit: 1106cdb
-- review: （窄分片审核 acfa1bfb 在途——回报后填写复审结论）
+- review:
+  - 审核方: 窄分片独立审核子代理（acfa1bfb，outcomes+record-outcome 模块轮 + 复审批次复审）
+  - 目的理解: 回写存储/工具/状态面按 R-01-008 与 R-02-002/003 契约对齐 pi 0.8.2；HMAC 语义、一次性回写、禁用 fail-closed、用量明细/剩余/门统计呈现
+  - 执行方式: 逐模块静态逐字对照（pi outcomes.ts 全文）+ 复审（基线 1106cdb..23fae76）+ 测试实跑（本复审运行 npm test 全绿）
+  - 问题与修复: 枚举越界静默归 unknown→显性拒绝（消解宿主 enum 条件性）；工具名 advisor_record_outcome→record_advisor_outcome（对齐 SOLUTION）；chmod 吞错→显性化；hmacKey 路径 mkdir；commit 失败释放预留（AC-05 延伸）；ADOPTIONS/VALIDATIONS 单源；R-02-002/AC-04~05、R-02-003/AC-03 的 status/gates/index 补全经复审逐条对 PRD 成立（无发现问题）
+  - 复审结论: 复审达标（B10 群与 B2 条件性全部消解）；残余风险：outcome 台账持久化路径（memory-only 待 settings 承载，SOLUTION 已注）

@@ -6,7 +6,7 @@ id: T-012
 # T-012 咨询素材出境链（六区装配 + git 上下文 + 附件授权 + 脱敏对齐）
 
 风险等级: high
-状态: active
+状态: completed
 关联: R-02-004、R-02-006（C-002 补全；C-008 ⑥⑨）
 
 ## 背景与目标
@@ -27,7 +27,7 @@ id: T-012
 ## 收敛方案
 
 - **spike 先行**：会话脉络来源双轨裁决——主轨 dsh-session-query（装配时查询会话条目，含 extractSessionEventText 形态核验）；备轨 observer 事件增量缓冲。spike 结论落 RATIONALE（如需新 C 条目）后再写装配单测。
-- 有序面重建算法（spike 预研定稿，2026-09-25）：过滤 SurfaceEventType 四类事件 → 按 seq 升序应用 surfaceOp（append 追加；`{op:'replace',startSeq,endSeq}` 以 sourceEventSeqs 引用的源事件重建被替换区间——compaction 压缩语义）→ 得到有序消息节点流（类型/turn/step/data）→ 按 pi 会话渲染口径（user/assistant/tool-result 逐条 + per-tool 披露策略 + 行/字节双上限）产出会话脉络文本；工具名经 tool/call 事件按 callId 配对。边界：`ignorable` 事件跳过；未识别非 ignorable 类型 fail-closed 拒绝重建（宿主契约）。
+- 有序面重建算法（spike 预研定稿，2026-09-25）：过滤 SurfaceEventType 消息产出事件（三类 message 面；system 面的 replace 节点按压缩摘要承载）→ 按 seq 升序应用 surfaceOp（append 追加；`{op:'replace',startSeq,endSeq}` 以替换节点覆盖被替换区间——compaction 压缩语义）→ 得到有序消息节点流 → 按 pi 会话渲染口径（user/assistant/tool-result 逐条 + per-tool 披露策略 + 行/字节双上限）产出会话脉络文本；工具名经 tool/call 事件按 callId 配对（append 追加；`{op:'replace',startSeq,endSeq}` 以 sourceEventSeqs 引用的源事件重建被替换区间——compaction 压缩语义）→ 得到有序消息节点流（类型/turn/step/data）→ 按 pi 会话渲染口径（user/assistant/tool-result 逐条 + per-tool 披露策略 + 行/字节双上限）产出会话脉络文本；工具名经 tool/call 事件按 callId 配对。边界：`ignorable` 事件跳过；未识别非 ignorable 类型 fail-closed 拒绝重建（宿主契约）。
 - lib/materials.js（新）：六区装配、advisorMessageText 逐字布局（XML 标签+不可信注记+转义+空兜底）、预算切分、per-call clamp。
 - lib/git-context.js（新）：collectGitContext 语义移植（node child_process 执行 git，5s/16MB 预算、五态注记、redact 先于 cap）。
 - lib/attachments.js（新）：tracked/untracked 读取器（git ls-files 归属校验、安全拒绝、预算、redactAndCapText）。
