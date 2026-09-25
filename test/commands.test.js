@@ -162,15 +162,19 @@ test('R-01-002/AC-02 /advisor on|off 是会话级临时覆盖：立即生效且�
     assert.match(status.text, /本会话开关: on（临时覆盖，不写持久配置）/);
 });
 
-test('R-01-002/AC-02 /advisor-manual 重复发起被拒，/advisor cancel 无进行中时礼貌提示', async () => {
-    const { controller } = makeController({
-        programs: [{ hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] }],
-    });
+test('R-01-002/AC-04 进行中重复发起：新请求中止并替换在飞（被替换方取消终态），cancel 无进行中时礼貌提示', async () => {
+    const hangProgram = { hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] };
+    const { controller } = makeController({ programs: [hangProgram, { ...hangProgram }] });
     const first = controller.startManual('s1', 'a');
     assert.equal(first.started, true);
+    // 替换语义：新请求直接启动并中止在飞请求（旧契约的「重复发起被拒」退役）
     const second = controller.startManual('s1', 'b');
-    assert.equal(second.started, false);
-    assert.match(second.reason, /已有手动咨询进行中/);
+    assert.equal(second.started, true);
+    // 被替换方以取消终态收敛（ok:false，且不误报失败通告）
+    const replaced = await first.promise;
+    assert.equal(replaced.ok, false);
+    assert.equal(replaced.code, 'ADVISOR_FAILED');
+    assert.equal(controller.manualRunning('s1'), true); // 新请求在飞
     controller.cancelManual('s1');
     const registryCalls = [];
     registerAdvisorFlowCommands({ register: (spec) => registryCalls.push(spec) || (() => {}) }, controller);
