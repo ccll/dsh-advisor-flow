@@ -311,9 +311,10 @@ test('R-01-005/AC-02 wiring 处置矩阵：决策 proceed → steer 送达 + 计
     const decision = await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'allow');
     assert.equal(llm.calls.length, 1); // 第 3 次等价调用先评审
-    // 门结果经 delivery.steerAdvice → agent.steer（**Decision: proceed** + 全文）
-    assert.equal(steered.length, 1);
-    assert.equal(steered[0].content[0].text, '**Decision: proceed**\n\nDecision: proceed\n\n重复动作已评审，本次放行。');
+    // pi sendAutomaticGateCall 预告 + sendAutomaticGateResult 结果（**Decision: proceed** + 全文）
+    assert.equal(steered.length, 2);
+    assert.equal(steered[0].content[0].text, 'Automatic Advisor loop review');
+    assert.equal(steered[1].content[0].text, '**Decision: proceed**\n\nDecision: proceed\n\n重复动作已评审，本次放行。');
     assert.equal(steered[0].source.plugin, 'advisor-flow');
     // proceed → 等价计数重置：同一 exec 再两次不拦，第 3 次才再次评审
     await preExecute(exec, () => ({ kind: 'allow' }));
@@ -344,10 +345,10 @@ test('R-01-005/AC-02 wiring 处置矩阵：决策 revise → steer 送达 + deny
     assert.equal(steered.length, 0);
     const decision = await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
-    assert.ok(decision.reason.includes('[advisor:loop-gate]'));
+    assert.ok(decision.reason.startsWith('Advisor loop review: ')); // pi gateReason
     assert.ok(decision.reason.includes('先改用回收站流程'));
-    assert.equal(steered.length, 1); // revise 同样送达门结果
-    assert.ok(steered[0].content[0].text.startsWith('**Decision: revise**'));
+    assert.equal(steered.length, 2); // 预告 + 决策结果
+    assert.ok(steered[1].content[0].text.startsWith('**Decision: revise**'));
 });
 
 
@@ -379,14 +380,14 @@ test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分�
     assert.equal(warn.steered.length, 0);
     const warnDecision = await warn.preExecute(warn.exec, () => ({ kind: 'allow' }));
     assert.equal(warnDecision.kind, 'allow');
-    assert.equal(warn.steered.length, 1);
-    assert.equal(warn.cancelCalls.length, 0);
+    assert.equal(warn.steered.length, 2); // 预告 + blocked 决策结果
 
     // block-tool：仅拦截该次调用
     const tool = await makeCase('block-tool');
     await tool.preExecute(tool.exec, () => ({ kind: 'allow' }));
     const toolDecision = await tool.preExecute(tool.exec, () => ({ kind: 'allow' }));
     assert.equal(toolDecision.kind, 'deny');
+    assert.ok(toolDecision.reason.startsWith('Advisor loop review: '));
     assert.ok(toolDecision.reason.includes('危险状态'));
     assert.equal(tool.cancelCalls.length, 0); // 仅拦截该次调用，不停止会话
 

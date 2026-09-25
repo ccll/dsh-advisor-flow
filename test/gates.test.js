@@ -77,11 +77,11 @@ test('R-01-005/AC-01 真实宿主形状回归：同参三次等价调用，第 3
     assert.equal(decision.kind, 'allow');
     assert.equal(consultCalls.length, 1); // 第 3 次等价调用执行前先评审
     assert.equal(nextCalls.length, 3);
-    // 会话归属来自 exec.agent.id；入口为 gate 且问题含工具名与参数
+    // 会话归属来自 exec.agent.id；入口为 gate 且问句含工具名与次数（pi 问句去参数）
     assert.equal(consultCalls[0].session, 'sess-1');
     assert.equal(consultCalls[0].entry, 'gate');
-    assert.ok(consultCalls[0].question.includes('bash'));
-    assert.ok(consultCalls[0].question.includes('npm test'));
+    assert.ok(consultCalls[0].question.includes('Advisor loop gate: normalized signature for bash repeated 3 times'));
+    assert.ok(!consultCalls[0].question.includes('npm test')); // pi 门问句去参数
 });
 
 test('R-01-005/AC-01 门命中同步阻塞受守护动作直至评审形成（门内联等待时序）', async () => {
@@ -113,10 +113,11 @@ test('R-01-005/AC-02 决策 proceed：门结果 steer 送达（**Decision: proce
     const decision = await engine.handlePreExecute(exec, next);
     assert.equal(decision.kind, 'allow');
     assert.equal(nextCalls.length, 1); // 动作在评审之后放行
-    // 送达文本 = **Decision: proceed** + 意见全文（adviceForGateText 契约）
-    assert.equal(delivered.length, 1);
+    // pi sendAutomaticGateCall 先行通告 + sendAutomaticGateResult 结果送达
+    assert.equal(delivered.length, 2);
     assert.equal(delivered[0].sessionId, 's1');
-    assert.equal(delivered[0].text, '**Decision: proceed**\n\n重复动作已评审，本次放行。');
+    assert.equal(delivered[0].text, 'Automatic Advisor loop review'); // 预告
+    assert.equal(delivered[1].text, '**Decision: proceed**\n\n重复动作已评审，本次放行。');
     // proceed → 等价计数重置：等价键已清空
     assert.equal(observer.loopCount('s1', 'bash', { command: 'npm test' }), 0);
 });
@@ -149,12 +150,13 @@ test('R-01-005/AC-02 决策 revise：门结果 steer 送达 + 该次调用 deny 
         return { kind: 'allow' };
     });
     assert.equal(decision.kind, 'deny');
-    assert.ok(decision.reason.includes('[advisor:loop-gate]'));
+    assert.ok(decision.reason.startsWith('Advisor loop review: ')); // pi gateReason
     assert.ok(decision.reason.includes('先改用回收站流程'));
     assert.equal(nextCalls.length, 0); // 动作未执行
-    // revise 同样送达门结果（执行者必须看见决策与全文）
-    assert.equal(delivered.length, 1);
-    assert.equal(delivered[0].text, '**Decision: revise**\n\n该命令会删除生产数据，先改用回收站流程。');
+    // revise 同样送达门结果（pi sendAutomaticGateCall 预告 + 决策全文）
+    assert.equal(delivered.length, 2);
+    assert.equal(delivered[0].text, 'Automatic Advisor loop review');
+    assert.equal(delivered[1].text, '**Decision: revise**\n\n该命令会删除生产数据，先改用回收站流程。');
 });
 
 test('R-01-005/AC-03 决策 blocked × warn-and-continue：通知后放行且留痕', async () => {
@@ -166,10 +168,10 @@ test('R-01-005/AC-03 决策 blocked × warn-and-continue：通知后放行且留
     const decision = await engine.handlePreExecute(hostExec('bash', {}), next);
     assert.equal(decision.kind, 'allow'); // 警告放行：通知后放行
     assert.equal(nextCalls.length, 1);
-    assert.equal(delivered.length, 1);
-    assert.ok(delivered[0].text.startsWith('**Decision: blocked**'));
+    assert.equal(delivered.length, 2); // 预告 + 决策结果
+    assert.ok(delivered[1].text.startsWith('**Decision: blocked**'));
     // warn-and-continue 处置留痕（warn 日志）
-    assert.ok(logs.warn.some((entry) => String(entry.message).includes('blocked decision continued')));
+    assert.ok(logs.warn.some((entry) => String(entry.message).includes('Advisor gate returned blocked; continuing by configuration.')));
 });
 
 test('R-01-005/AC-03 决策 blocked × block-tool：仅拦截该次调用，原因含意见全文', async () => {
@@ -183,7 +185,7 @@ test('R-01-005/AC-03 决策 blocked × block-tool：仅拦截该次调用，原�
         return { kind: 'allow' };
     });
     assert.equal(decision.kind, 'deny');
-    assert.ok(decision.reason.includes('[advisor:loop-gate]'));
+    assert.ok(decision.reason.startsWith('Advisor loop review: ')); // pi gateReason
     assert.ok(decision.reason.includes('数据损坏风险'));
     assert.equal(nextCalls.length, 0);
 });
@@ -198,14 +200,14 @@ test('R-01-005/AC-03 决策 blocked × block-session：会话封锁 + stopSessio
     });
     const decision = await engine.handlePreExecute(hostExec('bash', {}), () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
-    assert.equal(delivered.length, 1); // blocked 决策同样送达
+    assert.equal(delivered.length, 2); // 预告 + blocked 决策结果
     assert.equal(stops.length, 1); // 尽力停止当前执行
     assert.equal(stops[0].gate, 'loop');
     assert.equal(stops[0].sessionId, 's1');
     // 封锁生效：后续一切工具调用一律拦截，且不再发起咨询
     const after = await engine.handlePreExecute(hostExec('bash', {}, 's1', 'c2'), () => ({ kind: 'allow' }));
     assert.equal(after.kind, 'deny');
-    assert.equal(after.reason.includes('危险状态') || after.reason.includes('封锁'), true);
+    assert.equal(after.reason.includes('危险状态') || after.reason.includes('Advisor session is blocked.'), true);
     assert.equal(consultCalls.length, 1); // 封锁态不再发起咨询
 });
 
@@ -244,8 +246,8 @@ test('R-01-005/AC-04 咨询失败按阻断模式处置：warn-and-continue 放�
     assert.equal(decision.kind, 'allow'); // warn-and-continue：失败也放行，主循环不停摆
     assert.equal(consultCalls.length, 1);
     assert.ok(logs.error.some((entry) => entry.fields.category === 'provider-error'));
-    assert.equal(delivered.length, 1); // 失败通告经 steer 送达执行者（零可见防回归）
-    assert.ok(delivered[0].text.startsWith('[advisor:loop-gate]'));
+    assert.equal(delivered.length, 2); // pi：预告（sendAutomaticGateCall）+ 失败通告
+    assert.ok(delivered[1].text.startsWith('**Advisor gate failure (provider-error):**')); // pi sendAutomaticGateFailure 文案
 });
 
 test('R-01-005/AC-04 咨询失败 × block-tool：该次调用被拦截，原因含失败类别', async () => {
@@ -256,8 +258,8 @@ test('R-01-005/AC-04 咨询失败 × block-tool：该次调用被拦截，原因
     });
     const decision = await engine.handlePreExecute(hostExec('bash', {}), () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
-    assert.ok(decision.reason.includes('[advisor:loop-gate]'));
-    assert.ok(decision.reason.includes('provider-error'));
+    assert.ok(decision.reason.includes('Advisor gate provider-error:')); // pi failureEffect reason 文案
+    assert.ok(decision.reason.includes('Advisor loop gate: normalized signature')); // 前半 = 门问句
     assert.ok(decision.reason.includes('timed out'));
 });
 
