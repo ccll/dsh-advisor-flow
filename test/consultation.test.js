@@ -617,3 +617,34 @@ test('R-02-004/AC-05 附件预算与内容防线：submodule 160000 拒、\0 拒
         rmSync(dir, { recursive: true, force: true });
     }
 });
+
+test('T-014 Scout 引擎接线：scout.enabled 时顾问收到策展脉络；策展失败回退 legacy（不阻断）', async () => {
+    const events = [
+        { type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '旧长内容' }] } } },
+    ];
+    const llm = createFakeLlm([answer('意见一。'), answer('意见二。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ scout: { enabled: true, timeoutMs: 100 } }),
+        getSessionEvents: () => events,
+        runScout: async () => ({ groups: [{ id: 'g1', required: true, text: '策展组文本' }], synthesis: '' }),
+        logger: quietLogger,
+    });
+    await engine.consult({ entry: 'tool', question: '评审' });
+    const curatedSent = llm.calls[0].options.messages[0].content[0].text;
+    assert.ok(curatedSent.includes('策展组文本'));
+    assert.ok(!curatedSent.includes('旧长内容')); // 策展替换 legacy
+
+    // 失败回退：runScout 抛错 → legacy 原样出境（红线：不阻断）
+    const llm2 = createFakeLlm([answer('意见三。')]);
+    const engine2 = createConsultationEngine({
+        llm: llm2,
+        config: resolvedConfig({ scout: { enabled: true, timeoutMs: 100 } }),
+        getSessionEvents: () => events,
+        runScout: async () => { throw new Error('scout down'); },
+        logger: quietLogger,
+    });
+    await engine2.consult({ entry: 'tool', question: '评审' });
+    const fallbackSent = llm2.calls[0].options.messages[0].content[0].text;
+    assert.ok(fallbackSent.includes('旧长内容'));
+});

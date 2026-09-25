@@ -795,3 +795,20 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢�
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 2);
 });
 
+test('T-014 Scout 接线计量：scout.enabled 时二次调用 usage 以 scout 口径入台账', async () => {
+    // 程序序：策展二次调用先于主咨询（callAdvisor 装配阶段先跑 scout）
+    const programs = [
+        answer('{"groups":[{"id":"g1","required":true,"text":"策展组"}],"synthesis":""}', { usage: { inputTokens: 3, outputTokens: 2 } }),
+        answer('意见一。'),
+    ];
+    const llm = createFakeLlm(programs);
+    const { ctx } = makeCtx({ llm });
+    ctx.sessionQuery = { observeSession: async () => ({ events: [{ type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '内容' }] } } }] }) }; // 经 proxy set 登记（inject 先于 apply 激活）
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true } });
+    await services.askAdvisor.execute({ question: 'q' });
+    await settle();
+    const totals = services.usage.totals();
+    assert.equal(totals.byEntry.scout?.calls, 1); // 二次调用以 scout 口径计量（T-014）
+    assert.ok(totals.total.calls >= 2); // 主咨询 + scout 二次调用
+    services.dispose();
+});

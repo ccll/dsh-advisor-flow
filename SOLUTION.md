@@ -349,6 +349,7 @@ flowchart TD
   - `toolPolicies`（工具名 → full|summary|exclude，per-tool 披露策略，默认 full）
   - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
 - `userPreferences`（可选非空字符串，缺省=无偏好区；素材装配偏好区来源，R-02-006/AC-05）
+- `scout.enabled`（默认 false；Scout 策展二次调用开关）与 `scout.timeoutMs`（缺省 = 不限，接线层兜底 30s；T-014）
   - `budget.maxPerSession`（未配置 = 不限）
   - `outcomeLogging`（默认 false）
   - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
@@ -405,8 +406,8 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### Scout 策展
-- 职责: 二次顾问调用对会话脉络做按组策展（required 强制保留、其余按预算填充、synthesis 附不可信注记、整体硬截断），任何失败/超时回退 legacy 脉络（实现 R-01-006Scout 计量与 T-014 spike；Scout 永不阻断咨询主流程）
-- 关键内部结构: 纯策展逻辑（runScout 执行缝注入）；引擎接线（runScout 经 llm 缝的二次调用）为 staging 联调项
+- 职责: 二次顾问调用对会话脉络做按组策展（required 强制保留、其余按预算填充、synthesis 附不可信注记、整体硬截断），任何失败/超时回退 legacy 脉络（实现 T-014 Scout 计量与 spike；Scout 永不阻断咨询主流程）
+- 关键内部结构: 纯策展逻辑（runScout 执行缝注入）；引擎接线已落地（runScout 经 llm 缝的二次调用，计量 scout 口径）
 - 代码位置: lib/scout.js
 - 实现: 单端
 
