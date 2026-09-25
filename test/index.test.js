@@ -176,14 +176,14 @@ test('R-02-001/AC-01 apply 用入口配置创建运行时，返回的服务面�
     assert.equal(services.config().enabled, true);
 
     const result = await services.askAdvisor.execute({ question: 'q' });
-    assert.equal(result.adviceId, 'adv-1');
+    assert.match(result.adviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/); // R-01-001/AC-05：UUID 形态
 
     services.applyConfig({
         ...services.config(),
         advisor: { ...services.config().advisor, model: 'm2' },
     });
     const second = await services.askAdvisor.execute({});
-    assert.equal(second.adviceId, 'adv-2');
+    assert.notEqual(second.adviceId, result.adviceId);
     assert.equal(llm.calls[1].options.model, 'm2');
 
     services.dispose();
@@ -475,7 +475,7 @@ test('R-01-002/AC-01 wiring 级端到端：startManual → agent.steer 收到意
     assert.equal(steered.length, 1);
     assert.ok(Array.isArray(steered[0].content));
     assert.ok(steered[0].content[0].text.includes('手动评审意见正文'));
-    assert.ok(steered[0].content[0].text.includes('（adviceId: adv-1）'));
+    assert.ok(/（adviceId: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}）/.test(steered[0].content[0].text)); // 回查行随 UUID
     assert.equal(typeof steered[0].id, 'string');
     assert.equal(services.commandController.manualRunning('s1'), false);
 });
@@ -500,7 +500,7 @@ test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于�
 
     // 即时生效：set 后的下一次咨询用新模型（R-02-001/AC-01）
     const consulted = await services.askAdvisor.execute({});
-    assert.equal(consulted.adviceId, 'adv-1');
+    assert.match(consulted.adviceId, /^[0-9a-f-]{36}$/);
 });
 
 test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询随 session/disposed 一并清除', async () => {
@@ -580,7 +580,8 @@ test('R-02-001/AC-01 onChange → applyConfig：settings 段变更即时生效�
     hooks.setSource(() => ({ enabled: true, advisor: { provider: 'test', model: 'm2' } }));
     hooks.onChange();
     const after = await services.askAdvisor.execute({});
-    assert.equal(after.adviceId, 'adv-2');
+    assert.match(after.adviceId, /^[0-9a-f-]{36}$/);
+    assert.notEqual(after.adviceId, before.adviceId);
     assert.equal(llm.calls[1].options.model, 'm2');
 });
 
@@ -656,7 +657,7 @@ test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之�
 
     // 咨询入口同样读时求值：真实使用持久化配置（无任何 set 触发）
     const consulted = await services.askAdvisor.execute({});
-    assert.equal(consulted.adviceId, 'adv-1');
+    assert.match(consulted.adviceId, /^[0-9a-f-]{36}$/);
     assert.equal(llm.calls[0].options.model, 'persisted-m');
     assert.equal(writes.length, 0); // 未发生任何持久写
 });

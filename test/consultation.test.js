@@ -19,7 +19,7 @@ function resolvedConfig({ advisor = {}, ...rest } = {}) {
 
 const quietLogger = { info() {}, warn() {}, debug() {} };
 
-test('R-01-001/AC-01 咨询成功返回含 adviceId 的意见文本（无 severity），adviceId 会话内递增', async () => {
+test('R-01-001/AC-01 咨询成功返回含 adviceId 的意见文本（无 severity），adviceId 为 UUID 形态且互不相同', async () => {
     const llm = createFakeLlm([
         answer('第一点：注意边界条件。'),
         answer('第二点：注意重试策略。'),
@@ -27,11 +27,11 @@ test('R-01-001/AC-01 咨询成功返回含 adviceId 的意见文本（无 severi
     const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
     const first = await engine.consult({ entry: 'tool', question: '这个方案稳吗？' });
     assert.equal(first.ok, true);
-    assert.equal(first.adviceId, 'adv-1');
+    assert.match(first.adviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/); // R-01-001/AC-05：UUID 形态
     assert.ok(first.text.includes('边界条件'));
     assert.equal(first.severity, undefined); // C-007：无 severity 分级
     const second = await engine.consult({ entry: 'manual' });
-    assert.equal(second.adviceId, 'adv-2');
+    assert.notEqual(second.adviceId, first.adviceId); // UUID 互不相同（pi randomUUID 语义）
     const call = llm.calls[0];
     assert.equal(call.options.provider, 'test');
     assert.equal(call.options.model, 'test-model');
@@ -162,8 +162,8 @@ test('R-01-001 同会话咨询串行（FIFO），满则丢新并记录；门入�
     const [firstResult, secondResult] = await Promise.all([first, second]);
     assert.equal(firstResult.ok, true);
     assert.equal(secondResult.ok, true);
-    assert.equal(firstResult.adviceId, 'adv-1');
-    assert.equal(secondResult.adviceId, 'adv-2');
+    assert.match(firstResult.adviceId, /^[0-9a-f-]{36}$/);
+    assert.notEqual(secondResult.adviceId, firstResult.adviceId);
 });
 
 test('R-01-005/AC-04 门入口咨询队列满：失败按容量错误归类（budget-exhausted 仅归真实预算耗尽）', async () => {
@@ -350,10 +350,12 @@ test('R-02-004 咨询素材经隐私裁剪与脱敏后发送（引擎集成）',
     assert.ok(sent.includes('评审这个配置'));
 });
 
-test('R-01-001 parseAdvice：JSON 帧宽松兼容提取 note，其余整体为意见（无 severity 分级）', () => {
-    assert.deepEqual(parseAdvice('前置说明\n```json\n{"note": "建议先补集成测试再合并。"}\n```\n后缀'), { text: '建议先补集成测试再合并。' });
+test('R-01-001 parseAdvice：意见为流文本整体（trim），无 JSON 帧解包、无 severity 分级（pi 0.8.2 契约）', () => {
+    // JSON 形状的回复原样呈现——不做帧提取（pi 意见即自由文本）
+    assert.deepEqual(parseAdvice('前置说明\n```json\n{"note": "建议先补集成测试再合并。"}\n```\n后缀'), { text: '前置说明\n```json\n{"note": "建议先补集成测试再合并。"}\n```\n后缀' });
     assert.deepEqual(parseAdvice('{"other": 1} 不是意见帧'), { text: '{"other": 1} 不是意见帧' });
     assert.deepEqual(parseAdvice(undefined), { text: '' });
+    assert.deepEqual(parseAdvice('  意见正文  '), { text: '意见正文' }); // 仅 trim
     assert.equal(parseAdvice('severity: blocker\n先停下').severity, undefined); // 无 severity 分级
 });
 
@@ -362,7 +364,7 @@ test('R-01-005/AC-01 门入口 consult 走 Decision 协议：成功返回 {ok:tr
     const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
     const result = await engine.consult({ entry: 'gate', session: 's1', question: '循环门触发' });
     assert.equal(result.ok, true);
-    assert.equal(result.adviceId, 'adv-1');
+    assert.match(result.adviceId, /^[0-9a-f-]{36}$/);
     assert.equal(result.decision, 'proceed');
     assert.equal(result.markdown, 'Decision: proceed\n\n评审结论：可以继续。');
     assert.equal(result.entry, 'gate');
@@ -370,13 +372,14 @@ test('R-01-005/AC-01 门入口 consult 走 Decision 协议：成功返回 {ok:tr
     assert.equal(llm.calls[0].options.system, ADVISOR_DECISION_SYSTEM);
 });
 
-test('R-01-005/AC-04 门入口空回复：解析失败收敛为 {ok:false, code:ADVISOR_GATE_INVALID, category:empty-response}', async () => {
+test('R-01-005/AC-04 门入口空回复：空意见先行判失败，收敛为 {ok:false, code:ADVISOR_FAILED, category:empty-response}', async () => {
     const llm = createFakeLlm([answer('')]);
     const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
     const result = await engine.consult({ entry: 'gate', session: 's1' });
     assert.equal(result.ok, false);
-    assert.equal(result.code, 'ADVISOR_GATE_INVALID');
-    assert.equal(result.category, 'empty-response');
+    assert.equal(result.code, 'ADVISOR_FAILED');
+    assert.equal(result.category, 'empty-response'); // pi gate-protocol：空回复类别
+    assert.equal(result.reason.includes('Advisor returned no advice.'), true);
 });
 
 test('R-01-005/AC-04 门入口缺决策行：解析失败收敛为 {ok:false,...,category:missing-decision}', async () => {

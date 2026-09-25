@@ -3,13 +3,6 @@
   "note": "T-011 红基线预期失败账本（机器可读，C-011）。每项绑定测试标识与 AC；实现落地逐项转绿时必须从本清单移除该条目（expected_fail_check 以集合相等强制），全清单清空且必锚 AC 落齐方可关闭 T-011。",
   "entries": [
     {
-      "test": "R-01-001/AC-04 空意见判失败：顾问返回空文本时按失败处置而非返回空意见",
-      "ac": "R-01-001/AC-04",
-      "kind": "assert",
-      "reason": "空意见仍以 ok:true 返回",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
       "test": "R-01-007/AC-04 工具缝缺失不注入：ask_advisor 未激活时守则文本为空",
       "ac": "R-01-007/AC-04",
       "kind": "assert",
@@ -28,13 +21,6 @@
       "ac": "R-01-003/AC-01",
       "kind": "assert",
       "reason": "守则文案仍为中文转写",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
-      "test": "R-01-001/AC-05 协议系统提示逐字等于 pi 0.8.2 原文（Verdict 与 Decision 两套）",
-      "ac": "R-01-001/AC-05",
-      "kind": "assert",
-      "reason": "两套顾问系统提示仍为中文转写",
       "expect": "Expected values to be strictly equal"
     },
     {

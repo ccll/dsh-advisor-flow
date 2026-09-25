@@ -20,12 +20,12 @@ test('R-01-001/AC-01 工具调用成功返回意见文本与 adviceId', async ()
 
     const result = await tool.execute({ question: '这个补丁可以吗？' });
     assert.equal(result.ok, true);
-    assert.equal(result.adviceId, 'adv-1');
+    assert.match(result.adviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/); // R-01-001/AC-05：UUID 形态
 
     // 零参调用 → 一般性评审
     const general = await tool.execute({});
     assert.equal(general.ok, true);
-    assert.equal(general.adviceId, 'adv-2');
+    assert.notEqual(general.adviceId, result.adviceId); // UUID 互不相同
 });
 
 test('R-01-001/AC-02 未配置模型时工具返回可诊断错误，不抛出异常', async () => {
