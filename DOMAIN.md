@@ -22,6 +22,7 @@ owner: 双方
 - **波动归一（Volatility Normalization）**: 对时间戳、日期、请求标识类参数值与临时路径的占位归一，使携带波动值的等价重复可被识别。
 - **咨询素材（Consultation Materials）**: 发给顾问的六区结构化素材：会话脉络、仓库上下文、untracked 附件、tracked 附件、偏好区、草稿区；各以不可信标注区呈现。
 - **素材装配器**: 六区顾问请求消息的唯一装配点，执行共享预算切分、档位 clamp 与转义。
+- **Scout 策展**: 以二次顾问调用按组裁剪会话脉络的机制；required 组强制保留，失败或超时回退未策展脉络。
 - **git 上下文（Repository Context）**: 仓库变更摘要或完整补丁，按 `off|summary|full` 档位披露；执行者可按调用收窄但不得超出会话主配置上限。
 - **git 上下文构建器**: 仓库上下文采集组件：变更文件与 shortstat（摘要档）、完整补丁（完整档）、untracked 名单、转义与脱敏先于截断、子进程预算与空树 fallback。
 - **附件（Attachment）**: 经独立 opt-in 后外发的文件内容；tracked 文件需归属校验且须被顾问最近意见点名（tracked 移交验证），untracked 文件仅按配置允许。

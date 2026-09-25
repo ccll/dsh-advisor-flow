@@ -376,7 +376,7 @@ flowchart TD
 | R-02-001 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/config.js；lib/client/card-state.js；lib/client/render.js |
 | R-02-002 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/usage.js；lib/status.js |
 | R-02-003 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/status.js |
-| R-02-004 | 咨询服务 | SOLUTION.md#数据流与信任边界图 | lib/redact.js；lib/materials.js；lib/attachments.js |
+| R-02-004 | 咨询服务 | SOLUTION.md#数据流与信任边界图 | lib/redact.js；lib/materials.js；lib/consultation.js（collectFileEntries） |
 | R-02-005 | 咨询服务 | SOLUTION.md#运行时、并发与失败语义 | lib/consultation.js；lib/gates/index.js |
 | R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js |
 
@@ -401,8 +401,14 @@ flowchart TD
   - 消息布局与不可信注记、转义规则逐字对齐 pi `advisorMessageText`；空消息兜底一致。
   - tracked 移交验证：所列路径必须全部被顾问最近意见点名（词边界匹配），认领一次性消费 `lastAdvice`。
   - 会话脉络来源双轨：主轨 dsh-session-query（装配时查询当前会话条目）；备轨事件增量缓冲（observer 维护，压缩/重写重置）——T-012 spike 裁决主轨可行性后定稿。
-- 代码位置: lib/materials.js；lib/git-context.js；lib/attachments.js
+- 代码位置: lib/materials.js；lib/git-context.js；lib/consultation.js（collectFileEntries）
 - 实现: 单端（宿主）
+
+### Scout 策展
+- 职责: 二次顾问调用对会话脉络做按组策展（required 强制保留、其余按预算填充、synthesis 附不可信注记、整体硬截断），任何失败/超时回退 legacy 脉络（实现 R-01-006Scout 计量与 T-014 spike；Scout 永不阻断咨询主流程）
+- 关键内部结构: 纯策展逻辑（runScout 执行缝注入）；引擎接线（runScout 经 llm 缝的二次调用）为 staging 联调项
+- 代码位置: lib/scout.js
+- 实现: 单端
 
 ### git 上下文构建器
 - 职责: 仓库上下文采集——变更文件名与 shortstat（summary 档）、full 档含 patch、untracked 名单；转义与脱敏先于截断；子进程预算（5s/16MB）与空树 fallback（承接 R-02-006）
