@@ -107,7 +107,7 @@ test('R-01-005/AC-06 交错序列归位：不同签名介入后连续计数归 1
     assert.equal(again.count, 1);
 });
 
-test('R-01-005/AC-06 波动归一：时间戳/请求 id/临时路径占位与 bash 空白折叠不破坏等价（pi session-state 移植）', () => {
+test('R-01-005/AC-07 波动归一：时间戳/日期/请求标识/临时路径值占位与 bash 空白折叠不破坏等价（pi session-state 移植）', () => {
     // 波动键只归一「值」：同键拼写下值变化不影响等价（pi 不改写键名本身）
     assert.equal(
         normalizeToolArgs({ updatedAt: '2026-09-25T10:00:00Z' }, 'api'),

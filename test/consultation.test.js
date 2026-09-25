@@ -50,7 +50,7 @@ test('R-01-001/AC-02 路由不存在（NO_ADAPTER）返回可诊断的失败结�
     const result = await engine.consult({ entry: 'tool', question: 'q' });
     assert.equal(result.ok, false);
     assert.equal(result.code, 'ADVISOR_FAILED');
-    assert.match(result.reason, /咨询失败/);
+    assert.match(result.reason, /no provider adapter for route/); // pi：reason 即原始错误消息
     assert.equal(llm.calls.length, 1); // 单次尝试：无重试
     // 单次失败不影响后续：下一次咨询照常发起单次调用并成功（R-01-001/AC-03）
     const recovered = createConsultationEngine({ llm: createFakeLlm([answer('恢复后的意见。')]), config: resolvedConfig(), logger: quietLogger });
@@ -409,7 +409,7 @@ test('R-01-005/AC-04 provider 失败：gate 入口失败带 provider-error 类�
     assert.equal(gateResult.ok, false);
     assert.equal(gateResult.code, 'ADVISOR_FAILED');
     assert.equal(gateResult.category, 'provider-error'); // gate 入口 provider 失败归类
-    assert.match(gateResult.reason, /咨询失败/);
+    assert.match(gateResult.reason, /connection reset/); // pi：reason 即原始错误消息
 
     // 对照：tool 入口的失败结果不带 category 字段
     const llmTool = createFakeLlm([failure({ code: 'ECONNRESET', message: 'connection reset' })]);
@@ -466,4 +466,58 @@ test('R-01-001/AC-04 空意见判失败：顾问返回空文本时按失败处�
     const result = await engine.consult({ entry: 'tool', question: 'q' });
     assert.equal(result.ok, false);
     assert.equal(result.code, 'ADVISOR_FAILED');
+});
+
+test('R-01-001/AC-06 仓库上下文档位只能收窄：请求高于会话允许档位时被收窄到允许档位', async () => {
+    const llm = createFakeLlm([answer('一。'), answer('二。')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig({ privacy: { repoContext: 'summary' } }), logger: quietLogger });
+    const full = await engine.consult({ entry: 'tool', question: 'q1', gitContext: 'full' });
+    assert.equal(full.ok, true);
+    assert.equal(full.gitContext, 'summary'); // full 请求被收窄到会话允许档位（pi ceiling 语义）
+    const none = await engine.consult({ entry: 'tool', question: 'q2', gitContext: 'none' });
+    assert.equal(none.ok, true);
+    assert.equal(none.gitContext, 'off'); // 低于允许档位请求原样保留（none→off 同义）
+});
+
+test('R-01-001/AC-07 tracked 移交校验：最近意见逐个点名路径且一次性消费；未启用授权即拒绝', async () => {
+    const llm = createFakeLlm([
+        answer('请检查 src/a.js 与 docs/b.md 的当前内容再下结论。'),
+        answer('第二轮意见。'),
+        answer('第三轮意见。'),
+        answer('第四轮意见。'),
+    ]);
+    // 未启用 advisorTrackedFileContent 授权 → 直接拒绝（pi 文案逐字）
+    const closed = createConsultationEngine({ llm, config: resolvedConfig({ privacy: { trackedFileContent: false } }), logger: quietLogger });
+    const denied = await closed.consult({ entry: 'tool', question: 'q0', includeTrackedFiles: ['src/a.js'] });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.reason.includes('Tracked file attachments are disabled'), true);
+    // 启用授权：意见未点名的路径 → 拒绝移交（pi claimTrackedHandoff 文案逐字）
+    const engine = createConsultationEngine({ llm, config: resolvedConfig({ privacy: { trackedFileContent: true } }), logger: quietLogger });
+    const first = await engine.consult({ entry: 'tool', session: 's1', question: 'q1' });
+    assert.equal(first.ok, true);
+    const rejected = await engine.consult({ entry: 'tool', session: 's1', question: 'q2', includeTrackedFiles: ['src/never-mentioned.ts'] });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.reason.includes('Tracked file handoff requires a prior Advisor response'), true);
+    // 点名的路径校验通过并一次性消费：意见被消费后再次移交即拒绝
+    const claimed = await engine.consult({ entry: 'tool', session: 's1', question: 'q3', includeTrackedFiles: ['src/a.js'] });
+    assert.equal(claimed.ok, true);
+    const consumed = await engine.consult({ entry: 'tool', question: 'q4', includeTrackedFiles: ['src/a.js'] });
+    assert.equal(consumed.ok, false); // 意见已消费（一次性移交）
+    assert.equal(consumed.reason.includes('Tracked file handoff requires'), true);
+});
+
+test('R-01-001/AC-08 会话预算耗尽：后续咨询返回预算耗尽诊断值（门入口带 budget-exhausted 类别）', async () => {
+    const llm = createFakeLlm([answer('唯一一次意见。')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig({ budget: { maxPerSession: 1 } }), logger: quietLogger });
+    const first = await engine.consult({ entry: 'tool', session: 's1', question: 'q1' });
+    assert.equal(first.ok, true);
+    const second = await engine.consult({ entry: 'tool', session: 's1', question: 'q2' });
+    assert.equal(second.ok, false);
+    assert.equal(second.code, 'ADVISOR_BUDGET_EXHAUSTED');
+    assert.equal(second.reason.includes('Advisor call budget exhausted for this session.'), true);
+    // 门入口：预算耗尽带 budget-exhausted 类别（处置矩阵的预算分支）
+    const gate = await engine.consult({ entry: 'gate', session: 's1', question: 'gate-q' });
+    assert.equal(gate.ok, false);
+    assert.equal(gate.category, 'budget-exhausted');
+    assert.equal(gate.reason.includes('Advisor gate call budget is exhausted.'), true);
 });

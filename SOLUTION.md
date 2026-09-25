@@ -347,7 +347,7 @@ flowchart TD
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）
   - `toolPolicies`（工具名 → full|summary|exclude，per-tool 披露策略，默认 full）
-  - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
+  - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
   - `budget.maxPerSession`（未配置 = 不限）
   - `outcomeLogging`（默认 false）
   - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
@@ -452,7 +452,7 @@ flowchart TD
 - 职责: `advisor-flow` 命名空间注册与 live re-apply；settings section 注册；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计与干预计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008）。
-  - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、outcomeLogging；旧键警告保留。
+  - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging；旧键警告保留。
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）

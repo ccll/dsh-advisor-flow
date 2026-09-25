@@ -11,7 +11,7 @@ import {
 import { createConsultationEngine } from '../lib/consultation.js';
 import { createUsageLedger } from '../lib/usage.js';
 import { createStatusProvider } from '../lib/status.js';
-import { createFakeLlm, answer } from './helpers.js';
+import { createFakeLlm, answer, failure } from './helpers.js';
 
 /** Build a controller wired to a real engine + fake llm + recorder delivery. */
 function makeController({ raw = { enabled: true, advisor: { provider: 'test', model: 'm' } }, programs } = {}) {
@@ -197,4 +197,16 @@ test('R-01-002/AC-01 命令解析与 usage：未知子命令返回用法文本',
     const advisor = registryCalls.find((spec) => spec.name === 'advisor');
     assert.match(advisor.handler(invocation('bogus')).text, /用法: \/advisor/);
     assert.equal(advisorGatesText({}).includes('completion'), true);
+});
+
+test('R-01-002/AC-03 手动咨询失败：会话经唤醒式消息看到含原因的失败通告（pi 文案逐字）', async () => {
+    const { controller, delivered } = makeController({ programs: [failure(new Error('no provider adapter for route'))] });
+    controller.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && controller.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(controller.manualRunning('s1'), false);
+    const notify = delivered.find((entry) => typeof entry.advice === 'string');
+    assert.ok(notify, '失败通告经唤醒式消息送达');
+    assert.equal(notify.advice, 'Manual Advisor consultation failed: no provider adapter for route'); // pi 文案逐字
 });

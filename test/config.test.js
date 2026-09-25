@@ -75,7 +75,7 @@ test('R-02-001/AC-03 enabled 但缺 provider/model 时禁用且带原因，引�
     assert.equal(engine.pendingCount, 0);
 });
 
-test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认（守则三门布尔 + 循环门阈值 + 阻断模式）', () => {
+test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认（守则三门布尔 + 循环门阈值 + 阻断模式；阈值下界另见 R-01-005/AC-08）', () => {
     const bad = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 'many' } });
     assert.equal(bad.ok, false);
     assert.match(bad.error, /maxTokens/);
@@ -93,7 +93,7 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(badLoopThreshold.ok, false);
     assert.match(badLoopThreshold.error, /threshold/);
 
-    // R-02-001/AC-05：阈值下界 2（pi advisorLoopThreshold ≥2）
+    // R-02-001/AC-05 + R-01-005/AC-08：阈值下界 2（pi advisorLoopThreshold ≥2）
     const thresholdOne = resolveAdvisorFlowConfig({ gates: { loop: { enabled: true, threshold: 1 } } });
     assert.equal(thresholdOne.ok, false);
     assert.match(thresholdOne.error, /threshold/);

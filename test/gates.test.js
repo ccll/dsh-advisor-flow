@@ -63,7 +63,7 @@ const hostExec = (name, args, sessionId = 's1', callId = 'c1') => ({
     signal: undefined,
 });
 
-test('R-01-005/AC-01 真实宿主形状回归：同参三次等价调用，第 3 次执行前拦截并触发咨询', async () => {
+test('R-01-005/AC-01 真实宿主形状回归：同参三次等价调用，第 3 次执行前拦截并触发咨询（门问句去参数见 R-01-005/AC-10）', async () => {
     const { engine, consultCalls, nextCalls, next } = makeGate({
         loop: { enabled: true, threshold: 3 },
         results: [{ ok: true, adviceId: 'adv-1', decision: 'proceed', markdown: '同样的命令已重试两次，请先诊断。' }],
@@ -81,7 +81,7 @@ test('R-01-005/AC-01 真实宿主形状回归：同参三次等价调用，第 3
     assert.equal(consultCalls[0].session, 'sess-1');
     assert.equal(consultCalls[0].entry, 'gate');
     assert.ok(consultCalls[0].question.includes('Advisor loop gate: normalized signature for bash repeated 3 times'));
-    assert.ok(!consultCalls[0].question.includes('npm test')); // pi 门问句去参数
+    assert.ok(!consultCalls[0].question.includes('npm test')); // pi 门问句去参数（R-01-005/AC-10）
 });
 
 test('R-01-005/AC-01 门命中同步阻塞受守护动作直至评审形成（门内联等待时序）', async () => {
@@ -425,4 +425,16 @@ test('R-02-005/AC-02 评审修复回归：压缩/重写路径不再调用已退�
     const wired = createAdviceDelivery({ logger: { info() {}, warn() {}, error() {} } });
     assert.equal(typeof wired.reset, 'undefined'); // 新送达面无 reset（冷却已退役）
     assert.equal(typeof wired.steerAdvice, 'function');
+});
+
+test('R-01-005/AC-09 门命中先送达预通告：评审请求发出前会话收到 Automatic Advisor loop review', async () => {
+    const { engine, consultCalls, delivered, next } = makeGate({
+        loop: { enabled: true, threshold: 1 },
+        results: [{ ok: true, adviceId: 'adv-9', decision: 'proceed', markdown: '评审通过。' }],
+    });
+    const decision = await engine.handlePreExecute(hostExec('bash', { command: 'npm test' }), () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'allow');
+    // 预告先于评审结果送达（pi sendAutomaticGateCall 语义；预告不计入结果）
+    assert.equal(delivered[0].text, 'Automatic Advisor loop review');
+    assert.ok(delivered.length >= 2);
 });
