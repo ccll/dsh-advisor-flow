@@ -22,6 +22,7 @@ id: T-013
 ## 收敛方案
 
 - lib/outcomes.js（新）：appendOutcome（HMAC、锁、轮转）；密钥生成存插件数据目录。
+- pi 0.8.2 落盘机制逐项（2026-09-25 主线程源码提取，实现直接采用）：盐=32 字节随机文件 `advisor-outcomes-salt`（agent 数据目录，0600/目录 0700，link() 原子发布 + EEXIST 重试 20 次）；锁=`advisor-outcomes.jsonl.lock` wx 独占创建，200 次 × 5ms 重试，30s 陈旧锁同文件核验后回收；摘要=HMAC-SHA256(盐).update(advice).digest('hex')**截断 16 hex**——注意本 task 的 test/outcomes.test.js 脚手架现断言 64 hex，实现时须改为 16 hex 与 pi 一致；记录形如 `{ adoption, adviceHash, timestamp, trigger, v: 1, validationStatus }`（意见原文不落盘）；日志=advisor-outcomes.jsonl，1MB 轮转；appendOutcome 为 best-effort 全局遥测。
 - lib/tools/record-outcome.js（新）：工具面（英文描述逐字）。
 - lib/consultation.js：意见账本完整化（issue 时登记 trigger/normalizedQuestion/draft 标记）。
 - lib/status.js、lib/commands.js、lib/client/*：逐次明细、剩余次数、决策统计呈现；设置卡 outcomeLogging 开关。
