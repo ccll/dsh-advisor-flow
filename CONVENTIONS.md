@@ -38,4 +38,5 @@ owner: agent 主笔，项目属主审批
 - `.githooks/pre-commit.d/20-agentmap-lint.sh`：AgentMap 结构、追溯与派生报告。
 - `.githooks/pre-push.d/20-agentmap-lint.sh`：校验待推送历史的 AgentMap 不可变契约。
 - `.githooks/pre-push.d/30-client-bundle-fresh.sh`：client 产物新鲜度守卫（重建 lib/client.js 与源码比对，不同步拒绝推送；构建副作用还原）。
+- `.githooks/pre-push.d/40-anchor-coverage.sh`：锚定覆盖闸门（未锚定 AC ⊆ task 必锚清单双向校验 + 僵尸预期规则；C-010）。
 - 扫描来源：`.`
