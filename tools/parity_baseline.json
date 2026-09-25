@@ -136,12 +136,12 @@
   },
   "selfcheck_runs": {
     "tool": "tools/verdict_selfcheck.mjs",
-    "normal_run": "exit 0：验证输入表述模式 0 命中；悬空引用模式 0 命中；绝对断言模式 0 命中；口径词覆盖 2/2 处；时序断言 3/3 与 git 实序一致（git merge-base --is-ancestor 实证 a88d27c<3369002<1ffb100<42f946c）",
+    "normal_run": "exit 0。逐项（项→命中/总量）：验证输入表述模式→0/0；口径词覆盖→2/2（needed-union=37 与 prd-ac=65 各伴口径词）；时序断言→3/3；悬空引用模式→0/0；绝对断言模式→0/0。五组计数与五项明细一一对应，无歧义摘要。",
     "mutation_check": "--mutation-check 注入残留样本被检出（4 处）——检查可证伪（阳性对照排除「模式写错→恒过」假阳性）",
     "scripts_scope_disclaimer": "模式级证明（词面/模式与 git 对象序），不背书语义结论（adv-40 第 3 条）",
     "timeline_factual_cross_check_note": "时序项为文书断言对 git 历史的事实性交叉核对（adv-40 第 2 条）",
     "five_item_detail": "五项明细（与输出五组计数一一对应）：1 验证输入表述模式 0 命中；2 口径词覆盖 2/2（needed-union=37 与 prd-ac=65 各伴口径词）；3 时序断言 3/3（a88d27c<3369002<1ffb100<42f946c）；4 悬空引用模式 0 命中；5 绝对断言模式 0 命中——摘要与存档一致",
     "capability_boundary": "能检：验证输入表述模式/悬空引用/绝对断言词面/口径词伴生/git 对象序先后。不能检：语义正确性、覆盖完备性、以及未注入过的其他错误类别（阳性对照仅证明被注入那一类的可检出性，不证明覆盖所有错误类）——自写检查器查自写文书的盲区同源为已知结构性局限",
-    "raw_invocation": "node tools/verdict_selfcheck.mjs（exit 0，输出见 normal_run）；node tools/verdict_selfcheck.mjs --mutation-check（检出 4 处）；原始命令行与输出留存于本清单供事后复核（adv-41 最廉价外部化）"
+    "raw_invocation": "原始命令行与输出（manifest 封版哈希记录于收口提交信息——自引用哈希不可稳定，以提交信息为准）：(a) node tools/verdict_selfcheck.mjs → exit 0（输出见 normal_run）；(b) node tools/verdict_selfcheck.mjs --mutation-check → 「注入残留样本被检出（4 处）」；(c) 时序核对：git merge-base --is-ancestor a88d27c 3369002（exit 0）→ a88d27c<3369002；git merge-base --is-ancestor 3369002 1ffb100（exit 0）→ 3369002<1ffb100；git merge-base --is-ancestor 1ffb100 42f946c（exit 0）→ 1ffb100<42f946c——中间层「提交序=已核」的具体命令与输出。"
   }
 }
