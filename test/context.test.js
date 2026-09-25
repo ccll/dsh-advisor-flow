@@ -2,18 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAdvisorUserMessage, capUtf8, HISTORY_WINDOW_MAX_CHARS } from '../lib/context.js';
 
-test('R-02-004/AC-01 repoContext 为 none 时不外发仓库内容且明确告知顾问无仓库访问', () => {
+test('R-02-004/AC-01 repoContext 为 off 时不外发仓库内容且明确告知顾问无仓库访问', () => {
     const { text, dropped } = buildAdvisorUserMessage({
         repoContext: { summary: '内部仓库摘要内容', patch: 'diff --git a/x b/x' },
         question: '这段设计有问题吗？',
-    }, { repoContext: 'none' });
+    }, { repoContext: 'off' });
     assert.ok(!text.includes('内部仓库摘要内容'));
     assert.ok(!text.includes('diff --git'));
     assert.ok(!text.includes('内部仓库摘要'));
     assert.ok(text.includes('仓库上下文'));
     assert.ok(text.includes('没有仓库访问'));
     assert.ok(text.includes('这段设计有问题吗？'));
-    assert.ok(dropped.includes('repoContext:none'));
+    assert.ok(dropped.includes('repoContext:off'));
 });
 
 test('R-02-004/AC-02 文件内容未获 opt-in 时不外发正文，仅附路径并注明', () => {
@@ -58,8 +58,8 @@ test('R-02-004 素材按档位裁剪：history off/delta、toolResults capped、
     assert.ok(!toolsOff.text.includes('结果'));
     assert.ok(toolsOff.dropped.includes('toolResults:off'));
 
-    // repoContext patch 截断
-    const patch = buildAdvisorUserMessage({ repoContext: { patch: 'z'.repeat(9000) } }, { repoContext: 'patch', toolResultMaxBytes: 500 });
+    // repoContext full 档截断（pi gitContext full 语义）
+    const patch = buildAdvisorUserMessage({ repoContext: { patch: 'z'.repeat(9000) } }, { repoContext: 'full', toolResultMaxBytes: 500 });
     assert.ok(Buffer.byteLength(patch.text, 'utf8') < 9000);
     assert.ok(patch.text.includes('截断'));
 
@@ -71,7 +71,7 @@ test('R-02-004 素材按档位裁剪：history off/delta、toolResults capped、
 test('R-02-004 question 与 draft 始终进入素材（隐私档位不裁剪请求本体）', () => {
     const { text } = buildAdvisorUserMessage({ question: '为什么失败？', draft: '我的计划草稿' }, {
         history: 'off',
-        repoContext: 'none',
+        repoContext: 'off',
         toolResults: 'off',
     });
     assert.ok(text.includes('为什么失败？'));

@@ -332,11 +332,15 @@ test('R-01-005/AC-02 wiring 处置矩阵：决策 revise → steer 送达 + deny
     apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
-        gates: { loop: { enabled: true, threshold: 1 } },
+        gates: { loop: { enabled: true, threshold: 2 } },
         failureMode: 'warn-and-continue',
     });
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
     const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'rm -rf /' }, agent: { id: 's1' }, signal: undefined };
+    // 阈值下界为 2（R-02-001/AC-05）：首次调用低于阈值放行，第二次命中门评审
+    const below = await preExecute(exec, () => ({ kind: 'allow' }));
+    assert.equal(below.kind, 'allow');
+    assert.equal(steered.length, 0);
     const decision = await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
     assert.ok(decision.reason.includes('[advisor:loop-gate]'));
@@ -359,7 +363,7 @@ test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分�
         apply(ctx, {
             enabled: true,
             advisor: { provider: 'test', model: 'm' },
-            gates: { loop: { enabled: true, threshold: 1 } },
+            gates: { loop: { enabled: true, threshold: 2 } },
             failureMode,
         });
         const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
@@ -367,8 +371,11 @@ test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分�
         return { preExecute, exec, steered, cancelCalls, llm };
     };
 
-    // warn-and-continue：通知后放行（送达但不拦截、不封锁）
+    // warn-and-continue：通知后放行（送达但不拦截、不封锁）；首次调用低于阈值放行
     const warn = await makeCase('warn-and-continue');
+    const warnBelow = await warn.preExecute(warn.exec, () => ({ kind: 'allow' }));
+    assert.equal(warnBelow.kind, 'allow');
+    assert.equal(warn.steered.length, 0);
     const warnDecision = await warn.preExecute(warn.exec, () => ({ kind: 'allow' }));
     assert.equal(warnDecision.kind, 'allow');
     assert.equal(warn.steered.length, 1);
@@ -376,6 +383,7 @@ test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分�
 
     // block-tool：仅拦截该次调用
     const tool = await makeCase('block-tool');
+    await tool.preExecute(tool.exec, () => ({ kind: 'allow' }));
     const toolDecision = await tool.preExecute(tool.exec, () => ({ kind: 'allow' }));
     assert.equal(toolDecision.kind, 'deny');
     assert.ok(toolDecision.reason.includes('危险状态'));
@@ -383,6 +391,7 @@ test('R-01-005/AC-03 wiring 处置矩阵：决策 blocked × failureMode 三分�
 
     // block-session：会话封锁（agents.cancel 尽力停止）+ 后续调用全 deny
     const session = await makeCase('block-session');
+    await session.preExecute(session.exec, () => ({ kind: 'allow' }));
     const sessionDecision = await session.preExecute(session.exec, () => ({ kind: 'allow' }));
     assert.equal(sessionDecision.kind, 'deny');
     assert.equal(session.cancelCalls.length, 1); // 尽力停止当前执行
@@ -401,11 +410,12 @@ test('R-01-005/AC-04 wiring：咨询失败按阻断模式处置（provider 失�
     apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
-        gates: { loop: { enabled: true, threshold: 1 } },
+        gates: { loop: { enabled: true, threshold: 2 } },
         failureMode: 'block-tool',
     });
     const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
     const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'npm test' }, agent: { id: 's1' }, signal: undefined };
+    await preExecute(exec, () => ({ kind: 'allow' })); // 低于阈值放行
     const decision = await preExecute(exec, () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'deny');
     assert.ok(decision.reason.includes('provider-error')); // 咨询失败按阻断模式处置并留痕

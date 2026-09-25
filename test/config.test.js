@@ -80,9 +80,10 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(bad.ok, false);
     assert.match(bad.error, /maxTokens/);
 
-    const badPrivacy = resolveAdvisorFlowConfig({ privacy: { history: 'all' } });
+    // privacy.history 已退役为未知键（警告保留）；非法值拒绝改用仍受验证的 repoContext
+    const badPrivacy = resolveAdvisorFlowConfig({ privacy: { repoContext: 'bogus' } });
     assert.equal(badPrivacy.ok, false);
-    assert.match(badPrivacy.error, /privacy\.history/);
+    assert.match(badPrivacy.error, /privacy\.repoContext/);
 
     const badFailureMode = resolveAdvisorFlowConfig({ failureMode: 'halt-everything' });
     assert.equal(badFailureMode.ok, false);
@@ -92,25 +93,51 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(badLoopThreshold.ok, false);
     assert.match(badLoopThreshold.error, /threshold/);
 
+    // R-02-001/AC-05：阈值下界 2（pi advisorLoopThreshold ≥2）
+    const thresholdOne = resolveAdvisorFlowConfig({ gates: { loop: { enabled: true, threshold: 1 } } });
+    assert.equal(thresholdOne.ok, false);
+    assert.match(thresholdOne.error, /threshold/);
+
+    // R-02-004/AC-03 前置：repoContext 旧值警告回落（none/patch → summary）
+    const legacyRepo = resolveAdvisorFlowConfig({ privacy: { repoContext: 'patch' } });
+    assert.equal(legacyRepo.ok, true);
+    assert.equal(legacyRepo.config.privacy.repoContext, 'summary');
+    assert.ok(legacyRepo.warnings.some((w) => w.includes('repoContext')));
+
     const unknownOnly = resolveAdvisorFlowConfig({ whatever: 1 });
     assert.equal(unknownOnly.ok, true);
     assert.deepEqual(unknownOnly.warnings, ['whatever']);
+
+    // 旧键（privacy.history / privacy.toolResults）降级为未知键警告保留
+    const legacyKeys = resolveAdvisorFlowConfig({ privacy: { history: 'window', toolResults: 'capped' } });
+    assert.equal(legacyKeys.ok, true);
+    assert.ok(legacyKeys.warnings.includes('privacy.history'));
+    assert.ok(legacyKeys.warnings.includes('privacy.toolResults'));
 
     const empty = resolveAdvisorFlowConfig(undefined);
     assert.equal(empty.ok, true);
     assert.equal(empty.config.enabled, false);
     assert.equal(empty.config.failureMode, DEFAULT_FAILURE_MODE);
     assert.deepEqual(FAILURE_MODES, ['warn-and-continue', 'block-tool', 'block-session']);
-    assert.equal(empty.config.privacy.history, 'window');
+    // C-008 ②：默认值对齐 pi 0.8.2
     assert.equal(empty.config.privacy.fileContent, false);
-    assert.equal(empty.config.privacy.redactSecrets, true);
-    assert.equal(empty.config.budget.maxPerSession, 0);
-    // 守则三门为布尔开关（缺省关），循环门阈值缺省 3
-    assert.equal(empty.config.gates.plan.enabled, false);
-    assert.equal(empty.config.gates.failure.enabled, false);
-    assert.equal(empty.config.gates.completion.enabled, false);
+    assert.equal(empty.config.privacy.untrackedContent, false);
+    assert.equal(empty.config.privacy.redactSecrets, false);
+    assert.equal(empty.config.privacy.repoContext, 'summary');
+    assert.equal(empty.config.budget.maxPerSession, undefined);
+    assert.equal(empty.config.contextMaxChars, 15000);
+    assert.equal(empty.config.gitContextMaxChars, 20000);
+    assert.equal(empty.config.blockOnBlocked, true);
+    assert.deepEqual(empty.config.modelWhitelist, []);
+    assert.deepEqual(empty.config.toolPolicies, {});
+    assert.equal(empty.config.outcomeLogging, false);
+    assert.equal(empty.config.customInvocation, undefined);
+    // 守则三门与循环门默认开启（C-008 ②），循环门阈值缺省 3
+    assert.equal(empty.config.gates.plan.enabled, true);
+    assert.equal(empty.config.gates.failure.enabled, true);
+    assert.equal(empty.config.gates.completion.enabled, true);
     assert.equal(empty.config.gates.loop.threshold, DEFAULT_GATE_THRESHOLD);
-    assert.equal(empty.config.gates.loop.enabled, false);
+    assert.equal(empty.config.gates.loop.enabled, true);
 });
 
 test('R-02-001 门配置解析为结构化对象（三布尔 + 循环门阈值 + failureMode 三值）', () => {

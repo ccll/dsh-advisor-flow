@@ -90,7 +90,7 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     const raw = {
         enabled: true,
         advisor: { provider: 'gpu', model: 'glm-5.3-flash' },
-        gates: { plan: { enabled: true }, failure: { enabled: true }, loop: { enabled: true, threshold: 5 } },
+        gates: { plan: { enabled: true }, failure: { enabled: true }, completion: { enabled: false }, loop: { enabled: true, threshold: 5 } },
         failureMode: 'block-tool',
     };
     const { controller } = makeController({ raw });

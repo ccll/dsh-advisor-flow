@@ -60,5 +60,5 @@ test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-rea
     assert.equal(snapshot.reason, 'missing-advisor-model');
     assert.equal(snapshot.pending, 0);
     assert.equal(snapshot.lastActivity, undefined);
-    assert.equal(snapshot.failureMode, 'warn-and-continue');
+    assert.equal(snapshot.failureMode, 'block-session'); // C-008 ②：默认对齐 pi
 });

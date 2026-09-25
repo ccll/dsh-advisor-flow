@@ -3,20 +3,6 @@
   "note": "T-011 红基线预期失败账本（机器可读，C-011）。每项绑定测试标识与 AC；实现落地逐项转绿时必须从本清单移除该条目（expected_fail_check 以集合相等强制），全清单清空且必锚 AC 落齐方可关闭 T-011。",
   "entries": [
     {
-      "test": "R-02-001/AC-04 默认值对齐 pi 0.8.2：block-session、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3",
-      "ac": "R-02-001/AC-04",
-      "kind": "assert",
-      "reason": "默认值未对齐：failureMode 仍 warn-and-continue、三门与循环门仍默认关、redactSecrets 仍 true",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
-      "test": "R-02-001/AC-05 循环门阈值下界：小于 2 的配置被拒绝",
-      "ac": "R-02-001/AC-05",
-      "kind": "assert",
-      "reason": "threshold=1 仍被接受（下界未收）",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
       "test": "R-01-001/AC-04 空意见判失败：顾问返回空文本时按失败处置而非返回空意见",
       "ac": "R-01-001/AC-04",
       "kind": "assert",

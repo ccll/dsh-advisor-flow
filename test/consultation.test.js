@@ -327,7 +327,7 @@ test('R-02-004 咨询素材经隐私裁剪与脱敏后发送（引擎集成）',
     const engine = createConsultationEngine({
         llm,
         config: resolvedConfig({
-            privacy: { history: 'window', repoContext: 'none', fileContent: false },
+            privacy: { repoContext: 'off', fileContent: false, redactSecrets: true },
         }),
         logger: quietLogger,
     });
