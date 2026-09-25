@@ -39,8 +39,8 @@ def run_suite() -> tuple[dict[str, list[str]], set[str], int | None]:
     passing: set[str] = set()
     executed: list[str] = []
     plan_total: int | None = None
+    skips = 0
     current: str | None = None
-    current_failed: bool = False
     for line in proc.stdout.splitlines():
         plan_match = PLAN_RE.match(line)
         if plan_match:
@@ -52,26 +52,37 @@ def run_suite() -> tuple[dict[str, list[str]], set[str], int | None]:
             number, raw_title = entry.group(1), entry.group(2)
             title = raw_title.split("#", 1)[0].strip()
             current = title
-            current_failed = line.startswith("not ok")
             executed.append(title)
             details.setdefault(title, [])
-            if current_failed:
-                pass
-            else:
-                passing.add(title)
+            if "# SKIP" in raw_title or "# skip" in raw_title:
+                skips += 1
+            if line.startswith("not ok"):
+                continue
+            passing.add(title)
             continue
         if line.startswith("  ") and current:
             details[current].append(line.strip())
     if plan_total is None and executed:
         plan_total = len(executed)
-    return details, passing, plan_total
+    return details, passing, plan_total, skips
 
 
-def compare(details: dict[str, list[str]], passing: set[str], ledger: dict, plan_total: int | None) -> list[str]:
+def compare(
+    details: dict[str, list[str]],
+    passing: set[str],
+    ledger: dict,
+    plan_total: int | None,
+    skips: int = 0,
+) -> list[str]:
     expected: set[str] = {entry["test"] for entry in ledger.get("entries", [])}
     expected |= {item["file"] for item in ledger.get("files", [])}
     failing = set(details) - passing
     errors: list[str] = []
+
+    # 计数等式隐含零 skip/todo：skip 是「已执行未运行」，须显式暴露
+    if skips:
+        errors.append(f"存在 {skips} 个 skip/todo 测试——计数等式隐含零 skip，请显式处置")
+
 
     unexpected = sorted(failing - expected)
     if unexpected:
@@ -109,7 +120,8 @@ def compare(details: dict[str, list[str]], passing: set[str], ledger: dict, plan
 
 
 def self_test() -> int:
-    """合成 fixture 实跑两条报错分支（adv-9 收口项 3）：留存输出与判定。"""
+    """合成 fixture 实跑全部分支并精确断言错误集（adv-9/adv-10 收口）。"""
+    failures: list[str] = []
     ledger = {
         "entries": [
             {"test": "用例甲", "expect": "Expected values to be strictly equal"},
@@ -118,45 +130,81 @@ def self_test() -> int:
         "files": [],
         "baselineExecuted": 2,
     }
-    # 场景一：账本条目已转绿（乙通过、甲失败）→ stale 报错
-    details = {"用例甲": ["Expected values to be strictly equal: + actual - expected"]}
-    passing = {"用例乙"}
-    errors = compare(details, passing, ledger, 2)
-    fired_stale = any("已转绿" in e for e in errors)
+    detail = ["Expected values to be strictly equal: + actual - expected"]
+
+    # 场景一：账本条目已转绿 → stale 报错（错误集精确匹配）
+    errors = compare({"用例甲": detail}, {"用例乙"}, ledger, 2)
+    expected_errors = [
+        "账本条目已转绿，请从 test/expected-fail.json 移除（转绿以运行输出为凭）:",
+        "  - 用例乙",
+    ]
     print(f"[self-test:turned-green] errors={errors}")
-    # 场景二：计划外失败（多出一个未知失败）→ unexpected 报错（独立账本基线 3）
+    if errors != expected_errors:
+        failures.append(f"turned-green 场景错误集不符: {errors}")
+
+    # 场景二：计划外失败 → unexpected 逐项列出（独立账本基线 3）
     ledger2 = dict(ledger, baselineExecuted=3)
-    details2 = {
-        "用例甲": ["Expected values to be strictly equal: + actual - expected"],
-        "用例乙": ["Expected values to be strictly equal: + actual - expected"],
-        "计划外用例": ["Some unexpected crash"],
-    }
-    errors2 = compare(details2, set(), ledger2, 3)
-    fired_unexpected = any("计划外失败" in e for e in errors2) and any(
-        "计划外用例" in e for e in errors2
+    errors2 = compare(
+        {"用例甲": detail, "用例乙": detail, "计划外用例": ["Some unexpected crash"]},
+        set(),
+        ledger2,
+        3,
     )
     print(f"[self-test:unexpected] errors={errors2}")
-    # 场景三：集合相等 + 签名匹配 → 通过
-    details3 = {
-        "用例甲": ["Expected values to be strictly equal: + actual - expected"],
-        "用例乙": ["Expected values to be strictly equal: + actual - expected"],
-    }
-    errors3 = compare(details3, set(), ledger, 2)
-    fired_signature = any("失败签名不符" in e for e in [])
+    if not any("计划外失败" in e for e in errors2) or not any(
+        "  - 计划外用例" in e for e in errors2
+    ):
+        failures.append(f"unexpected 场景未逐项列出计划外用例: {errors2}")
+
+    # 场景三：集合相等 + 签名匹配 → 零错误
+    errors3 = compare({"用例甲": detail, "用例乙": detail}, set(), ledger, 2)
     print(f"[self-test:equal] errors={errors3}")
-    if fired_stale and fired_unexpected and not errors3 and not fired_signature:
-        print("[self-test] passed: 转绿分支与计划外分支均触发，相等场景通过")
-        return 0
-    print("[self-test] failed: 预期分支未按定义触发")
-    return 1
+    if errors3 != []:
+        failures.append(f"相等场景应零错误: {errors3}")
+
+    # 场景四：签名不匹配（账本 expect 标记未出现在详情）→ 失败签名不符
+    ledger4 = {
+        "entries": [{"test": "用例甲", "expect": "NeverAppears"}],
+        "files": [],
+        "baselineExecuted": 1,
+    }
+    errors4 = compare({"用例甲": detail}, set(), ledger4, 1)
+    print(f"[self-test:signature-mismatch] errors={errors4}")
+    if not any("失败签名不符" in e and "NeverAppears" in e for e in errors4):
+        failures.append(f"签名不匹配场景未触发: {errors4}")
+
+    # 场景五：bail-out（计划数 5 > 失败+通过 1）→ 执行计数不符
+    ledger5 = {
+        "entries": [{"test": "用例甲", "expect": "Expected values to be strictly equal"}],
+        "files": [],
+        "baselineExecuted": 5,
+    }
+    errors5 = compare({"用例甲": detail}, set(), ledger5, 5)
+    print(f"[self-test:bail-out] errors={errors5}")
+    if not any("执行计数不符" in e for e in errors5):
+        failures.append(f"bail-out 场景未触发: {errors5}")
+
+    # 场景六：skip/todo 显式暴露（计数等式隐含零 skip）
+    errors6 = compare({}, set(), {"entries": [], "files": []}, 0, skips=1)
+    print(f"[self-test:skip] errors={errors6}")
+    if not any("skip/todo" in e for e in errors6):
+        failures.append(f"skip 场景未触发: {errors6}")
+
+    if failures:
+        print("[self-test] failed:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    print("[self-test] passed: 六场景（转绿/计划外/相等/签名不符/bail-out/skip）全部按定义触发")
+    return 0
 
 
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
     ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
-    details, passing, plan_total = run_suite()
-    errors = compare(details, passing, ledger, plan_total)
+    details, passing, plan_total, skips = run_suite()
+    errors = compare(details, passing, ledger, plan_total, skips)
     failing_count = len(set(details) - passing)
     print(
         f"expected-fail check: failing={failing_count} ledger="

@@ -176,13 +176,15 @@ def self_test() -> int:
         (root / "test").mkdir()
         summary, errors = evaluate(root)
         print(f"[self-test] {summary}")
-        fired_zero_ac = any("零 AC 需求逃逸终态规则" in e and "R-01-002" in e for e in errors)
-        fired_zombie = any("僵尸预期" in e for e in errors)
+        expected_errors = [
+            "僵尸预期：migration task T-001 已终态（completed）但仍有 1 个未锚定 AC",
+            "零 AC 需求逃逸终态规则: R-01-002",
+        ]
         print(f"[self-test] errors={errors}")
-        if fired_zero_ac and fired_zombie:
-            print("[self-test] passed: 零 AC 逃逸分支与僵尸预期均在终态 fixture 下触发")
+        if errors == expected_errors:
+            print("[self-test] passed: 终态 fixture 下错误集恰为 {僵尸预期, 零 AC 逃逸} 且无多余项")
             return 0
-        print("[self-test] failed: 预期错误分支未触发")
+        print("[self-test] failed: 错误集与预期不符（须精确等于两条目标消息）")
         return 1
 
 
