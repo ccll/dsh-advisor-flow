@@ -389,7 +389,7 @@ flowchart TD
   - `maxTokens` 与 `callTimeoutMs` 可配置；deadline 融合 dispose 信号，race 每 chunk。
   - 失败无重试：咨询失败（provider 错误/空回复/缺决策行/矛盾决策行/预算耗尽）直接上抛为门失败类别，按阻断模式处置。
   - 意见为自由文本原样采用（无 JSON 解包——dsh-advisor 谱系遗留物退役）；空意见 = 失败（AdvisorNoAdviceError 语义）；按需咨询协议为英文 `Verdict: sound` 首行约定。
-  - 意见账本：issue（含 normalizedQuestion 与 draft 标记）→ outcome 回写 reserve/commit/release 一次性；`reattachAdvice` 同问去重（归一化 question 匹配历史意见）。
+  - 意见账本：issue（含 normalizedQuestion 与 draft 标记）→ outcome 回写 reserve/commit/release 一次性；`reattachAdvice` 同问去重（归一化 question 匹配历史意见）；预留生命周期随引擎实例存活——引擎重建/会话终止时未决预留释放，不跨进程持久。
 - 代码位置: lib/consultation.js；lib/materials.js；lib/redact.js；lib/outcomes.js
 - 实现: 单端（宿主）
 
@@ -489,7 +489,7 @@ flowchart TD
 - 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`；执行者守则经 `ctx.systemPrompt.section`（text 函数实时求值）。
 - LLM 请求契约（T-009 staging 实测，dsh-llm GenerateOptions）：`messages[].content` 为 ContentBlock 数组；`system` 为字符串；流 chunk 为 `text-delta`/`usage`/`finish`。
 - 用量契约（T-009 staging 核对，dsh-llm TokenUsage）：离散计数，无 `cacheTokens` 与 `cost` 字段；台账未收到的字段记 unavailable。
-- 对齐契约：行为基准为 pi-advisor-flow@0.8.2 冻结制品（C-009）；文案逐字等值断言（程序化字符串表）；分歧账本记录每项 对齐/适配/豁免（C-008）。
+- 对齐契约：行为基准为 pi-advisor-flow@0.8.2 冻结制品（C-009）；制品出处为 npm registry（权威源，完整性字段见 C-009），本地 .tmp-audit/ 仅为缓存副本，可凭校验和复现；文案逐字等值断言（程序化字符串表）；分歧账本记录每项 对齐/适配/豁免（C-008）。
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`；可选服务一律条件 `ctx.inject` 子上下文；绝不以 try/catch 探测 ctx 代理属性。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 与 record_advisor_outcome 为用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径。

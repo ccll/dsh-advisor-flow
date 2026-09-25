@@ -43,6 +43,9 @@ id: T-011
 - `node --test` 全量绿：字符串表逐字断言（守则四行+两系统提示+工具描述）、连续计数交错序列用例、波动归一用例、UUID 形态、空意见失败、门预通告/通告文本、manual 替换、默认值断言（config 对象断言）、threshold 下界拒绝。
 - staging 实弹（af-verify profile）：守则英文注入可见、门命中预告+Decision 送达、abort 极性复现（G-13 裁决输入）。
 - 测试锚定：全部新 AC 落锚后本 task 关闭并切回 strict。
+- 必锚 AC（收敛闸门）：R-01-001/AC-04～08、R-01-002/AC-03～04、R-01-003/AC-03、R-01-005/AC-06～10、R-01-007/AC-01～04、R-02-001/AC-04～05 全部有测试锚点方可关闭。
+- 冲突场景锚点：门问句不参与等价判定——不同参数的问句归一后不得使 threshold 误触发（等价判定仅依工具名+规范化参数，R-01-005/AC-01）。
+- 预期失败清单（红基线 a1111c0，13 项全部预期红，理由=目标行为未实现）：pi-texts 三项（文案仍中文）、observer R-01-005/AC-06（计数仍累积制）、consultation R-01-001/AC-04（空意见仍 ok）、config R-02-001/AC-04～05（默认值未对齐/下界未收）、guidelines R-01-007/AC-04（无工具缝前置）、redact R-02-004/AC-04（redactAndCapText 未实现）、materials/git-context/outcomes/scout 四文件（模块未建，导入即失败）、usage scout 计量（台账入口未含 scout）。npm test 全绿为 T-011 收敛信号之一。
 
 ## 验证矩阵
 
