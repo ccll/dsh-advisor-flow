@@ -524,12 +524,16 @@ test('R-01-001/AC-08 会话预算耗尽：后续咨询返回预算耗尽诊断�
 
 test('R-02-004/AC-05 获授权附件归属校验：符号链接与越界路径拒绝，合法文件按预算读取', async () => {
     const { mkdtempSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const dir = mkdtempSync('.tmp-handoff-');
     try {
         writeFileSync(join(dir, 'a.js'), 'const secret = 1;\n' + 'x'.repeat(300));
         symlinkSync(join(dir, 'a.js'), join(dir, 'link.js'));
+        // git 归属校验前提：a.js 在索引内（未跟踪文件如 .env 拒绝外发）。
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        execFileSync('git', ['add', 'a.js'], { cwd: dir });
         const llm = createFakeLlm([answer('Please review a.js link.js ../outside.js before concluding.'), answer('第二轮意见。')]);
         const engine = createConsultationEngine({
             llm,
