@@ -39,4 +39,5 @@ owner: agent 主笔，项目属主审批
 - `.githooks/pre-push.d/20-agentmap-lint.sh`：校验待推送历史的 AgentMap 不可变契约。
 - `.githooks/pre-push.d/30-client-bundle-fresh.sh`：client 产物新鲜度守卫（重建 lib/client.js 与源码比对，不同步拒绝推送；构建副作用还原）。
 - `.githooks/pre-push.d/40-anchor-coverage.sh`：锚定覆盖闸门（未锚定 AC ⊆ task 必锚清单双向校验 + 僵尸预期规则；C-010）。
+- `.githooks/pre-push.d/50-expected-fail.sh`：预期失败账本校验（运行套件与 `test/expected-fail.json` 集合相等比较——计划外失败或已转绿条目均拒绝；C-011）。
 - 扫描来源：`.`

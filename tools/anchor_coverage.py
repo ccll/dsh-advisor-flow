@@ -115,15 +115,23 @@ def main() -> int:
             else:
                 status_match = STATUS_RE.search(task_files[0].read_text(encoding="utf-8"))
                 status = status_match.group(1) if status_match else "unknown"
-                if status in TERMINAL_STATES and unanchored:
-                    errors.append(
-                        f"僵尸预期：migration task {task_id} 已终态（{status}）"
-                        f"但仍有 {len(unanchored)} 个未锚定 AC"
-                    )
+                if status in TERMINAL_STATES:
+                    if unanchored:
+                        errors.append(
+                            f"僵尸预期：migration task {task_id} 已终态（{status}）"
+                            f"但仍有 {len(unanchored)} 个未锚定 AC"
+                        )
+                    # 零 AC 需求逃逸分支（adv-8）：零 AC 需求不产生「未锚定」信号，
+                    # 终态规则须显式补位——终态后每需求 ≥1 AC。
+                    zero_ac = sorted(rid for rid, ids in acs.items() if not ids)
+                    if zero_ac:
+                        errors.append(f"零 AC 需求逃逸终态规则: {', '.join(zero_ac)}")
 
     print(
         f"anchor coverage: prd-ac={len(all_ids)} anchored={len(all_ids & anchored)}"
         f" unanchored={len(unanchored)} needed-union={len(needed)}"
+        "（needed-union=各 task 必锚清单引用 AC 的并集，区间已展开；"
+        "anchored=测试源码中出现且存在于 PRD 的 AC；unanchored=prd-ac 减 anchored）"
     )
     if errors:
         for error in errors:
