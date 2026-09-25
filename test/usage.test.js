@@ -128,3 +128,11 @@ test('totals 快照为深拷贝且时间戳取自可注入 clock（实现质量�
     assert.equal(fresh.total.inputTokens, 7);
     assert.equal(fresh.byEntry.tool.calls, 2);
 });
+
+test('T-014 Scout 二次调用计入用量台账（scout 计量）', () => {
+    const ledger = createUsageLedger({ logger: { info() {}, warn() {} } });
+    ledger.record({ adviceId: 'adv-s1', entry: 'scout', inputTokens: 5, outputTokens: 2 });
+    const totals = ledger.totals();
+    assert.equal(totals.byEntry.scout.calls, 1);
+    assert.equal(totals.total.calls, 1);
+});

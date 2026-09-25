@@ -96,3 +96,13 @@ test('R-01-005 sessionOf 宽窄两种形态：agent 载体分支、字符串直�
     // 优先级：显式 session 胜于 agent
     assert.equal(sessionOf({ session: 's1', agent: { id: 'sess-1' } }), 's1');
 });
+
+test('R-01-005/AC-06 交错序列归位：不同签名介入后连续计数归 1（连续语义，对齐 pi）', () => {
+    const { observer } = makeObserver();
+    const first = observer.recordCall('s1', 'bash', { command: 'npm test' });
+    assert.equal(first.count, 1);
+    observer.recordCall('s1', 'read', { path: 'a.js' }); // 不同签名介入
+    const again = observer.recordCall('s1', 'bash', { command: 'npm test' });
+    // pi 连续语义：异签名介入使原签名的连续计数归 1，而非按键跨会话累计到 2
+    assert.equal(again.count, 1);
+});

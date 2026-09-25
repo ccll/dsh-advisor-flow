@@ -113,3 +113,15 @@ test('installAdvisorGuidelines：systemPrompt 缝形态不符时守则未注入�
     assert.ok(logs.some((message) => message.includes('systemPrompt 缝形态不符')));
     assert.doesNotThrow(() => installAdvisorGuidelines(undefined, () => ({}), { info() {} }));
 });
+
+test('R-01-007/AC-04 工具缝缺失不注入：ask_advisor 未激活时守则文本为空', () => {
+    const live = () => ({
+        enabled: true,
+        gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } },
+    });
+    // 咨询工具缝未激活（degradations.askAdvisorTool 在场）→ 守则不得指向不存在的工具
+    const inactive = guidelineTextFactory(live)({ agent: {}, askAdvisorActive: false });
+    assert.equal(inactive, '');
+    const active = guidelineTextFactory(live)({ agent: {}, askAdvisorActive: true });
+    assert.ok(active.length > 0);
+});

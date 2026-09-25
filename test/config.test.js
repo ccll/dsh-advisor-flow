@@ -137,3 +137,21 @@ test('R-02-001 门配置解析为结构化对象（三布尔 + 循环门阈值 +
         assert.equal(resolved.config.failureMode, mode);
     }
 });
+
+test('R-02-001/AC-04 默认值对齐 pi 0.8.2：block-session、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3', () => {
+    const resolved = resolveAdvisorFlowConfig({});
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.config.failureMode, 'block-session');
+    assert.equal(resolved.config.gates.plan.enabled, true);
+    assert.equal(resolved.config.gates.failure.enabled, true);
+    assert.equal(resolved.config.gates.completion.enabled, true);
+    assert.equal(resolved.config.gates.loop.enabled, true);
+    assert.equal(resolved.config.gates.loop.threshold, 3);
+    assert.equal(resolved.config.privacy.redactSecrets, false);
+    assert.equal(resolved.config.privacy.repoContext, 'summary');
+});
+
+test('R-02-001/AC-05 循环门阈值下界：小于 2 的配置被拒绝', () => {
+    const low = resolveAdvisorFlowConfig({ gates: { loop: { threshold: 1 } } });
+    assert.equal(low.ok, false);
+});

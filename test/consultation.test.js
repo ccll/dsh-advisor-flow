@@ -456,3 +456,11 @@ test('R-01-002/AC-02 手动咨询进行中可取消：取消返回诊断且不�
     const again = await engine.consult({ entry: 'manual', question: 'q2' });
     assert.equal(again.ok, true);
 });
+
+test('R-01-001/AC-04 空意见判失败：顾问返回空文本时按失败处置而非返回空意见', async () => {
+    const llm = createFakeLlm([answer('')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ADVISOR_FAILED');
+});

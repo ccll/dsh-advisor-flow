@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactText, REDACTED } from '../lib/redact.js';
+import { redactText, REDACTED, redactAndCapText } from '../lib/redact.js';
 
 test('R-02-004/AC-03 脱敏开启时密钥形状值被占位替换', () => {
     const out = redactText([
@@ -31,4 +31,13 @@ test('R-02-004/AC-03 脱敏开启时密钥形状值被占位替换', () => {
 test('R-02-004/AC-03 脱敏可关闭：关闭时原样返回', () => {
     const material = 'token: abc123 sk-Abc12345_-XYZ98765';
     assert.equal(redactText(material, { enabled: false }), material);
+});
+
+test('R-02-004/AC-04 先脱敏后截断：截断边界不得残留密钥片段（redactAndCapText）', () => {
+    // 构造密钥横跨截断边界的素材：先截断会把密钥切成低于形状阈值的残片泄漏
+    const prefix = 'x'.repeat(60);
+    const secret = 'sk-Abc12345_-XYZ98765';
+    const text = `${prefix} ${secret} ${'y'.repeat(200)}`;
+    const out = redactAndCapText(text, 80);
+    assert.doesNotMatch(out, /sk-[A-Za-z0-9_-]{4,}/);
 });
