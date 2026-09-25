@@ -32,7 +32,7 @@
       "gitContextNote": "4 用例（五态注记+受限明示）",
       "adviceDigest": "2 用例",
       "redactText 形状族": "5 用例（赋值/Bearer/AWS 两族/AKIA/ASIA）",
-      "total_cases": 42,
+      "total_cases": "10 函数 42 用例（原 9 函数 39 + scout 3）",
       "reconstructScoutConversation/assembleScout": "3 用例（required 保留/硬截断/synthesis 前缀截断纳入）"
     },
     "excluded_and_why": {
@@ -85,15 +85,16 @@
     "recorded_as": "RATIONALE C-013（3369002）"
   },
   "artifact_hashes_at_closure": {
-    "head": "1ffb100f723d1221dbf59d4bff0bedfdcf6d8121",
+    "head": "42f946c（provenance 提交；实现制品以 1ffb100 为准）",
     "lib/index.js": "6978a6bfedd89684129c6b19f81c92edd09740080c4322928c8ea2aac461c933",
     "lib/consultation.js": "b4465d5765c54f42d6e0f5790423351bc3c8cbf26fff6869f9c725286818b878",
     "lib/materials.js": "2a06dab1ab1e5c5f19cd49eea545a73421c31123962b15f85702b3af735207e6",
     "lib/scout.js": "ca629d60d792bf3a10b4945159026c276a638634641a27c40e85b6eb3a161b4a",
-    "lib/outcomes.js": "49cbc5c2c8bee572f61c7f47fe023cffaabdc08e497c2a92ca43a90830510c8e"
+    "lib/outcomes.js": "49cbc5c2c8bee572f61c7f47fe023cffaabdc08e497c2a92ca43a90830510c8e",
+    "scope_note": "全部 shipped 制品在 HEAD 重算（materials/consultation/conversation-source/tool-result-cap/outcomes/scout/redact/git-context/config/settings/index）"
   },
   "review_independence": "同会话子代理复核（隔离上下文 + 只读纪律），非外部系统——如实标注",
-  "probe_freshness": "最后实弹探针=门探针 v10（严格同参数，运行于含 23fae76 门签名解码修复的树）；其后提交：3369002（仅文档）、6bbb6a8（parity 工具+manifest+adviceDigest 导出）、0e20b3b（清单量化）——实现制品 23fae76 后由 a88d27c（scout 接线，探针 patch 验证）承载",
+  "probe_freshness": "探针时序（adv-23 修正）：门探针 v10（严格同参数、含 23fae76 门签名解码修复树）→ a88d27c（scout 接线）→ scout patch 探针（a88d27c 后）→ 1ffb100（scout 语义对齐，shipped）→ **HEAD 探针复探（同参数，运行于 1ffb100 后干净树，EXIT=0，adviceId=46e32c6d-145c-4246-a3d7-f2901763229b，顾问回复含「基于被截断的上下文」——策展链路实弹在环）**。锚定口径=HEAD 探针复探；锚后 shipped 变更=无。",
   "commits_after_last_probe": [
     {
       "commit": "a88d27c",
@@ -118,5 +119,10 @@
   ],
   "green_run_tree": "220/220 全绿运行于 HEAD=1ffb100f723d1221dbf59d4bff0bedfdcf6d8121 且 git status --porcelain 为空（0 条）——运行时 provenance 已钉住（adv-22 第 4 项）",
   "uncovered_surface_clause": "宿主强耦合路径（除两处 staged 活缝取值外：git 子进程/事件流/fs 时序的真实宿主形态）与差分抽样未及的纯逻辑部分不在本覆盖声明内",
-  "zero_stub_anchor_rephrase": "65 个计入 AC 均为行为锚；另两项活缝取值（getCwd/200）经东家裁决缓议（C-013）——不存在「无开口项」的含义；未覆盖面从句：宿主强耦合路径（除两处 staged 活缝取值外）与差分抽样未及的纯逻辑部分不在覆盖声明内"
+  "zero_stub_anchor_rephrase": "65 个计入 AC 每项均有行为锚，无未处置项；另两项活缝取值（getCwd 会话工作区缝、tool-result-cap 默认行数 200）经东家裁决 C-013 缓议、不计入 65 项计入 AC。未覆盖面从句：宿主强耦合路径（除两处 staged 活缝取值外）与差分抽样未及的纯逻辑部分不在覆盖声明内。",
+  "ac65_scope_note": "65 为裁决后口径（C-013 两项活缝取值不计入计入 AC 集合）；65 枚举与 manifest 记录以 anchor_coverage.py 机械输出为准（prd-ac=65 anchored=65 unanchored=0）",
+  "scout_fourth_case_note": "scout.test.js 4 例 vs 差分 3 例：差分覆盖纯装配面（required/硬截断/synthesis 前缀截断纳入）；第四例为引擎级接线回退红线（runScout 抛错回退 legacy），属缝级行为非纯函数——由引擎级测试承载，不入差分",
+  "shipped_after_last_anchor": [
+    "（空——HEAD 复探后无 shipped 变更；42f946c 的 manifest 修正为收口前最后一次文档提交，复探运行于其后树）"
+  ]
 }
