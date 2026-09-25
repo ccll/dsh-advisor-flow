@@ -59,10 +59,15 @@ id: T-012
 ## 终态与证据
 
 - 实现: 素材出境链四模块 + 引擎装配——lib/materials.js（六区布局逐字 + advisorGitContextBudget）、lib/git-context.js（五态采集/注记/clamp）、lib/redact.js 增 capRepositoryContext 与 redactAndCapText（AC-04）、lib/tool-result-cap.js（capToolResult 头尾双限 + capUtf8Bytes）、lib/conversation-source.js（surface 重建 + 渲染 + 省略标记）、lib/consultation.js 六区管线集成（getSessionEvents/getCwd 缝、collectFileEntries 归属校验、偏好区、终检 redactText）、lib/context.js 退役。
-- 测试: npm test 216/216 全绿；anchor coverage passed（anchored=65/65 全 PRD AC 锚定）；expected-fail 全绿（账本清零、baselineExecuted=216）；account 锚点——materials/git-context/conversation-source/context/redact 五测试文件直锚 R-02-006/AC-01~05、R-02-004/AC-01/03~06。
+- 测试: npm test 216/216 全绿；staging 实弹（af-verify profile）：探针 v10 全绿（顾问从会话脉络确认 bash 命令与输出、仓库注记到达、UUID 回查行）；三断缝（引擎接线缺失/工具面 exec 会话身份/ToolResultBlock 内层正文）经探针 v6-v9 逐层定位收敛（4dc6684）；anchor coverage passed（anchored=65/65 全 PRD AC 锚定）；expected-fail 全绿（账本清零、baselineExecuted=216）；account 锚点——materials/git-context/conversation-source/context/redact 五测试文件直锚 R-02-006/AC-01~05、R-02-004/AC-01/03~06。
 - SOLUTION 对照: 产品契约键清单与实现一致（含 userPreferences 键补正同提交）；需求追溯索引实现位置（lib/materials.js、lib/git-context.js、lib/redact.js、lib/conversation-source.js、lib/tool-result-cap.js、lib/consultation.js）与实现收敛；无漂移项。
 - commit: d1bff98
 - commit: c4c2709
 - commit: 4ecd756
 - commit: 1106cdb
-- review: （窄分片审核 acfa1bfb 在途——回报后填写复审结论；其在途状态即 adv-14 三分式覆盖记录的「窄分片在途」档）
+- review:
+  - 审核方: 窄分片独立审核子代理（acfa1bfb：五模块逐轮增量回报 + 最终汇总，rubric 三级裁决 A/B/C；顾问 ask_advisor adv-17 复核其四条修正全部采纳）
+  - 目的理解: 素材出境链/回写/Scout 对齐 pi 0.8.2（C-008/C-009 基线冻结）；核验六区布局/五态采集/HMAC/策略渲染逐字、PRD R-02-006/R-01-008/R-02-004 各 AC 行为由锚定测试钉住
+  - 执行方式: 五轮逐模块静态逐字对照（pi 参照 + PRD AC + SOLUTION + 宿主类型契约），只报告不修复；基线冻结 1106cdb 并声明漂移
+  - 问题与修复: A 级 4 项（gitContext 默认档→批次一；附件四道防线→批次一；toolResultMaxLines→批次二；textFrom 递归→staging 实弹发现并修）；B 级 10 项（B1/B3/B4/B6/B7/B10 修复；B2 显性拒绝消解条件性；B5/B8/B9 记档取舍保留）；C 级 4 项全修（SOLUTION#Scout 策展 章节新增、DOMAIN 词汇登记、lib/attachments.js 引用修正、fail-closed 兑现）；复审清单遗留①字节口径→f27eb5a 附件链与偏好区全字节口径 + ls-files 双向归一 + submodule 160000 排除
+  - 复审结论: （acfa1bfb 复审在途——回报后填写最终结论；复审遗留项：tool-result-cap 默认行数 200 待联调核定已记档）
