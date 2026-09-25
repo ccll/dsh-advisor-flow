@@ -12,6 +12,7 @@ import {
     escapeRepositoryText, buildAdvisorMessageText, advisorGitContextBudget,
 } from '../lib/materials.js';
 import { selectRecentEntries } from '../lib/conversation-source.js';
+import { curateAdvisorConversation } from '../lib/scout.js';
 import { normalizeToolArgs } from '../lib/observer.js';
 import { adviceDigest } from '../lib/outcomes.js';
 import { TRUNCATION_NOTICE, capRepositoryContext, redactText } from '../lib/redact.js';
@@ -223,6 +224,46 @@ const PI_NOTE = (result, requested, allowed) => {
     return STATUS_NOTES[result.status];
 };
 
+// pi reconstructScoutConversation（scout-reconstruct.ts 逐字体；input=manifest
+// 组清单 + 选中 id + synthesis + 预算——与 port assembleScout 的语义面等价：
+// required 强制保留/按 originalIndex 保序/整体前缀截断/synthesis 注记）。
+const PI_PREFIX_WITHIN = (value, maxChars) => {
+    let result = '';
+    for (const character of value) {
+        if (result.length + character.length > maxChars) {
+            break;
+        }
+        result += character;
+    }
+    return result;
+};
+const PI_SCOUT_RECONSTRUCT = (manifest, selectedIds, synthesis, maxChars = Number.MAX_SAFE_INTEGER) => {
+    const selected = new Set(selectedIds);
+    const evidence = manifest.groups
+        .filter((group) => group.required || selected.has(group.id))
+        .toSorted((left, right) => left.originalIndex - right.originalIndex)
+        .map((group) => group.content);
+    const evidenceText = evidence.join('\n\n');
+    if (maxChars <= 0) {
+        return '';
+    }
+    if (evidenceText.length >= maxChars) {
+        return PI_PREFIX_WITHIN(evidenceText, maxChars);
+    }
+    const inference = synthesis?.trim()
+        ? `[Scout synthesis — untrusted, non-authoritative inference; not evidence]\n${synthesis.trim()}`
+        : undefined;
+    if (!inference) {
+        return evidenceText;
+    }
+    const separator = evidenceText ? '\n\n' : '';
+    const remaining = maxChars - evidenceText.length - separator.length;
+    if (remaining <= 0) {
+        return evidenceText;
+    }
+    return `${evidenceText}${separator}${PI_PREFIX_WITHIN(inference, remaining)}`;
+};
+
 // ── fixtures ──
 
 const fixtures = {
@@ -270,6 +311,11 @@ const fixtures = {
         ['意见正文', 'k'.repeat(32)],
         ['中文意见', 's'.repeat(32)],
     ],
+    scout: [
+        [{ groups: [{ id: 'g1', required: true, originalIndex: 0, content: '必须甲' }, { id: 'g2', required: false, originalIndex: 1, content: '可选乙' }], }, [], '推断', 1000],
+        [{ groups: [{ id: 'g1', required: false, originalIndex: 0, content: '可选甲' }, { id: 'g2', required: true, originalIndex: 1, content: '必须乙' }], }, [], '', 40],
+        [{ groups: [{ id: 'g1', required: true, originalIndex: 0, content: '关键' }, { id: 'g2', required: false, originalIndex: 1, content: '补充' }], }, ['g2'], '推断内容', 30],
+    ],
 };
 
 // ── 比对 ──
@@ -294,6 +340,18 @@ for (const material of fixtures.messageText) {
 for (const [ctxMax, gitMax] of fixtures.gitBudget) compare('advisorGitContextBudget', Math.min(gitMax, Math.floor(ctxMax / 2)), advisorGitContextBudget(ctxMax, gitMax));
 for (const [result, requested, allowed] of fixtures.note) compare('gitContextNote', PI_NOTE(result, requested, allowed), gitContextNote(result, requested, allowed));
 for (const [advice, key] of fixtures.digest) compare('adviceDigest', createHmac('sha256', key).update(advice).digest('hex').slice(0, 16), adviceDigestPort(advice, key));
+for await (const [manifest, selectedIds, synthesis, budget] of fixtures.scout) {
+    // port 侧：curateAdvisorConversation 的纯装配面。契约等价：port 的 runScout
+    // 直接返回 scout 已选组（manifest/selection 在 port 中合一）——差分输入取
+    // 「可选组全部选中」的 pi 等价形态（selectedIds 含全部可选 id）。
+    const allSelected = [...selectedIds, ...manifest.groups.filter((g) => !g.required).map((g) => g.id)];
+    const port = await curateAdvisorConversation({
+        legacy: '',
+        budget,
+        runScout: async () => ({ groups: manifest.groups.map((g) => ({ id: g.id, required: g.required, text: g.content })), synthesis }),
+    });
+    compare(`scout(budget=${budget})`, PI_SCOUT_RECONSTRUCT(manifest, allSelected, synthesis, budget), port.conversation);
+}
 
 // 红移形状：相同 fixtures 双方各跑（形状级，非函数级——pi redaction.ts 的形状族）
 for (const text of [
@@ -340,7 +398,7 @@ if (process.argv.includes('--mutation-check')) {
         console.error('mutation-check 失败：刻意变异未被检出（工具不可证伪）');
         process.exit(1);
     }
-    console.log(`mutation-check: 刻意变异被检出（${caught}/${fixtures.cap.length} 用例报异）——工具可证伪`);
+    console.log(`mutation-check: 截断边界变异注入被检出（${caught}/${fixtures.cap.length} 用例报异；报异者恰为新增加界用例）——单点单向变异可证伪`);
     process.exit(0);
 }
 

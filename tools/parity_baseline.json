@@ -21,9 +21,9 @@
       "redactText 形状族"
     ],
     "pi_copies_source": "pi 0.8.2 src 逐字函数体（剥离宿主依赖导入；session-state.ts:34-130/git.ts:53-75/prompts.ts:15-67/outcomes.ts adviceDigest/redaction 形状族）",
-    "mutation_check": "node tools/parity_differential.mjs --mutation-check → 刻意变异被检出（3/8 用例报异）——工具可证伪（阴性对照）",
+    "mutation_check": "node tools/parity_differential.mjs --mutation-check → 截断边界变异注入可证伪（3/8=该函数全部 8 用例中恰为 3 个新增加界用例报异）——证据为单点单向变异（capRepositoryContext contentChars +1），非任意差异灵敏度声明",
     "function_case_counts": {
-      "capRepositoryContext": "8 用例（含 3 个超通告长度截断边界——变异可见前提）",
+      "capRepositoryContext": "8 用例（原 5 + 新增 3 超通告长度截断边界——总数 39 已含新增）",
       "normalizedToolSignature": "5 用例（空白折叠/引号内保序/tmp 占位/波动键/嵌套键排序）",
       "capToolResult": "5 用例（头尾切分/字节边界/零上限/多字节/精确不截断）",
       "selectRecentEntries": "4 用例（省略标记/最新条截断/空集/紧预算）",
@@ -32,14 +32,17 @@
       "gitContextNote": "4 用例（五态注记+受限明示）",
       "adviceDigest": "2 用例",
       "redactText 形状族": "5 用例（赋值/Bearer/AWS 两族/AKIA/ASIA）",
-      "total_cases": 39
+      "total_cases": 42,
+      "reconstructScoutConversation/assembleScout": "3 用例（required 保留/硬截断/synthesis 前缀截断纳入）"
     },
     "excluded_and_why": {
       "collectGitContext": "宿主 git 子进程耦合——五态语义由注入 runner 的单元测试承载（test/git-context.test.js），差分不含",
       "recentConversation/reconstructSurface": "sessionQuery 事件流耦合——由 staging 实弹探针（v9/v10）与单元测试承载",
-      "salt()/withOutcomeLock": "fs 时序耦合——由 outcomes 单元测试承载（HMAC/盐/锁分项）",
-      "curateAdvisorConversation": "纯逻辑已含 runScout 注入——由 test/scout.test.js 承载（差分重复无增益）"
-    }
+      "withOutcomeLock/salt": "fs 时序与进程锁耦合——由 outcomes 单元测试承载（HMAC/盐/锁分项）",
+      "curateAdvisorConversation": "已纳入差分（scout 三用例）；其 runScout 缝与回退红线由 test/scout.test.js 承载（该测试派生自本黄金标准的 staging 探针判据）"
+    },
+    "denominator": "共 14 函数/单元：10 计入（上表逐函数）+ 4 排除（excluded_and_why——curateAdvisorConversation 已由差分纳入后从排除表移除，见下）",
+    "exclusion_count": "排除 4 项（上表）；denominator=10+4=14"
   },
   "evidence_tiers": {
     "behavior_anchored_via_injected_seams": "65/65 全部 PRD AC 均以注入缝级行为测试锚定（无桩级 AC 锚）——staged 开口项影响的是活缝取值（getCwd/行数默认值），不是 AC 锚点本体",
@@ -90,7 +93,7 @@
     "lib/outcomes.js": "49cbc5c2c8bee572f61c7f47fe023cffaabdc08e497c2a92ca43a90830510c8e"
   },
   "review_independence": "同会话子代理复核（隔离上下文 + 只读纪律），非外部系统——如实标注",
-  "probe_freshness": "十轮实弹探针最后一次（scout patch）运行于 a88d27c 树；其后 3369002 仅文档变更，实现制品与探针时点一致",
+  "probe_freshness": "最后实弹探针=门探针 v10（严格同参数，运行于含 23fae76 门签名解码修复的树）；其后提交：3369002（仅文档）、6bbb6a8（parity 工具+manifest+adviceDigest 导出）、0e20b3b（清单量化）——实现制品 23fae76 后由 a88d27c（scout 接线，探针 patch 验证）承载",
   "commits_after_last_probe": [
     {
       "commit": "a88d27c",
@@ -115,5 +118,5 @@
   ],
   "green_run_tree": "220/220 全绿运行于 HEAD 工作树（修复提交 23fae76/a88d27c/6bbb6a8 之后）；树哈希于收口提交时由 git rev-parse HEAD 记录于终态",
   "uncovered_surface_clause": "宿主强耦合路径（除两处 staged 活缝取值外：git 子进程/事件流/fs 时序的真实宿主形态）与差分抽样未及的纯逻辑部分不在本覆盖声明内",
-  "zero_stub_anchor_rephrase": "65 个计入 AC 均为行为锚；另两项活缝取值（getCwd/200）经东家裁决缓议（C-013）——不存在「无开口项」的含义"
+  "zero_stub_anchor_rephrase": "65 个计入 AC 均为行为锚；另两项活缝取值（getCwd/200）经东家裁决缓议（C-013）——不存在「无开口项」的含义；未覆盖面从句：宿主强耦合路径（除两处 staged 活缝取值外）与差分抽样未及的纯逻辑部分不在覆盖声明内"
 }
