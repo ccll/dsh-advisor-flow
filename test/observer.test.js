@@ -41,13 +41,13 @@ test('R-01-005/AC-05 参数规范化：长字符串截断保留长度标记，�
     assert.notEqual(normalizeToolArgs({ blob: long }), normalizeToolArgs({ blob: `${long}y` }));
 });
 
-test('R-01-005 resetLoopKey 重置连续计数（proceed 放行后的计数重置缝，pi resetRepetition 语义）', () => {
+test('R-01-005 resetRepetition 重置连续计数（proceed 放行后的计数重置缝，pi resetRepetition 语义）', () => {
     const { observer } = makeObserver();
     const first = observer.recordCall('s1', 'bash', { command: 'npm test' });
     assert.equal(first.count, 1);
     const second = observer.recordCall('s1', 'bash', { command: 'npm test' });
     assert.equal(second.count, 2);
-    observer.resetLoopKey('s1');
+    observer.resetRepetition('s1');
     assert.equal(observer.loopCount('s1', 'bash', { command: 'npm test' }), 0);
     // reset 后同一调用重新从 1 计数
     const after = observer.recordCall('s1', 'bash', { command: 'npm test' });
