@@ -116,7 +116,7 @@ test('R-01-005/AC-02 决策 proceed：门结果 steer 送达（**Decision: proce
     // pi sendAutomaticGateCall 先行通告 + sendAutomaticGateResult 结果送达
     assert.equal(delivered.length, 2);
     assert.equal(delivered[0].sessionId, 's1');
-    assert.equal(delivered[0].text, 'Automatic Advisor loop review'); // 预告
+    assert.ok(delivered[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated')); // pi details.question 并入文本 // 预告
     assert.equal(delivered[1].text, '**Decision: proceed**\n\n重复动作已评审，本次放行。');
     // proceed → 等价计数重置：等价键已清空
     assert.equal(observer.loopCount('s1', 'bash', { command: 'npm test' }), 0);
@@ -155,7 +155,7 @@ test('R-01-005/AC-02 决策 revise：门结果 steer 送达 + 该次调用 deny 
     assert.equal(nextCalls.length, 0); // 动作未执行
     // revise 同样送达门结果（pi sendAutomaticGateCall 预告 + 决策全文）
     assert.equal(delivered.length, 2);
-    assert.equal(delivered[0].text, 'Automatic Advisor loop review');
+    assert.ok(delivered[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated')); // pi details.question 并入文本
     assert.equal(delivered[1].text, '**Decision: revise**\n\n该命令会删除生产数据，先改用回收站流程。');
 });
 
@@ -435,6 +435,6 @@ test('R-01-005/AC-09 门命中先送达预通告：评审请求发出前会话�
     const decision = await engine.handlePreExecute(hostExec('bash', { command: 'npm test' }), () => ({ kind: 'allow' }));
     assert.equal(decision.kind, 'allow');
     // 预告先于评审结果送达（pi sendAutomaticGateCall 语义；预告不计入结果）
-    assert.equal(delivered[0].text, 'Automatic Advisor loop review');
+    assert.ok(delivered[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated')); // pi details.question 并入文本
     assert.ok(delivered.length >= 2);
 });

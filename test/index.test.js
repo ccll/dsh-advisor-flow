@@ -313,7 +313,7 @@ test('R-01-005/AC-02 wiring 处置矩阵：决策 proceed → steer 送达 + 计
     assert.equal(llm.calls.length, 1); // 第 3 次等价调用先评审
     // pi sendAutomaticGateCall 预告 + sendAutomaticGateResult 结果（**Decision: proceed** + 全文）
     assert.equal(steered.length, 2);
-    assert.equal(steered[0].content[0].text, 'Automatic Advisor loop review');
+    assert.ok(steered[0].content[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated 3 times'));
     assert.equal(steered[1].content[0].text, '**Decision: proceed**\n\nDecision: proceed\n\n重复动作已评审，本次放行。');
     assert.equal(steered[0].source.plugin, 'advisor-flow');
     // proceed → 等价计数重置：同一 exec 再两次不拦，第 3 次才再次评审

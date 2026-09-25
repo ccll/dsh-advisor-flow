@@ -24,3 +24,4 @@ owner: 双方
 - [维护想法] 向 dsh-advisor（omdsh-dev）上游提 maxTokens/timeout 配置化 issue；本机 node_modules 补丁在插件更新时会被覆盖
 - [需求候选] 意见采纳结果回写（record_advisor_outcome 对应物）与 outcome 统计（pi 侧默认关闭，移植版是否跟进待定）
 - [安全想法] 顾问输出的隔离检疫（当前设计信任顾问文本原样送达；pi 亦无，roadmap 项）
+- [维护想法] T-011 独立审核覆盖缺口回补钩子：窄分片审核（observer/gates/commands/config 四文件）在 task 关闭时仍在途——若其回报行为偏差，作为 T-012/013 审核输入处置；若不能交付，按 adv-14 记为持久残留风险进入总终报（T-011 终态 review 证据「复审结论」栏已明示三分式覆盖）
