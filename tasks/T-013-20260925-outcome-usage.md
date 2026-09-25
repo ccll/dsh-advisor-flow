@@ -45,4 +45,9 @@ id: T-013
 
 ## 终态与证据
 
-（待实现）
+- 实现: lib/outcomes.js（createOutcomeStore：HMAC-SHA256 截断 16 hex、盐临时文件 + link() 原子发布、wx 锁 200×5ms + 30s 陈旧回收、1MB 轮转、chmod 0o600）；lib/tools/record-outcome.js（advisor_record_outcome 工具：一次性回写/禁用提示/未知拒绝不抛出）；lib/consultation.js 增意见账本（reserve/commit/release + dispose 释放未决，AC-05）与 outcomeStore 选项（fail-closed）；lib/status.js 快照增 usageRecords/budgetRemaining/gateDecisions；lib/index.js status 复合引擎面；lib/usage.js ENTRY_TYPES 增 scout。
+- 测试: npm test 216/216 全绿；account 锚点——test/outcomes.test.js（AC-01~04 + AC-05 dispose 释放 + AC-06 fail-closed）、test/status.test.js（R-02-002/AC-04 逐次明细、AC-05 预算剩余、R-02-003/AC-03 门决策统计）；HMAC 期望 64→16 hex 修正（pi outcomes.ts:125 spike 结论）。
+- SOLUTION 对照: 产品契约与实现一致；需求追溯索引实现位置（lib/outcomes.js、lib/tools/record-outcome.js、lib/status.js、lib/usage.js、lib/consultation.js）与实现收敛。
+- commit: 843a388
+- commit: 1106cdb
+- review: （窄分片审核 acfa1bfb 在途——回报后填写复审结论）

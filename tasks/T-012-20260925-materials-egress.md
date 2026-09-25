@@ -58,4 +58,11 @@ id: T-012
 
 ## 终态与证据
 
-（待实现）
+- 实现: 素材出境链四模块 + 引擎装配——lib/materials.js（六区布局逐字 + advisorGitContextBudget）、lib/git-context.js（五态采集/注记/clamp）、lib/redact.js 增 capRepositoryContext 与 redactAndCapText（AC-04）、lib/tool-result-cap.js（capToolResult 头尾双限 + capUtf8Bytes）、lib/conversation-source.js（surface 重建 + 渲染 + 省略标记）、lib/consultation.js 六区管线集成（getSessionEvents/getCwd 缝、collectFileEntries 归属校验、偏好区、终检 redactText）、lib/context.js 退役。
+- 测试: npm test 216/216 全绿；anchor coverage passed（anchored=65/65 全 PRD AC 锚定）；expected-fail 全绿（账本清零、baselineExecuted=216）；account 锚点——materials/git-context/conversation-source/context/redact 五测试文件直锚 R-02-006/AC-01~05、R-02-004/AC-01/03~06。
+- SOLUTION 对照: 产品契约键清单与实现一致（含 userPreferences 键补正同提交）；需求追溯索引实现位置（lib/materials.js、lib/git-context.js、lib/redact.js、lib/conversation-source.js、lib/tool-result-cap.js、lib/consultation.js）与实现收敛；无漂移项。
+- commit: d1bff98
+- commit: c4c2709
+- commit: 4ecd756
+- commit: 1106cdb
+- review: （窄分片审核 acfa1bfb 在途——回报后填写复审结论；其在途状态即 adv-14 三分式覆盖记录的「窄分片在途」档）
