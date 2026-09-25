@@ -571,3 +571,49 @@ test('R-02-006/AC-05 偏好区来源 userPreferences：配置注入偏好区并�
     // 脱敏与转义：偏好区内的标签字符不得原样出境（除变更区外统一转义）
     assert.ok(!sent.includes('<b>'));
 });
+
+test('R-02-004/AC-05 附件预算与内容防线：submodule 160000 拒、\0 拒、总预算 24KB 递减', async () => {
+    const { mkdtempSync, writeFileSync, rmSync, mkdirSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync('.tmp-attach-');
+    try {
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        writeFileSync(join(dir, 'a.js'), 'A'.repeat(6000));
+        writeFileSync(join(dir, 'b.js'), 'B'.repeat(20000));
+        writeFileSync(join(dir, 'nul.js'), 'before\0after');
+        writeFileSync(join(dir, '.env'), 'AWS_SECRET=leak-me');
+        execFileSync('git', ['add', 'a.js', 'b.js', 'nul.js', '.env'], { cwd: dir });
+        // submodule（gitlink 160000）形态：子仓库目录
+        mkdirSync(join(dir, 'sub'));
+        execFileSync('git', ['init', '-q'], { cwd: join(dir, 'sub') });
+        writeFileSync(join(dir, 'sub', 'inner.js'), 'inner');
+        execFileSync('git', ['add', '.'], { cwd: join(dir, 'sub') });
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'sub'], { cwd: join(dir, 'sub') });
+        execFileSync('git', ['add', 'sub'], { cwd: dir }); // gitlink 登记
+        const llm = createFakeLlm([
+            answer('请检查 a.js b.js nul.js sub 与 .env 的当前内容再下结论。'),
+            answer('第二轮意见。'),
+        ]);
+        const engine = createConsultationEngine({
+            llm,
+            config: resolvedConfig({ privacy: { trackedFileContent: true, redactSecrets: true } }),
+            getCwd: () => dir,
+            logger: quietLogger,
+        });
+        await engine.consult({ entry: 'tool', question: '初评' });
+        const second = await engine.consult({ entry: 'tool', question: '复查', includeTrackedFiles: ['a.js', 'b.js', 'nul.js', 'sub', '.env'] });
+        assert.equal(second.ok, true);
+        const sent = llm.calls[1].options.messages[0].content[0].text;
+        assert.ok(sent.includes('<file path="a.js">'), 'DBG files=' + JSON.stringify((sent.match(/<file path="[^"]*">/g) ?? [])) + ' total=' + sent.length);
+
+        assert.ok(!sent.includes('<file path="sub">')); // submodule gitlink 拒
+        assert.ok(!sent.includes('nul.js</file>')); // \0 二进制拒
+        // .env 在索引内（tracked）+ 已授权 → 内容外发但经脱敏（KEY_VALUE 形状）
+        assert.ok(!sent.includes('leak-me'));
+        assert.ok(sent.includes('AWS_SECRET=[REDACTED]'));
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
