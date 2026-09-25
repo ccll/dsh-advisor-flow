@@ -3,5 +3,5 @@
   "note": "T-011 红基线预期失败账本（机器可读，C-011）。每项绑定测试标识与 AC；实现落地逐项转绿时必须从本清单移除该条目（expected_fail_check 以集合相等强制），全清单清空且必锚 AC 落齐方可关闭 T-011。",
   "entries": [],
   "files": [],
-  "baselineExecuted": 209
+  "baselineExecuted": 216
 }

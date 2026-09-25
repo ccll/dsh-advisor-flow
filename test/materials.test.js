@@ -27,7 +27,7 @@ test('R-02-006/AC-01 六区结构与注记：对话/仓库变更/附件/偏好/�
     assert.ok(!escaped.includes('<script>'));
 });
 
-test('R-02-006/AC-03 预算切分边界：空素材兜底文案与 pi 一致', () => {
+test('R-02-006/AC-04 空素材兜底：全空区且无聚焦问句时发送 pi 一致的非空兜底文案', () => {
     const empty = buildAdvisorMessageText({});
     assert.equal(empty, 'No conversation context is available. State that you cannot review without context.');
 });

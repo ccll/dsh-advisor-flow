@@ -62,3 +62,40 @@ test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-rea
     assert.equal(snapshot.lastActivity, undefined);
     assert.equal(snapshot.failureMode, 'block-session'); // C-008 ②：默认对齐 pi
 });
+
+test('R-02-002/AC-04 逐次明细可见：status 快照携带 usageRecords', () => {
+    const ledger = {
+        totals: () => ({ total: { calls: 2 } }),
+        records: () => [{ adviceId: 'a1', entry: 'tool' }, { adviceId: 'a2', entry: 'manual' }],
+    };
+    const status = createStatusProvider({ config: { enabled: true, advisor: {} }, engine: {}, usageLedger: ledger, degradations: {} });
+    const snapshot = status.snapshot();
+    assert.equal(snapshot.usageRecords.length, 2);
+});
+
+test('R-02-002/AC-05 预算剩余可查：快照携带逐会话 remainingCalls', () => {
+    const engine = {
+        status: () => [{ session: 's1', pending: 0 }],
+        remainingCalls: (sessionId) => (sessionId === 's1' ? 2 : undefined),
+        pendingCount: 0,
+    };
+    const status = createStatusProvider({ config: { enabled: true, advisor: {} }, engine, usageLedger: undefined, degradations: {} });
+    const snapshot = status.snapshot();
+    assert.equal(snapshot.budgetRemaining.s1, 2);
+});
+
+test('R-02-003/AC-03 门决策统计呈现：revise 计数与干预累计随决策累加', async () => {
+    const { createGateEngine } = await import('../lib/gates/index.js');
+    const engine = createGateEngine({
+        consult: async () => ({ ok: true, adviceId: 'a1', decision: 'revise', markdown: '请改用更小步骤。' }),
+        observer: { recordCall: () => ({ count: 3 }), resetRepetition: () => {} },
+        delivery: () => {},
+        getConfig: () => ({ enabled: true, failureMode: 'block-tool', gates: { loop: { enabled: true, threshold: 2 } } }),
+    });
+    const denied = await engine.handlePreExecute({ name: 'bash', arguments: 'x', session: 's' }, async () => ({ kind: 'allow' }));
+    assert.equal(denied.kind, 'deny');
+    const stats = engine.decisionStats();
+    assert.equal(stats.revise, 1);
+    assert.equal(stats.interventions, 1);
+    assert.equal(stats.proceed, 0);
+});

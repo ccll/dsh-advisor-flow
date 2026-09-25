@@ -53,7 +53,7 @@ id: T-012
 |---|---|---|
 | 成功 | 适用：六区装配、共享预算切分与不可信注记 | `test/materials.test.js::R-02-006/AC-01 六区结构与注记` |
 | 异常 | 适用：git 失败/非仓库态注记、附件归属校验拒绝 | `test/git-context.test.js::R-02-006/AC-02 五态注记` |
-| 边界配置 | 适用：零预算、关闭档、clamp 收窄与附件溢出切分 | `test/materials.test.js::R-02-006/AC-03 预算切分边界` |
+| 边界配置 | 适用：零预算、关闭档、clamp 收窄与附件溢出切分 | `test/context.test.js::R-02-006/AC-03 预算切分`、`test/materials.test.js::R-02-006/AC-04 空素材兜底` |
 | 副作用 | 适用：出站请求负向断言（无密钥形状残留） | `test/redact.test.js::R-02-004/AC-04 先脱敏后截断` |
 
 ## 终态与证据
