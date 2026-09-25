@@ -322,31 +322,31 @@ test('R-01-001 recordOutcome 向终态咨询追加采纳结果；status 行含�
     assert.equal(statusRows[0].runtime, 'active');
 });
 
-test('R-02-004 咨询素材经隐私裁剪与脱敏后发送（引擎集成）', async () => {
+test('R-02-004 咨询素材经隐私裁剪与脱敏后发送（引擎集成，R-02-006 统一素材契约）', async () => {
     const llm = createFakeLlm([answer('意见。')]);
     const engine = createConsultationEngine({
         llm,
         config: resolvedConfig({
             privacy: { repoContext: 'off', fileContent: false, redactSecrets: true },
         }),
+        // 会话脉络经 sessionQuery 缝注入（T-012 spike 判据①）——含密钥的事件流
+        getSessionEvents: () => [
+            { type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'token: supersecret123' }] } } },
+        ],
+        getCwd: () => process.cwd(),
         logger: quietLogger,
     });
     await engine.consult({
         entry: 'tool',
         question: '评审这个配置',
-        materials: {
-            history: ['token: supersecret123'],
-            repoContext: { summary: '仓库摘要' },
-            files: [{ path: 'a.js', content: 'sk-Abc12345_-XYZ98765' }],
-        },
     });
     const sent = llm.calls[0].options.messages[0].content[0].text;
+    // 会话脉络经脱敏出境（R-02-004/AC-03）
     assert.ok(!sent.includes('supersecret123'));
     assert.ok(sent.includes('token: [REDACTED]'));
-    assert.ok(!sent.includes('仓库摘要'));
-    assert.ok(sent.includes('没有仓库访问'));
-    assert.ok(!sent.includes('sk-Abc12345_-XYZ98765'));
-    assert.ok(sent.includes('a.js（文件内容未授权外发'));
+    // repoContext=off → 仓库变更区仅携带 disabled 注记（pi：不得假设工作树干净）
+    assert.ok(sent.includes('<repository_changes'));
+    assert.ok(sent.includes('Do not assume the working tree is clean'));
     assert.ok(sent.includes('评审这个配置'));
 });
 

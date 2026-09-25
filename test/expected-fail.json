@@ -33,5 +33,5 @@
       "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     }
   ],
-  "baselineExecuted": 202
+  "baselineExecuted": 204
 }

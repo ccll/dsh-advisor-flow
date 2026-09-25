@@ -348,6 +348,7 @@ flowchart TD
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）
   - `toolPolicies`（工具名 → full|summary|exclude，per-tool 披露策略，默认 full）
   - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
+- `userPreferences`（可选非空字符串，缺省=无偏好区；素材装配偏好区来源，R-02-006/AC-05）
   - `budget.maxPerSession`（未配置 = 不限）
   - `outcomeLogging`（默认 false）
   - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
