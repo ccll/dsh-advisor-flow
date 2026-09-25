@@ -41,15 +41,15 @@ test('R-01-005/AC-05 参数规范化：长字符串截断保留长度标记，�
     assert.notEqual(normalizeToolArgs({ blob: long }), normalizeToolArgs({ blob: `${long}y` }));
 });
 
-test('R-01-005 resetLoopKey 清一个等价键（proceed 放行后的计数重置缝）', () => {
+test('R-01-005 resetLoopKey 重置连续计数（proceed 放行后的计数重置缝，pi resetRepetition 语义）', () => {
     const { observer } = makeObserver();
     const first = observer.recordCall('s1', 'bash', { command: 'npm test' });
     assert.equal(first.count, 1);
     const second = observer.recordCall('s1', 'bash', { command: 'npm test' });
     assert.equal(second.count, 2);
-    observer.resetLoopKey('s1', first.key);
+    observer.resetLoopKey('s1');
     assert.equal(observer.loopCount('s1', 'bash', { command: 'npm test' }), 0);
-    // reset 后同一等价键重新从 1 计数
+    // reset 后同一调用重新从 1 计数
     const after = observer.recordCall('s1', 'bash', { command: 'npm test' });
     assert.equal(after.count, 1);
 });
@@ -60,7 +60,7 @@ test('R-01-005 压缩/重写事件重置观察状态：循环等价表不跨压�
     observer.recordCall('s1', 'bash', { command: 'x' });
     // 宿主 session/event 存储记录形状：{type, seq, time, data}，wiring 以 session 载体补会话标识
     observer.onEvent({ type: 'session/compact', seq: 7, time: 0, data: {}, session: 's1' });
-    assert.equal(observer.snapshot('s1').loopKeys, 0);
+    assert.equal(observer.snapshot('s1').repetitionCount, 0);
     // reset 后同一等价键重新从 1 计数
     const after = observer.recordCall('s1', 'write_file', { path: 'a' });
     assert.equal(after.count, 1);
@@ -105,4 +105,36 @@ test('R-01-005/AC-06 交错序列归位：不同签名介入后连续计数归 1
     const again = observer.recordCall('s1', 'bash', { command: 'npm test' });
     // pi 连续语义：异签名介入使原签名的连续计数归 1，而非按键跨会话累计到 2
     assert.equal(again.count, 1);
+});
+
+test('R-01-005/AC-06 波动归一：时间戳/请求 id/临时路径占位与 bash 空白折叠不破坏等价（pi session-state 移植）', () => {
+    // 波动键只归一「值」：同键拼写下值变化不影响等价（pi 不改写键名本身）
+    assert.equal(
+        normalizeToolArgs({ updatedAt: '2026-09-25T10:00:00Z' }, 'api'),
+        normalizeToolArgs({ updatedAt: '1999-01-01T00:00:00Z' }, 'api'),
+    );
+    assert.equal(
+        normalizeToolArgs({ requestId: 'abc-123' }, 'api'),
+        normalizeToolArgs({ requestId: 'xyz-999' }, 'api'),
+    );
+    // 临时路径占位（/tmp 单段，pi normalizeString 形态）
+    assert.equal(
+        normalizeToolArgs({ out: '/tmp/build-abc' }, 'bash'),
+        normalizeToolArgs({ out: '/tmp/xyz' }, 'bash'),
+    );
+    // bash command 空白折叠：引号外连续空白等价
+    assert.equal(
+        normalizeToolArgs({ command: 'npm   test' }, 'bash'),
+        normalizeToolArgs({ command: 'npm test' }, 'bash'),
+    );
+    // 引号内空白保留：两种命令不等价
+    assert.notEqual(
+        normalizeToolArgs({ command: 'npm run "a b"' }, 'bash'),
+        normalizeToolArgs({ command: 'npm run a b' }, 'bash'),
+    );
+    // 非 bash 工具不做空白折叠
+    assert.notEqual(
+        normalizeToolArgs({ command: 'npm   test' }, 'other'),
+        normalizeToolArgs({ command: 'npm test' }, 'other'),
+    );
 });

@@ -518,7 +518,7 @@ test('R-01-002/AC-02 会话销毁清理：临时覆盖与进行中手动咨询�
     subscriptions.find((s) => s.event === 'session/disposed').handler({ id: 's1' });
     assert.equal(services.engine.sessionEnabled('s1'), undefined); // 覆盖清除
     assert.equal(services.commandController.manualRunning('s1'), false); // 手动咨询随会话清理
-    assert.equal(services.observer.snapshot('s1').loopKeys, 0); // 观察状态清理
+    assert.equal(services.observer.snapshot('s1').repetitionCount, 0); // 观察状态清理
     assert.equal(services.delivery.status().agents.includes('s1'), false); // 送达注册清理
 });
 

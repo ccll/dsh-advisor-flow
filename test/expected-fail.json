@@ -10,13 +10,6 @@
       "expect": "Expected values to be strictly equal"
     },
     {
-      "test": "R-01-005/AC-06 交错序列归位：不同签名介入后连续计数归 1（连续语义，对齐 pi）",
-      "ac": "R-01-005/AC-06",
-      "kind": "assert",
-      "reason": "等价计数仍为按键累积制，异签名介入不归位",
-      "expect": "Expected values to be strictly equal"
-    },
-    {
       "test": "R-01-003/AC-01 文案逐字等值：三类守则与公共收尾行等于 pi 0.8.2 英文原文",
       "ac": "R-01-003/AC-01",
       "kind": "assert",
@@ -87,5 +80,5 @@
       "note": "TAP 层可观察签名为合成文件条的 ERR_TEST_FAILURE；底层 ERR_MODULE_NOT_FOUND 走 stderr 不入 TAP"
     }
   ],
-  "baselineExecuted": 192
+  "baselineExecuted": 193
 }
