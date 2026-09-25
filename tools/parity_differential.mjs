@@ -14,7 +14,7 @@ import {
 import { selectRecentEntries } from '../lib/conversation-source.js';
 import { normalizeToolArgs } from '../lib/observer.js';
 import { adviceDigest } from '../lib/outcomes.js';
-import { capRepositoryContext, redactText } from '../lib/redact.js';
+import { TRUNCATION_NOTICE, capRepositoryContext, redactText } from '../lib/redact.js';
 import { capToolResult } from '../lib/tool-result-cap.js';
 import { gitContextNote } from '../lib/git-context.js';
 
@@ -231,6 +231,8 @@ const fixtures = {
     ],
     cap: [
         ['short', 100], ['x'.repeat(200), 50], ['中文'.repeat(50), 30], ['', 10], ['ab', 3],
+        // 超通告长度用例：截断边界变异可见（mutation-check 的检出前提）
+        ['x'.repeat(200), 100], ['y'.repeat(300), 200], ['中文'.repeat(80), 90],
     ],
     signature: [
         ['bash', { command: 'echo hi' }],
@@ -313,6 +315,33 @@ function piRedact(text) {
 }
 function adviceDigestPort(advice, key) {
     return createHmac('sha256', key).update(advice).digest('hex').slice(0, 16);
+}
+
+// ── 阴性对照（--mutation-check）：刻意变异移植实现，工具必须报出差异——
+// 可证伪性自检（advisor adv-21 阻断项 1；同仓三闸门的 --self-test 惯例）。
+if (process.argv.includes('--mutation-check')) {
+    // 变异点：capRepositoryContext 的截断_math（contentChars 少保 1 字符）。
+    const originalCap = capRepositoryContext;
+    const mutated = (value, maxChars) => {
+        if (value.length <= maxChars) return { text: value, truncated: false };
+        const contentChars = Math.max(0, maxChars - TRUNCATION_NOTICE.length + 1); // 刻意偏差
+        return {
+            text: maxChars < TRUNCATION_NOTICE.length ? TRUNCATION_NOTICE.slice(0, maxChars) : `${value.slice(0, contentChars)}${TRUNCATION_NOTICE}`,
+            truncated: true,
+        };
+    };
+    let caught = 0;
+    for (const [value, maxChars] of fixtures.cap) {
+        const pi = JSON.stringify(PI_CAP(value, maxChars));
+        const port = JSON.stringify(mutated(value, maxChars));
+        if (pi !== port) caught += 1;
+    }
+    if (caught === 0) {
+        console.error('mutation-check 失败：刻意变异未被检出（工具不可证伪）');
+        process.exit(1);
+    }
+    console.log(`mutation-check: 刻意变异被检出（${caught}/${fixtures.cap.length} 用例报异）——工具可证伪`);
+    process.exit(0);
 }
 
 // ── 结果 ──

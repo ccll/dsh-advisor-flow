@@ -10,11 +10,36 @@
     "tool": "tools/parity_differential.mjs（advisor adv-20 方案 (a)）",
     "result": "全等（同输入同输出，纯逻辑子集抽样）",
     "subset": [
-      "capRepositoryContext", "normalizedToolSignature（含引号感知折叠/tmp 占位/键排序）",
-      "capToolResult", "selectRecentEntries", "advisorMessageText（六区布局）",
-      "advisorGitContextBudget", "gitContextNote", "adviceDigest", "redactText 形状族"
+      "capRepositoryContext",
+      "normalizedToolSignature（含引号感知折叠/tmp 占位/键排序）",
+      "capToolResult",
+      "selectRecentEntries",
+      "advisorMessageText（六区布局）",
+      "advisorGitContextBudget",
+      "gitContextNote",
+      "adviceDigest",
+      "redactText 形状族"
     ],
-    "pi_copies_source": "pi 0.8.2 src 逐字函数体（剥离宿主依赖导入；session-state.ts:34-130/git.ts:53-75/prompts.ts:15-67/outcomes.ts adviceDigest/redaction 形状族）"
+    "pi_copies_source": "pi 0.8.2 src 逐字函数体（剥离宿主依赖导入；session-state.ts:34-130/git.ts:53-75/prompts.ts:15-67/outcomes.ts adviceDigest/redaction 形状族）",
+    "mutation_check": "node tools/parity_differential.mjs --mutation-check → 刻意变异被检出（3/8 用例报异）——工具可证伪（阴性对照）",
+    "function_case_counts": {
+      "capRepositoryContext": "8 用例（含 3 个超通告长度截断边界——变异可见前提）",
+      "normalizedToolSignature": "5 用例（空白折叠/引号内保序/tmp 占位/波动键/嵌套键排序）",
+      "capToolResult": "5 用例（头尾切分/字节边界/零上限/多字节/精确不截断）",
+      "selectRecentEntries": "4 用例（省略标记/最新条截断/空集/紧预算）",
+      "advisorMessageText": "3 用例（六区全量/全空兜底/转义）",
+      "advisorGitContextBudget": "3 用例",
+      "gitContextNote": "4 用例（五态注记+受限明示）",
+      "adviceDigest": "2 用例",
+      "redactText 形状族": "5 用例（赋值/Bearer/AWS 两族/AKIA/ASIA）",
+      "total_cases": 39
+    },
+    "excluded_and_why": {
+      "collectGitContext": "宿主 git 子进程耦合——五态语义由注入 runner 的单元测试承载（test/git-context.test.js），差分不含",
+      "recentConversation/reconstructSurface": "sessionQuery 事件流耦合——由 staging 实弹探针（v9/v10）与单元测试承载",
+      "salt()/withOutcomeLock": "fs 时序耦合——由 outcomes 单元测试承载（HMAC/盐/锁分项）",
+      "curateAdvisorConversation": "纯逻辑已含 runScout 注入——由 test/scout.test.js 承载（差分重复无增益）"
+    }
   },
   "evidence_tiers": {
     "behavior_anchored_via_injected_seams": "65/65 全部 PRD AC 均以注入缝级行为测试锚定（无桩级 AC 锚）——staged 开口项影响的是活缝取值（getCwd/行数默认值），不是 AC 锚点本体",
@@ -27,13 +52,29 @@
   "ledger_closure_mapping": {
     "note": "预期失败账本 14 项红基线逐项修复转绿（无重分类）；映射（条目 → 修复载体）",
     "mappings": [
-      {"items": "T-011 系 8 条（契约/守则/门/引擎语义）", "fix": "T-011 八分片实现提交 38d09d1..c229f1f"},
-      {"items": "R-02-004/AC-04 redactAndCapText", "fix": "d1bff98（T-012 Slice 1）"},
-      {"items": "materials/git-context 文件级", "fix": "d1bff98"},
-      {"items": "T-014 scout 计量", "fix": "843a388（usage ENTRY_TYPES scout）"},
-      {"items": "outcomes/scout 文件级", "fix": "843a388（模块落地）"}
+      {
+        "items": "T-011 系 8 条（契约/守则/门/引擎语义）",
+        "fix": "T-011 八分片实现提交 38d09d1..c229f1f"
+      },
+      {
+        "items": "R-02-004/AC-04 redactAndCapText",
+        "fix": "d1bff98（T-012 Slice 1）"
+      },
+      {
+        "items": "materials/git-context 文件级",
+        "fix": "d1bff98"
+      },
+      {
+        "items": "T-014 scout 计量",
+        "fix": "843a388（usage ENTRY_TYPES scout）"
+      },
+      {
+        "items": "outcomes/scout 文件级",
+        "fix": "843a388（模块落地）"
+      }
     ],
-    "closure_evidence": "test/expected-fail.json 现 entries=[] 且三闸门+220 全绿（运行输出为凭）"
+    "closure_evidence": "test/expected-fail.json 现 entries=[] 且三闸门+220 全绿（运行输出为凭）",
+    "note2": "每条目的定向修复提交见 mappings；全局运行输出为闭环复核而非唯一证据"
   },
   "owner_decision_verbatim": {
     "question": "三个开口项（Scout 引擎接线/getCwd 会话工作区缝/tool-result-cap 默认行数 200）如何处置？",
@@ -49,5 +90,30 @@
     "lib/outcomes.js": "49cbc5c2c8bee572f61c7f47fe023cffaabdc08e497c2a92ca43a90830510c8e"
   },
   "review_independence": "同会话子代理复核（隔离上下文 + 只读纪律），非外部系统——如实标注",
-  "probe_freshness": "十轮实弹探针最后一次（scout patch）运行于 a88d27c 树；其后 3369002 仅文档变更，实现制品与探针时点一致"
+  "probe_freshness": "十轮实弹探针最后一次（scout patch）运行于 a88d27c 树；其后 3369002 仅文档变更，实现制品与探针时点一致",
+  "commits_after_last_probe": [
+    {
+      "commit": "a88d27c",
+      "note": "最后一次实弹探针（scout patch）所在树",
+      "shipped": true
+    },
+    {
+      "commit": "3369002",
+      "label": "C-013/TODO/parity 标注",
+      "shipped": false
+    },
+    {
+      "commit": "6bbb6a8",
+      "label": "parity 差分工具+manifest+adviceDigest 导出",
+      "shipped": true
+    },
+    {
+      "commit": "23fae76 后的实现树",
+      "label": "探针复验（v10）运行于含全部门签名解码修复的树",
+      "shipped": true
+    }
+  ],
+  "green_run_tree": "220/220 全绿运行于 HEAD 工作树（修复提交 23fae76/a88d27c/6bbb6a8 之后）；树哈希于收口提交时由 git rev-parse HEAD 记录于终态",
+  "uncovered_surface_clause": "宿主强耦合路径（除两处 staged 活缝取值外：git 子进程/事件流/fs 时序的真实宿主形态）与差分抽样未及的纯逻辑部分不在本覆盖声明内",
+  "zero_stub_anchor_rephrase": "65 个计入 AC 均为行为锚；另两项活缝取值（getCwd/200）经东家裁决缓议（C-013）——不存在「无开口项」的含义"
 }
