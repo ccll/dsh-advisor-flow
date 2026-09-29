@@ -6,7 +6,7 @@ id: T-015
 # T-015 会话词汇识别权归位：宿主运行时词汇表取代手工白名单快照
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-02-006（C-014；T-012 spike 边界契约的实现收口）
 
 ## 背景与目标
@@ -42,4 +42,16 @@ id: T-015
 
 ## 终态与证据
 
-（active 期间留空；关闭时填写）
+- 实现: `lib/conversation-source.js` 非表面跳过集改为运行时推导——纯函数 `knownNonSurfaceFrom`（宿主已知词汇 − 插件表面集 ∪ 兜底集 `FLOOR_NON_SURFACE`，容器守卫排除字符串畸形导出）；动态导入宿主根包词汇 fire-and-forget，失败回落兜底集并以 `console.warn` 留降级诊断（每进程至多一次）；fail-closed 仅对宿主词汇也不认识的非 ignorable 事件生效。
+- 测试: 回归 5 例新增于 `test/conversation-source.test.js`（policy/end-seed 跳过、ignorable 跳过、双词汇皆未知仍 fail-closed、推导纯函数含缺失与字符串畸形回落断言）；全套件 `npm test` 225 通过 / 0 失败（基线 220 + 新增 5）；`expected_fail_check` passed（账本 baselineExecuted 同步 225）；`anchor_coverage` passed（65/65 锚定）；降级路径实弹验证（摘除链接 → console.warn + 兜底集放行两实证类型，链接已恢复）；真实会话日志事件流探针通过（fail-closed 对日志头记录 `type:"session"` 的拒绝为 fixture 噪声，宿主 observeSession 不下发该记录——由故障现场首炸类型为 seq 3 事件而非 seq 0 日志头反证）。
+- SOLUTION 对照: PRD 无变化；SOLUTION#素材装配器新增「会话脉络词汇识别（T-015）」内部结构 bullet 与实现一致（宿主运行时词汇为权威、导入失败落兜底集、fail-closed 边界收窄至宿主未知类型），并补全该模块代码位置（T-012 落地时缺失）。闸口依据：东家 2026-09-29 会话内直接指令「修复根因」（见差距评估）。
+- commit: f48409f —— 关联提交 360b45a（复审 findings 修复批次一）与 f14d1e8（复审非阻断观察收口 + expected-fail 基线）。
+- 部署注记: `node_modules/@deepseek-ai/dsh-session` → 宿主树同包符号链接为运行时权威生效前提（手工步骤，与既有 peer 依赖 symlink 同惯例，仓库不可核验故记档于此）；链接缺失时降级为兜底集（含全部已知炸点词汇）并输出 console.warn。运行中的宿主进程持旧代码，本修复经宿主进程重启后生效。
+- 锚定理由: 新增 5 例回归测试验证的是宿主契约实现边界（fail-closed/ignorable/词汇推导），R-02-006 五条 AC（六区结构/档位/预算/兜底/偏好）均无对应承诺，不属「直接验证需求的测试」，无需 AC 锚点；权威依据为 `anchor_coverage` 机械门禁通过（65/65），按 CONVENTIONS「文字规范与可执行检查冲突时以检查为准」。
+- review:
+  - 审核方: code-review skill 双轴并行独立子代理（Standards 轴 agent 68eceb1d-a507-453b-8f19-c4824a328167、Spec 轴 agent cf0de3c1-e101-4bca-bc98-e7083a2d5f36）
+  - 目的理解: 修复目标是会话词汇识别权归位——宿主已知非表面事件（实证：subagent/model-selection-policy、session/end-seed）被手工白名单误判为未识别必需事件，fail-closed 抛错致门审失败、block-session 默认下会话级全拒绝；关联约束为 R-02-006 素材契约、T-012 spike 定稿的 fail-closed 边界（仅对「未识别」类型）与 C-014 决策；预期行为为宿主已知词汇自动跟随跳过、未知非 ignorable 仍拒绝重建、插件引导不受导入失败影响；验证方式为回归测试 + 全套件 + 真实会话事件实弹探针。
+  - 执行方式: code-review skill；首轮基线 f6d6b51...f48409f（双轴并行独立子代理）；复审基线 f48409f..360b45a（同一审核方双轴）。
+  - 问题与修复: 首轮 Standards 2 硬性（task「map 不变」表述与 SOLUTION 同步矛盾、闸口证据未记档——已更正并补记东家指令；测试锚定存疑——经机械门禁核实通过并补记理由）+ 3 判断性（推导入口分支冗余——收敛为单一可迭代入口；导入失败静默——补 console.warn 诊断；TODO 标签失配与繁体笔误——已改）／Spec 3 轻微（部署链接 git 不可核验——维持与既有 peer symlink 同惯例并双重记档；TODO 行范围说明——C-014 有意挂账；task 矛盾——同上更正）→ 修复批次 360b45a。复审双轴通过，遗留非阻断观察（字符串畸形导出与验证矩阵承诺的字面偏差、TODO 标签 [需求候选] 裁量）→ f14d1e8 按复审人预先指定 remedy 收口。
+  - 复审结论: 双轴均通过（commit 360b45a）；非阻断观察已在 f14d1e8 处置（其一为复审人指定的单行 remedy，其二采纳 Spec 轴裁量建议），无遗留阻断项。
+- 残余风险: ① block-session 处置对「兼容性故障」的放大效应为独立策略裁决项，已挂 TODO [需求候选] 待东家裁决；② 导入未决窗口期跳过集为兜底集（含全部已知炸点词汇，权威集随后生效）；③ fail-closed 测试的伪造类型若被宿主未来采纳同名词汇则该例语义失效（可接受脆性，复审已认可）。
