@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { recentConversation, reconstructSurface, selectRecentEntries } from '../lib/conversation-source.js';
+import { knownNonSurfaceFrom, recentConversation, reconstructSurface, selectRecentEntries } from '../lib/conversation-source.js';
 
 /** 会话事件流 fixture：用户→执行者(带工具调用)→tool/call→tool/result。 */
 function sampleEvents() {
@@ -53,4 +53,61 @@ test('R-02-006/AC-03 selectRecentEntries：超预算时省略标记 + 最新条�
     assert.ok(picked.includes('[Older context omitted:'));
     // 最新条目保留（从尾部向前选择）
     assert.ok(picked.includes(entries[entries.length - 1]) || picked.includes('[Newest entry truncated]'));
+});
+
+// ---- T-015 回归：宿主非表面事实词汇误判为「必需未知」炸门 -------------------
+// 实弹现场：subagent/model-selection-policy（mailai-models 22 次拒绝）、
+// session/end-seed（ops 28 次拒绝）。两类型均为宿主已知词汇表成员且追加时
+// 不带 ignorable（宿主契约中的必需事件），此前被硬编码白名单遗漏。
+
+test('T-015 回归：subagent/model-selection-policy 跳过而非拒绝重建', () => {
+    const events = [
+        { type: 'subagent/model-selection-policy', seq: 3, time: 0, data: { allowedModels: [{ provider: 'gpu', model: 'glm-5.3-flash' }] } },
+        ...sampleEvents(),
+    ];
+    assert.doesNotThrow(() => reconstructSurface(events));
+    const text = recentConversation(events, { maxChars: 500 });
+    assert.ok(text.includes('User: 请评审这个设计'));
+    assert.ok(!text.includes('model-selection-policy'));
+});
+
+test('T-015 回归：session/end-seed 跳过而非拒绝重建', () => {
+    const events = [
+        { type: 'session/end-seed', seq: 2, time: 0, data: {} },
+        ...sampleEvents(),
+    ];
+    assert.doesNotThrow(() => reconstructSurface(events));
+    const text = recentConversation(events, { maxChars: 500 });
+    assert.ok(text.includes('User: 请评审这个设计'));
+});
+
+test('T-015 回归：ignorable 未知事件仍跳过（宿主契约不变）', () => {
+    const events = [
+        { type: 'future-harness/new-fact', seq: 5, time: 0, ignorable: true, data: {} },
+        ...sampleEvents(),
+    ];
+    assert.doesNotThrow(() => reconstructSurface(events));
+});
+
+test('T-015 回归：两处词汇都不认识的非 ignorable 事件仍 fail-closed', () => {
+    const events = [{ type: 'future-harness/surface-shifting', seq: 9, time: 0, data: {} }];
+    assert.throws(() => reconstructSurface(events), /Unrecognized required session event type/);
+});
+
+test('T-015 词汇推导：宿主已知词汇 − 插件表面集 ∪ 兜底集（容忍缺失导出）', () => {
+    const derived = knownNonSurfaceFrom([
+        'user/message', 'assistant/message', 'tool/result', 'system/message',
+        'todo/write', 'model/selection', 'subagent/catalog',
+    ]);
+    assert.ok(derived.has('todo/write'));
+    assert.ok(derived.has('model/selection'));
+    assert.ok(derived.has('subagent/catalog'));
+    assert.ok(derived.has('subagent/model-selection-policy')); // 兜底集成员
+    assert.ok(derived.has('session/end-seed')); // 兜底集成员
+    assert.ok(!derived.has('user/message'));
+    assert.ok(!derived.has('assistant/message'));
+    assert.ok(!derived.has('tool/result'));
+    // 宿主导出缺失/形态漂移：回落兜底集，不抛错。
+    assert.doesNotThrow(() => knownNonSurfaceFrom(undefined));
+    assert.ok(knownNonSurfaceFrom(undefined).has('session/end-seed'));
 });

@@ -402,7 +402,8 @@ flowchart TD
   - 消息布局与不可信注记、转义规则逐字对齐 pi `advisorMessageText`；空消息兜底一致。
   - tracked 移交验证：所列路径必须全部被顾问最近意见点名（词边界匹配），认领一次性消费 `lastAdvice`。
   - 会话脉络来源双轨：主轨 dsh-session-query（装配时查询当前会话条目）；备轨事件增量缓冲（observer 维护，压缩/重写重置）——T-012 spike 裁决主轨可行性后定稿。
-- 代码位置: lib/materials.js；lib/git-context.js；lib/consultation.js（collectFileEntries）
+  - 会话脉络词汇识别（T-015）：非表面事件跳过集以宿主运行时词汇表为权威——动态导入宿主已知事件词汇推导（宿主根包导出 `KNOWN_SESSION_EVENT_TYPES`；部署前提：项目 node_modules 以符号链接指向宿主树同包），导入失败回落兜底集（实弹观测伴生全集 + 实证炸点类型）；fail-closed 仅对宿主词汇也不认识的非 ignorable 事件生效。
+- 代码位置: lib/materials.js；lib/conversation-source.js；lib/git-context.js；lib/consultation.js（collectFileEntries）
 - 实现: 单端（宿主）
 
 ### Scout 策展
