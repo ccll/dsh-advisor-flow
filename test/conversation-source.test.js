@@ -110,4 +110,8 @@ test('T-015 词汇推导：宿主已知词汇 − 插件表面集 ∪ 兜底集�
     // 宿主导出缺失/形态漂移：回落兜底集，不抛错。
     assert.doesNotThrow(() => knownNonSurfaceFrom(undefined));
     assert.ok(knownNonSurfaceFrom(undefined).has('session/end-seed'));
+    // 畸形字符串导出（可迭代但非词汇形态）：整体回落兜底集，不按字符混入。
+    assert.doesNotThrow(() => knownNonSurfaceFrom('todo/write'));
+    assert.equal(knownNonSurfaceFrom('todo/write').size, knownNonSurfaceFrom(undefined).size);
+    assert.ok(!knownNonSurfaceFrom('todo/write').has('t'));
 });
