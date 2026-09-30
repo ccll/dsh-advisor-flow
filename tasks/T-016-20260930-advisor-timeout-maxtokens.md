@@ -6,7 +6,7 @@ id: T-016
 # T-016 咨询超时默认 10 分钟、输出上限跟随宿主模型配置、设置卡补两键
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-02-001（C-015；东家 2026-09-30 会话直接指令）
 
 ## 背景与目标
@@ -52,4 +52,16 @@ id: T-016
 
 ## 终态与证据
 
-（待关闭时填写）
+- 实现: ① `lib/config.js` `DEFAULT_CALL_TIMEOUT_MS = 600_000`（10 分钟，偏离 pi 180s 记 C-015）；`DEFAULT_MAX_TOKENS` 常量退役，`advisor.maxTokens` 改可选解析（`parseOptionalPositiveInt`：缺省 = undefined；null 同义缺省；出现时须为正整数）。② `lib/consultation.js` 新增 `resolveDefaultMaxTokens`——显式配置优先；未配置经 `llm.resolveModelInfo().defaultMaxTokens` 跟随宿主模型配置（正整数才采用），解析失败或未声明省略参数；独立缓存（provider\0model 键，失败不缓存，effortCache 同纪律）；llm.stream 与 scout 缝（lib/index.js runScout 经 `resolveMaxTokens` 解析缝）同语义，signal 两形态归一（复审收口）。③ `lib/client/render.js` 顾问区补两键数字输入 + `numberControl` 清空 → `onChange(null)`；`lib/commands.js` 状态文本「输出上限: 跟随模型配置 / 超时: 600000ms」；`lib/settings.js` 注明可选键投影约定；client bundle 重建同步。
+- 测试: 全套件 `npm test` 229 通过 / 0 失败（基线 227 + 新增：AC-06 标题锚、AC-07 四分支、AC-08 卡两键、scout 跟随语义）；`expected_fail_check` passed（executed=229 与账本一致）；`anchor_coverage` passed（68/68）；`agentmap_lint` passed；`parity_differential` 全等；bundle 重建无 diff。
+- SOLUTION 对照: PRD R-02-001 需求陈述增「咨询超时与输出上限」+ AC-06/07/08（AC-04 限定枚举范围指向 AC-06/07）；SOLUTION 产品契约两键语义、运行时语义（600s）、咨询服务模块 bullet、web 设置卡 bullet、对齐基线两处声明账本新承载（T-011 终态后以 RATIONALE C-nnn 追加）；RATIONALE C-015 追加。闸口依据：东家 2026-09-30 会话对方案（含 maxTokens 缺省经 resolveModelInfo 语义、门内联等待共享上限）的明确确认（ask_user_question 选择记录）。
+- commit: f7d10c7 —— 关联提交 6a832fa（实现）与 22aefe8（复审 findings 修复批次一）。
+- 锚定理由: AC-06/07/08 为本变更新增承诺，测试标题直接锚定（config.test.js::AC-06、consultation.test.js::AC-07、settings-card.test.js::AC-08），机械门禁 `anchor_coverage` 68/68 与 `agentmap_lint --staged` 通过为权威依据。
+- 联调核定项（随目标关闭记档）: 设置卡清空产生的 null 经 gateway persist 落 settings.yaml 后，宿主 describe seam 对该键的校验行为宿主侧不可静态证明；运行时语义由 config.js 解析器单点承载（null → 缺省），风险限于 describe 呈现面。
+- review:
+  - 审核方: code-review skill 双轴并行独立子代理（Standards 轴 agent 47bdace7-1a34-49a3-b748-43892082a56b、Spec 轴 agent edacb75c-3848-41c7-866c-3f0852e05d87）
+  - 目的理解: 落地 C-015 三项东家裁决——callTimeoutMs 默认 600000、maxTokens 缺省经 resolveModelInfo 跟随宿主模型配置（未声明省略、显式覆盖、独立缓存）、web 设置卡补两键（清空=回归缺省）；关联约束为 PRD R-02-001/AC-06/07/08、C-015 决策与被否方案、SOLUTION 横切约束（分歧记账、非阻断不变量）；预期行为为三项交付 + map 原子级联 + strict 锚定；验证方式为 229 用例全套件 + anchor_coverage + expected_fail_check + parity + bundle 新鲜度门禁。
+  - 执行方式: code-review skill 双轴并行独立子代理；首轮基线 20c08dc...6a832fa；复审基线 6a832fa...22aefe8（同一审核方双轴）；低级收口 f7d10c7。
+  - 问题与修复: Standards 首轮 4 硬违规（分歧账本缺落点→SOLUTION 两处声明新承载；AC-04 矛盾→限定枚举；阈值清空无锚→补断言；AC-06 无标题锚→补标题测试）+ Spec 首轮 1 高（scout maxTokens 直传构成 C-015 被否形态的静默行为变化→引擎经 runScout 缝下发解析缝、同语义共享缓存 + 测试）与 1 中（describe Schema 投影漂移→头注显性化 + null 持久化记联调核定项）及低级项（负数用例、task 归因）→ 修复批次 22aefe8；复审新发现 signal 形态错位（scout 解析脱离 timeout 约束）→ 兼容归一 + 断言，锚定行重复删除 → f7d10c7。
+  - 复审结论: 双轴逐条推翻原发现并确认处置合格；Standards 判断题「平行解析缝」以 C-015 最小改动取舍结案；Spec「无阻塞项，可关闭 T-016」（f7d10c7 后信号形态已修复并加断言钉住）。
+- 残余风险: ① scout 主语义外的宿主 describe seam 对 null 的校验行为为联调核定项（见上）；② maxTokens 缺省跟随模型配置（131072）较旧固定 16384 显著放大单次咨询输出上限——成本与极长意见风险由 callTimeoutMs 600s 兜底，东家明示接受；③ 门内联同步等待与咨询超时共享 600s 上限，循环门命中最坏阻塞执行者 10 分钟（东家会话确认接受）。
