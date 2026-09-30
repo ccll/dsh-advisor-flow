@@ -830,5 +830,7 @@ test('R-02-001/AC-07 Scout 二次调用与主咨询同语义跟随宿主模型 m
     assert.equal(llm.calls[1].options.maxTokens, 131072); // 主咨询同语义
     // 共享 (provider, model) 解析缓存：两次调用只解析一次模型信息
     assert.equal(llm.modelInfoCalls.length, 1);
+    // scout 路径以裸 AbortSignal（AbortSignal.timeout）传入解析缝——可中止性不丢失
+    assert.ok(llm.modelInfoCalls[0].signal instanceof AbortSignal);
     services.dispose();
 });

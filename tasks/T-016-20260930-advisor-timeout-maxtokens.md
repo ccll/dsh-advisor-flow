@@ -38,7 +38,6 @@ id: T-016
 - `test/client/`：卡渲染两字段、清空 → null、保存合并语义。
 - 锚定：R-02-001/AC-06、AC-07、AC-08 各落测试标题锚点（strict 模式）。
 - `test/index.test.js`：scout.enabled 时二次调用与主咨询同语义跟随模型声明值（复审批次二补齐）。
-- 锚定：R-02-001/AC-06、AC-07、AC-08 各落测试标题锚点（strict 模式）。
 - 全套件回归 + parity 差分（纯函数子集，不涉两键）+ anchor_coverage + expected-fail 账本核对。
 - 联调核定项（记档随目标关闭）：设置卡清空产生的 null 经 gateway persist 落 settings.yaml 后，宿主 describe seam 对该键的校验行为宿主侧不可静态证明；运行时语义由 config.js 解析器单点承载（null → 缺省），风险限于 describe 呈现面。
 
