@@ -25,6 +25,16 @@ test('R-02-001/AC-01 解析后的配置驱动后续咨询，重新应用即时�
     assert.notEqual(first.config, second.config);
 });
 
+test('R-02-001/AC-06 callTimeoutMs 缺省 600000（10 分钟），显式配置覆盖生效（C-015）', () => {
+    const defaultTimeout = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' } });
+    assert.equal(defaultTimeout.config.advisor.callTimeoutMs, 600000); // 偏离 pi 180s，分歧记账 C-015
+    const override = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', callTimeoutMs: 480000 } });
+    assert.equal(override.config.advisor.callTimeoutMs, 480000);
+    const bad = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', callTimeoutMs: 0 } });
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /callTimeoutMs/);
+});
+
 test('R-02-001/AC-02 未知键收集为警告并保留透传（含旧键 policy 与 retryAttempts），不阻断其他配置生效', () => {
     const result = resolveAdvisorFlowConfig({
         enabled: true,
@@ -81,10 +91,13 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(bad.ok, false);
     assert.match(bad.error, /maxTokens/);
 
-    // R-02-001/AC-07：maxTokens 为 0 非法（可选正整数，缺省 = 跟随宿主）
+    // R-02-001/AC-07：maxTokens 为 0 或负数非法（可选正整数，缺省 = 跟随宿主）
     const zeroMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 0 } });
     assert.equal(zeroMaxTokens.ok, false);
     assert.match(zeroMaxTokens.error, /maxTokens/);
+    const negativeMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: -1 } });
+    assert.equal(negativeMaxTokens.ok, false);
+    assert.match(negativeMaxTokens.error, /maxTokens/);
 
     // R-02-001/AC-07：null 与缺省同义（跟随宿主），显式正整数保留
     const nullMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: null } });

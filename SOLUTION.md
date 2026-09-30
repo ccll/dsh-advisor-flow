@@ -6,7 +6,7 @@ owner: agent 主笔，项目属主审批
 
 # SOLUTION — 方案层
 
-> 对齐基线：pi-advisor-flow@0.8.2 npm 制品（sha256 ead4e3a2…，C-009）；除宿主无法承载项外行为严格一致，分歧账本（gap → 对齐/适配/豁免）由东家裁决（C-008）承载于 tasks/T-011。
+> 对齐基线：pi-advisor-flow@0.8.2 npm 制品（sha256 ead4e3a2…，C-009）；除宿主无法承载项外行为严格一致，分歧账本（gap → 对齐/适配/豁免）由东家裁决（C-008）：T-011 承载 0.8.2 审计差距的原始账本（已终态）；此后的新增偏离以 RATIONALE C-nnn 追加承载（东家签字即该裁决条目，如 C-015）。
 
 ## 架构视图清单
 
@@ -498,7 +498,7 @@ flowchart TD
 - 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`；执行者守则经 `ctx.systemPrompt.section`（text 函数实时求值）。
 - LLM 请求契约（T-009 staging 实测，dsh-llm GenerateOptions）：`messages[].content` 为 ContentBlock 数组；`system` 为字符串；流 chunk 为 `text-delta`/`usage`/`finish`。
 - 用量契约（T-009 staging 核对，dsh-llm TokenUsage）：离散计数，无 `cacheTokens` 与 `cost` 字段；台账未收到的字段记 unavailable。
-- 对齐契约：行为基准为 pi-advisor-flow@0.8.2 冻结制品（C-009）；制品出处为 npm registry（权威源，完整性字段见 C-009），本地 .tmp-audit/ 仅为缓存副本，可凭校验和复现；文案逐字等值断言（程序化字符串表）；分歧账本记录每项 对齐/适配/豁免（C-008）。
+- 对齐契约：行为基准为 pi-advisor-flow@0.8.2 冻结制品（C-009）；制品出处为 npm registry（权威源，完整性字段见 C-009），本地 .tmp-audit/ 仅为缓存副本，可凭校验和复现；文案逐字等值断言（程序化字符串表）；分歧账本记录每项 对齐/适配/豁免（C-008）——原始账本承载于 T-011（终态），此后的新增偏离以 RATIONALE C-nnn 追加记账（如 C-015）。
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`；可选服务一律条件 `ctx.inject` 子上下文；绝不以 try/catch 探测 ctx 代理属性。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 与 record_advisor_outcome 为用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径。

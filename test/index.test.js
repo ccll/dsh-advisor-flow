@@ -812,3 +812,23 @@ test('T-014 Scout 接线计量：scout.enabled 时二次调用 usage 以 scout �
     assert.ok(totals.total.calls >= 2); // 主咨询 + scout 二次调用
     services.dispose();
 });
+
+test('R-02-001/AC-07 Scout 二次调用与主咨询同语义跟随宿主模型 maxTokens（C-015）', async () => {
+    const programs = [
+        answer('{"groups":[{"id":"g1","required":true,"text":"策展组"}],"synthesis":""}'),
+        answer('意见一。'),
+    ];
+    const llm = createFakeLlm(programs);
+    llm.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] }, defaultMaxTokens: 131072 });
+    const { ctx } = makeCtx({ llm });
+    ctx.sessionQuery = { observeSession: async () => ({ events: [{ type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '内容' }] } } }] }) };
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true } });
+    await services.askAdvisor.execute({ question: 'q' });
+    await settle();
+    // 程序序：scout 二次调用先于主咨询（T-014 实证）——两笔都跟随模型声明值
+    assert.equal(llm.calls[0].options.maxTokens, 131072); // scout 二次调用不再回落上游默认
+    assert.equal(llm.calls[1].options.maxTokens, 131072); // 主咨询同语义
+    // 共享 (provider, model) 解析缓存：两次调用只解析一次模型信息
+    assert.equal(llm.modelInfoCalls.length, 1);
+    services.dispose();
+});

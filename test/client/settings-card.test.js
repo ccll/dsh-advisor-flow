@@ -405,6 +405,9 @@ test('R-02-001 循环门阈值随门开关联动禁用；守则门块无策略/�
     findById(container, 'advisor-gate-loop-enabled').listeners.click[0]();
     const loopThreshold2 = findById(container, 'advisor-gate-loop-threshold');
     assert.equal(loopThreshold2.attrs.disabled, undefined, '循环门重新开启后阈值恢复可用');
+    // 清空 → null = 回归默认阈值 3（R-02-001/AC-08 同款清空语义，兑现「留空用默认 3」文案）
+    loopThreshold2.listeners.change[0]({ target: { value: '' } });
+    assert.equal(controller.getState().patch.gates.loop.threshold, null);
     // 守则门块（plan/failure/completion）不含策略/阈值控件
     assert.equal(findById(container, 'advisor-gate-plan-policy'), undefined);
     assert.equal(findById(container, 'advisor-gate-failure-policy'), undefined);

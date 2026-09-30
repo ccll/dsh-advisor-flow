@@ -24,7 +24,8 @@ id: T-016
 
 - `lib/config.js`：`DEFAULT_CALL_TIMEOUT_MS = 600_000`；`maxTokens` 改可选解析（缺省 = undefined；出现时须为正整数，新 parser `parseOptionalPositiveInt`）；`DEFAULT_MAX_TOKENS` 常量随语义退役移除（含导出，测试同步）。
 - `lib/consultation.js`：新增 `resolveDefaultMaxTokens(deadlineSignal)`——显式配置优先；未配置经 `llm.resolveModelInfo().defaultMaxTokens`（正整数才采用），解析失败或未声明则省略参数；独立缓存（键 = provider\0model，仅缓存确定性结果，失败不缓存，与 effortCache 同纪律）；llm.stream 请求按 `...(maxTokens === undefined ? {} : { maxTokens })` 携带。
-- `lib/status.js`：快照原样携带 `maxTokens`（undefined = 跟随）；`/advisor status` 文本渲染未配置时显示「跟随模型配置」。
+- `lib/status.js`：快照原样携带 `maxTokens`（undefined = 跟随）；`/advisor status` 文本渲染未配置时显示「跟随模型配置」（文本渲染落点为 `lib/commands.js` advisorStatusText，status.js 仅快照透传）。
+- `lib/index.js`（scout 二次调用，复审批次二补齐）：runScout 直传 `maxTokens: config.advisor.maxTokens` 在缺省语义下省略参数——恰为 C-015 被否方案①形态且属未声明的静默行为变化（复审 Spec 轴发现 1）。修复：引擎经 runScout 缝下发 `resolveMaxTokens` 解析缝，scout 与主咨询同语义（显式覆盖 > 模型声明值 > 省略），共享 (provider\0model) 缓存。
 - `lib/client/render.js`：顾问区补 `advisor.callTimeoutMs`（占位「默认 600000（10 分钟）」）与 `advisor.maxTokens`（占位「跟随所选模型配置」）数字输入；`numberControl` 支持清空 → `onChange(null)`（回归缺省；循环门阈值一并兑现「留空用默认 3」）。
 - `lib/client/card-state.js`：清空路径经 setField 存 null，解析器将 null 视为缺省（既有语义），无需新增校验分支。
 - client bundle 重建（scripts/build-client.mjs；pre-push 30-client-bundle-fresh 门禁核对）。
@@ -36,7 +37,10 @@ id: T-016
 - `test/commands.test.js`：`/advisor status` 文本呈现「输出上限: 跟随模型配置」（缺省）与「超时: 600000ms」（解析器默认填充）；快照形态不变（原样透传 maxTokens，无独立新断言）。
 - `test/client/`：卡渲染两字段、清空 → null、保存合并语义。
 - 锚定：R-02-001/AC-06、AC-07、AC-08 各落测试标题锚点（strict 模式）。
+- `test/index.test.js`：scout.enabled 时二次调用与主咨询同语义跟随模型声明值（复审批次二补齐）。
+- 锚定：R-02-001/AC-06、AC-07、AC-08 各落测试标题锚点（strict 模式）。
 - 全套件回归 + parity 差分（纯函数子集，不涉两键）+ anchor_coverage + expected-fail 账本核对。
+- 联调核定项（记档随目标关闭）：设置卡清空产生的 null 经 gateway persist 落 settings.yaml 后，宿主 describe seam 对该键的校验行为宿主侧不可静态证明；运行时语义由 config.js 解析器单点承载（null → 缺省），风险限于 describe 呈现面。
 
 ## 验证矩阵
 
