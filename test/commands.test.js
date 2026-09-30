@@ -102,6 +102,8 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     const text = result.text;
     assert.match(text, /Advisor: enabled/);
     assert.match(text, /模型: gpu\/glm-5.3-flash/);
+    assert.match(text, /输出上限: 跟随模型配置/); // R-02-001/AC-07：缺省呈现跟随语义（C-015）
+    assert.match(text, /超时: 600000ms/); // R-02-001/AC-06：默认 10 分钟
     assert.match(text, /plan=on/);
     assert.match(text, /failure=on/);
     assert.match(text, /loop=on threshold=5/);

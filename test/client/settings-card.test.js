@@ -411,6 +411,41 @@ test('R-02-001 循环门阈值随门开关联动禁用；守则门块无策略/�
     assert.equal(findById(container, 'advisor-gate-completion-policy'), undefined);
 });
 
+test('R-02-001/AC-08 顾问超时与输出上限数字输入：填写覆盖、清空回归缺省、保存语义与 settings.yaml 一致', async () => {
+    const { controller, container, card, rpc, rawRef } = await renderedCard();
+    expandCard(container);
+    // RAW 未配置两键 → 输入框为空、占位文案呈现缺省语义
+    const maxTokensInput = findById(container, 'advisor-max-tokens');
+    const timeoutInput = findById(container, 'advisor-call-timeout-ms');
+    assert.ok(maxTokensInput, '输出上限输入存在');
+    assert.ok(timeoutInput, '咨询超时输入存在');
+    assert.equal(maxTokensInput.attrs.value, undefined);
+    assert.equal(maxTokensInput.attrs.placeholder, '跟随所选模型配置');
+    assert.equal(timeoutInput.attrs.placeholder, '默认 600000（10 分钟）');
+    // 填写 → patch 收正整数
+    maxTokensInput.listeners.change[0]({ target: { value: '4096' } });
+    timeoutInput.listeners.change[0]({ target: { value: '480000' } });
+    const patch = controller.getState().patch;
+    assert.equal(patch.advisor.maxTokens, 4096);
+    assert.equal(patch.advisor.callTimeoutMs, 480000);
+    // 清空 → null = 回归缺省（覆盖后的显式撤销路径）
+    maxTokensInput.listeners.change[0]({ target: { value: '' } });
+    assert.equal(controller.getState().patch.advisor.maxTokens, null);
+    // 保存 → 合并进 raw，解析器把 null 视为缺省（与 settings.yaml 同语义）
+    const result = await controller.save();
+    assert.equal(result.ok, true);
+    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
+    assert.equal(setCall.payload.args.patch.advisor.callTimeoutMs, 480000);
+    assert.equal(setCall.payload.args.patch.advisor.maxTokens, null);
+    assert.equal(rawRef.current.advisor.callTimeoutMs, 480000);
+    assert.equal(rawRef.current.advisor.maxTokens, null);
+    // 重载后表单回显：null 渲染为空输入（跟随语义），显式值回显数字
+    await controller.load();
+    card.refresh();
+    assert.equal(findById(container, 'advisor-max-tokens').attrs.value, undefined);
+    assert.equal(findById(container, 'advisor-call-timeout-ms').attrs.value, '480000');
+});
+
 test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);

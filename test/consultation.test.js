@@ -38,7 +38,7 @@ test('R-01-001/AC-01 咨询成功返回含 adviceId 的意见文本（无 severi
     assert.equal(call.options.system, ADVISOR_SYSTEM_PROMPT);
     assert.equal(call.options.messages.length, 1);
     assert.ok(call.options.messages[0].content[0].text.includes('这个方案稳吗？'));
-    assert.equal(typeof call.options.maxTokens, 'number');
+    assert.equal('maxTokens' in call.options, false); // R-02-001/AC-07：未配置且模型无声明 → 省略参数（C-015）
     assert.ok(call.options.signal instanceof AbortSignal);
     assert.equal(call.options.reasoningEffort, undefined);
     assert.equal('purpose' in call.options, false);
@@ -215,7 +215,7 @@ test('R-01-001 effort 能力门控：仅在 resolveModelInfo 声明该档位时�
     });
     await engine.consult({ entry: 'tool' });
     assert.equal(llm.calls[0].options.reasoningEffort, 'high');
-    assert.equal(llm.modelInfoCalls.length, 1); // 判定缓存，不逐次解析
+    assert.equal(llm.modelInfoCalls.length, 2); // effort 判定缓存不逐次解析；+1 为 maxTokens 跟随解析（C-015，键不同各缓存）
 
     // 模型未声明该档位 → 不发送
     llm.setModelInfo({ reasoning: { efforts: [{ id: 'low' }] } });
@@ -241,7 +241,7 @@ test('R-01-001 effort 能力门控：resolveModelInfo 抛错不缓存失败；�
     await engine.consult({ entry: 'tool' });
     assert.equal(llmThrowing.calls[0].options.reasoningEffort, undefined);
     assert.equal(llmThrowing.calls[1].options.reasoningEffort, undefined);
-    assert.equal(llmThrowing.modelInfoCalls.length, 2); // 失败未缓存
+    assert.equal(llmThrowing.modelInfoCalls.length, 4); // 失败未缓存：effort 与 maxTokens 解析各自重试（2 咨询 × 2 缝）
 
     // 方法缺席：不发送；缺席是确定性判定（可缓存）
     const inner = createFakeLlm([answer('a'), answer('b')]);
@@ -256,13 +256,13 @@ test('R-01-001 effort 能力门控：resolveModelInfo 抛错不缓存失败；�
     assert.equal(inner.calls[0].options.reasoningEffort, undefined);
     assert.equal(inner.calls[1].options.reasoningEffort, undefined);
 
-    // 未配置 effort → 从不发送，也不调用 resolveModelInfo
+    // 未配置 effort → 从不发送 effort；maxTokens 跟随解析仍发起 resolveModelInfo
     const llmSilent = createFakeLlm([answer('a')]);
     llmSilent.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] } });
     const engineC = createConsultationEngine({ llm: llmSilent, config: resolvedConfig(), logger: quietLogger });
     await engineC.consult({ entry: 'tool' });
     assert.equal(llmSilent.calls[0].options.reasoningEffort, undefined);
-    assert.equal(llmSilent.modelInfoCalls.length, 0);
+    assert.equal(llmSilent.modelInfoCalls.length, 1); // maxTokens 跟随解析（C-015）；模型无声明 → 请求省略参数
 });
 
 test('R-02-001/AC-01 applyConfig 即时生效：effort 判定缓存随配置失效', async () => {
@@ -275,7 +275,7 @@ test('R-02-001/AC-01 applyConfig 即时生效：effort 判定缓存随配置失�
     });
     await engine.consult({ entry: 'tool' });
     assert.equal(llm.calls[0].options.reasoningEffort, 'high');
-    assert.equal(llm.modelInfoCalls.length, 1); // 同 (provider, model, effort) 命中缓存
+    assert.equal(llm.modelInfoCalls.length, 2); // effort 判定缓存命中语义不变；maxTokens 跟随解析同咨询首发一次
 
     // 换模型：缓存键随 (provider, model, effort) 变化 → 重新解析；新路由未声明 high → 不发送
     llm.setModelInfo({ reasoning: { efforts: [{ id: 'off' }] } });
@@ -283,13 +283,47 @@ test('R-02-001/AC-01 applyConfig 即时生效：effort 判定缓存随配置失�
     await engine.consult({ entry: 'tool' });
     assert.equal(llm.calls[1].options.model, 'other-model');
     assert.equal(llm.calls[1].options.reasoningEffort, undefined);
-    assert.equal(llm.modelInfoCalls.length, 2);
+    assert.equal(llm.modelInfoCalls.length, 4); // 换模型：effort 与 maxTokens 缓存键都变化 → 各重新解析
 
-    // 同模型换 effort 档位：同样重新解析（缓存键随 effort 变化），新档位被声明 → 发送
+    // 同模型换 effort 档位：effort 重新解析（缓存键随 effort 变化），maxTokens 缓存命中（键 = provider+model）
     engine.applyConfig(resolvedConfig({ advisor: { reasoningEffort: 'off', model: 'other-model' } }));
     await engine.consult({ entry: 'tool' });
     assert.equal(llm.calls[2].options.reasoningEffort, 'off');
-    assert.equal(llm.modelInfoCalls.length, 3);
+    assert.equal(llm.modelInfoCalls.length, 5);
+});
+
+test('R-02-001/AC-07 maxTokens 缺省跟随宿主模型配置：声明值采用、未声明省略、显式覆盖、失败不缓存', async () => {
+    // (a) 未配置 + 模型声明 defaultMaxTokens → 采用模型声明值
+    const llmDeclared = createFakeLlm([answer('a')]);
+    llmDeclared.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] }, defaultMaxTokens: 131072 });
+    const engineA = createConsultationEngine({ llm: llmDeclared, config: resolvedConfig(), logger: quietLogger });
+    await engineA.consult({ entry: 'tool' });
+    assert.equal(llmDeclared.calls[0].options.maxTokens, 131072); // 跟随宿主对所选模型的配置
+
+    // (b) 模型未声明 defaultMaxTokens → 请求省略 maxTokens（交上游默认）
+    const llmUndeclared = createFakeLlm([answer('a')]);
+    llmUndeclared.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] } });
+    const engineB = createConsultationEngine({ llm: llmUndeclared, config: resolvedConfig(), logger: quietLogger });
+    await engineB.consult({ entry: 'tool' });
+    assert.equal('maxTokens' in llmUndeclared.calls[0].options, false);
+
+    // (c) 显式配置覆盖：不发起跟随解析
+    const llmExplicit = createFakeLlm([answer('a')]);
+    llmExplicit.setModelInfo({ defaultMaxTokens: 131072 });
+    const engineExplicit = createConsultationEngine({ llm: llmExplicit, config: resolvedConfig({ advisor: { maxTokens: 4096 } }), logger: quietLogger });
+    await engineExplicit.consult({ entry: 'tool' });
+    assert.equal(llmExplicit.calls[0].options.maxTokens, 4096); // 显式配置覆盖
+    assert.equal(llmExplicit.modelInfoCalls.length, 0); // 无需解析
+
+    // (d) 解析失败 → 本次省略且不缓存；下次咨询重新解析
+    const llmFlaky = createFakeLlm([answer('a'), answer('b')]);
+    llmFlaky.setModelInfo(new Error('adapter down'), { throws: true });
+    const engineFlaky = createConsultationEngine({ llm: llmFlaky, config: resolvedConfig(), logger: quietLogger });
+    await engineFlaky.consult({ entry: 'tool' });
+    await engineFlaky.consult({ entry: 'tool' });
+    assert.equal('maxTokens' in llmFlaky.calls[0].options, false);
+    assert.equal('maxTokens' in llmFlaky.calls[1].options, false);
+    assert.equal(llmFlaky.modelInfoCalls.length, 2); // 失败不缓存：每次重新解析
 });
 
 test('R-02-002 咨询完成时用量进入台账；缺失项 unavailable（引擎集成）', async () => {

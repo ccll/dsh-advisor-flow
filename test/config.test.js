@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_MAX_TOKENS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES } from '../lib/config.js';
+import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES } from '../lib/config.js';
 
 test('R-02-001/AC-01 解析后的配置驱动后续咨询，重新应用即时生效', async () => {
     const first = resolveAdvisorFlowConfig({
@@ -11,7 +11,8 @@ test('R-02-001/AC-01 解析后的配置驱动后续咨询，重新应用即时�
     assert.equal(first.config.enabled, true);
     assert.equal(first.config.advisor.provider, 'p1');
     assert.equal(first.config.advisor.callTimeoutMs, DEFAULT_CALL_TIMEOUT_MS);
-    assert.equal(first.config.advisor.maxTokens, 16384);
+    assert.equal(first.config.advisor.callTimeoutMs, 600000); // R-02-001/AC-06：默认 10 分钟（C-015，偏离 pi 180s）
+    assert.equal(first.config.advisor.maxTokens, undefined); // R-02-001/AC-07：缺省跟随宿主模型配置（C-015）
 
     // 配置变更即时生效：重新解析出的新配置原样替换旧配置对象（引擎侧经
     // applyConfig 在后续咨询生效，见 consultation 测试）。
@@ -79,6 +80,18 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     const bad = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 'many' } });
     assert.equal(bad.ok, false);
     assert.match(bad.error, /maxTokens/);
+
+    // R-02-001/AC-07：maxTokens 为 0 非法（可选正整数，缺省 = 跟随宿主）
+    const zeroMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 0 } });
+    assert.equal(zeroMaxTokens.ok, false);
+    assert.match(zeroMaxTokens.error, /maxTokens/);
+
+    // R-02-001/AC-07：null 与缺省同义（跟随宿主），显式正整数保留
+    const nullMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: null } });
+    assert.equal(nullMaxTokens.ok, true);
+    assert.equal(nullMaxTokens.config.advisor.maxTokens, undefined);
+    const explicitMaxTokens = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm', maxTokens: 4096 } });
+    assert.equal(explicitMaxTokens.config.advisor.maxTokens, 4096);
 
     // privacy.history 已退役为未知键（警告保留）；非法值拒绝改用仍受验证的 repoContext
     const badPrivacy = resolveAdvisorFlowConfig({ privacy: { repoContext: 'bogus' } });

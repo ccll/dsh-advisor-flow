@@ -338,7 +338,7 @@ flowchart TD
   - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 增项，契约在此补记）。
 - **设置命名空间** `advisor-flow`（settings.yaml 顶层键；默认值对齐 pi 0.8.2，C-008）：
-  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens`、`advisor.callTimeoutMs`（无重试）
+  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
@@ -388,7 +388,7 @@ flowchart TD
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
   - `resolveModelInfo` 能力门控 effort：仅模型声明时发送（记适配：pi 无条件发送）。
-  - `maxTokens` 与 `callTimeoutMs` 可配置；deadline 融合 dispose 信号，race 每 chunk。
+  - `maxTokens`（缺省跟随宿主模型配置：resolveModelInfo.defaultMaxTokens，未声明省略参数；显式配置覆盖）与 `callTimeoutMs`（默认 600000，C-015）可配置；deadline 融合 dispose 信号，race 每 chunk。
   - 失败无重试：咨询失败（provider 错误/空回复/缺决策行/矛盾决策行/预算耗尽）直接上抛为门失败类别，按阻断模式处置。
   - 意见为自由文本原样采用（无 JSON 解包——dsh-advisor 谱系遗留物退役）；空意见 = 失败（AdvisorNoAdviceError 语义）；按需咨询协议为英文 `Verdict: sound` 首行约定。
   - 意见账本：issue（含 normalizedQuestion 与 draft 标记）→ outcome 回写 reserve/commit/release 一次性；`reattachAdvice` 同问去重（归一化 question 匹配历史意见）；预留生命周期随引擎实例存活——引擎重建/会话终止时未决预留释放，不跨进程持久。
@@ -486,7 +486,7 @@ flowchart TD
 
 ### web 设置卡
 - 职责: 设置页 Advisor Flow 卡片（开关、模型、门矩阵、新配置键、隐私档位、风险提示），经自有 gateway RPC 读写（承接 R-02-001 的 GUI 面）
-- 关键内部结构: 旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）。
+- 关键内部结构: 旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省（T-016）。
 - 代码位置: lib/client/
 - 实现: client bundle（web profile）
 
@@ -508,7 +508,7 @@ flowchart TD
 
 ## 运行时、并发与失败语义
 
-- **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 180s，可配）；超时按阻断模式处置并记录。
+- **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
