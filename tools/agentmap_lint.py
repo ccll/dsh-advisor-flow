@@ -771,7 +771,7 @@ def task_state(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-COMMIT_EVIDENCE_LINE_RE = re.compile(r"^-\s*commit:\s*[0-9a-f]{7,40}\s*$", re.MULTILINE)
+COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*[0-9a-f]{7,40}\s*")
 COMMIT_EVIDENCE_HASH_RE = re.compile(r"^-\s*commit:\s*([0-9a-f]{7,40})\s*$", re.MULTILINE)
 
 
@@ -782,17 +782,29 @@ def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     The immutability contract protects the audit record, while completed-task
     evidence must resolve to commits reachable from HEAD; once an amend
     destroys a referenced commit the two rules cannot both hold. This
-    admission resolves that conflict narrowly: same terminal state, no change
-    outside `- commit:` lines, one-for-one hash replacement, every removed
-    hash unreachable and every added hash reachable from HEAD.
+    admission resolves that conflict narrowly: same terminal state, same line
+    count, only lines matching the `- commit:` evidence shape may differ and
+    only at identical line positions (evidence lines cannot move between
+    sections), one-for-one hash replacement, every removed hash unreachable
+    and every added hash reachable from HEAD.
     """
     old_state = task_state(old_text)
     if old_state is None or old_state not in TERMINAL_STATES:
         return False
     if task_state(new_text) != old_state:
         return False
-    if COMMIT_EVIDENCE_LINE_RE.sub("", old_text) != COMMIT_EVIDENCE_LINE_RE.sub("", new_text):
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    if len(old_lines) != len(new_lines):
         return False
+    for old_line, new_line in zip(old_lines, new_lines):
+        if old_line == new_line:
+            continue
+        if not (
+            COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
+            and COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
+        ):
+            return False
     old_hashes = COMMIT_EVIDENCE_HASH_RE.findall(old_text)
     new_hashes = COMMIT_EVIDENCE_HASH_RE.findall(new_text)
     if not old_hashes or len(old_hashes) != len(new_hashes):
@@ -2210,6 +2222,20 @@ def self_test_terminal_evidence_repair() -> None:
         check_history_transition(root, result, closure, repair, check_additions=True)
         assert not result.errors, result.errors
 
+        # Shape-level assertions on multi-evidence-line texts: partial in-place
+        # replacement is admitted, moving an evidence line to another position
+        # is not.
+        synthetic_old = (
+            "---\ndoc-type: task\nmutation: lifecycle\nid: T-001\n---\n# T\n状态: completed\n\n## 终态与证据\n\n"
+            f"- 实现: x\n- 测试: x\n- commit: {dangling}\n- 注: mid\n- commit: {initial}\n"
+        )
+        synthetic_fixed = synthetic_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
+        assert is_commit_evidence_repair(root, synthetic_old, synthetic_fixed)
+        synthetic_moved = synthetic_old.replace(f"- commit: {initial}\n", "").replace(
+            "- 注: mid\n", f"- commit: {initial}\n- 注: mid\n"
+        )
+        assert not is_commit_evidence_repair(root, synthetic_old, synthetic_moved)
+
         # Negative: reachable → reachable hash swap is not a repair.
         task.write_text(
             task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
@@ -2238,7 +2264,7 @@ def self_test_terminal_evidence_repair() -> None:
 
         # Negative: reachable → reachable hash swap stays rejected on push.
         task.write_text(
-            task.read_text(encoding="utf-8").replace(f"- commit: {closure}", f"- commit: {initial}"),
+            task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
             encoding="utf-8",
         )
         subprocess.run(["git", "add", "."], cwd=root, check=True)
@@ -2490,6 +2516,7 @@ def self_test() -> None:
             check=True,
         )
         assert "T-002" in historical_task_ids(root)
+    self_test_terminal_evidence_repair()
     self_test_merge_task_renumbering()
     print("agentmap lint self-test passed")
 

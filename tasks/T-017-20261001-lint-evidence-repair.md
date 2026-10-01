@@ -21,7 +21,7 @@ id: T-017
 
 ## 收敛方案
 
-- `tools/agentmap_lint.py` 新增 `is_commit_evidence_repair(root, old_text, new_text)`：终态任务编辑仅当（① 终态不变；② 差异仅限 `- commit:` 证据行；③ 哈希一一对应替换且有效变更非空；④ 被移除哈希均不可达、新增哈希均可达——以 `resolves_to_reachable_commit`（rev-parse + HEAD 祖先判定）为准）时返回 true。
+- `tools/agentmap_lint.py` 新增 `is_commit_evidence_repair(root, old_text, new_text)`：终态任务编辑仅当（① 终态不变；② 逐行位置对齐——仅双方同为 `- commit:` 证据形状的行可不同，证据行不得跨行位移；③ 哈希一一对应替换且有效变更非空；④ 被移除哈希均不可达、新增哈希均可达——以 `resolves_to_reachable_commit`（rev-parse + HEAD 祖先判定）为准）时返回 true。
 - `check_history_transition`（pre-push 历史轴）：「changed after reaching a terminal state」判定前先过豁免；删除/改态/重排路径不受豁免影响（状态变化与重命名判定先于豁免短路）。
 - 现场检查（pre-commit 轴）同口径：`terminal task is immutable` 判定前先过同一豁免函数。
 - RATIONALE 追加 C-016 记账（append-only）；AGENTS.md 系统文本不动（CANONICAL_FILES_SHA256 钉定），bootstrap 升级覆盖 `tools/agentmap_lint.py` 时须回移植本豁免（残余风险记入终态）。
@@ -41,7 +41,7 @@ id: T-017
 |---|---|---|
 | 成功 | 适用：悬空→可达的纯证据行替换在现场轴与历史轴均放行 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
 | 异常 | 适用：可达→可达替换、非证据行篡改在两轴仍拒绝 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
-| 边界配置 | 适用：证据行数量不一致不豁免；哈希多重集不变的纯重排/纯格式化不豁免；非 `- commit:` 行差异不豁免；abandoned/superseded 终态同语义适用 | `tools/agentmap_lint.py::is_commit_evidence_repair` |
+| 边界配置 | 适用：证据行位移/跨行重排（含重排+换哈希）不豁免；哈希多重集不变的纯格式化不豁免；非 `- commit:` 行差异不豁免；abandoned/superseded 终态同语义适用 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
 | 副作用 | 适用：既有终态不可变主路径、重排例外、直接终态创建判定不回归 | `tools/agentmap_lint.py::self_test` |
 
 ## 终态与证据
