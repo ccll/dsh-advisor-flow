@@ -2209,6 +2209,11 @@ def self_test_terminal_evidence_repair() -> None:
             "- 注: mid\n", f"- commit: {initial}\n- 注: mid\n"
         )
         assert not is_commit_evidence_repair(root, synthetic_old, synthetic_moved)
+        # Repeated same-hash replacement (the real 8eac96c shape: two lines
+        # citing one destroyed commit, both redirected to its amended self).
+        repeated_old = synthetic_old.replace(f"- commit: {initial}", f"- commit: {dangling}")
+        repeated_fixed = repeated_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
+        assert is_commit_evidence_repair(root, repeated_old, repeated_fixed)
 
         # Negative: reachable → reachable hash swap is not a repair.
         task.write_text(
