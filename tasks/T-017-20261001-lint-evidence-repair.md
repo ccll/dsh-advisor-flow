@@ -41,7 +41,7 @@ id: T-017
 |---|---|---|
 | 成功 | 适用：悬空→可达的纯证据行替换在现场轴与历史轴均放行 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
 | 异常 | 适用：可达→可达替换、非证据行篡改在两轴仍拒绝 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
-| 边界配置 | 适用：证据行位移/跨行重排（含重排+换哈希）不豁免；哈希多重集不变的纯格式化不豁免；非 `- commit:` 行差异不豁免；abandoned/superseded 终态同语义适用 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
+| 边界配置 | 适用：证据行位移/跨行重排（含重排+换哈希）与行数不一致不豁免；哈希不变的纯格式化不豁免；非 `- commit:` 行差异不豁免；豁免按行形状判定、不解析小节语义，正文同形行（如本 task 背景段内引用）同在覆盖面；abandoned/superseded 终态同语义适用 | `tools/agentmap_lint.py::self_test_terminal_evidence_repair` |
 | 副作用 | 适用：既有终态不可变主路径、重排例外、直接终态创建判定不回归 | `tools/agentmap_lint.py::self_test` |
 
 ## 终态与证据

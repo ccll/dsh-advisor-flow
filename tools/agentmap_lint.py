@@ -61,6 +61,7 @@ DECISION_EVIDENCE_RE = re.compile(
 )
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
+COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
 TASK_NAME_RE = re.compile(r"^(T-\d{3})-\d{8}-.+\.md$")
 LEGACY_TASK_NAME_RE = re.compile(r"^\d{8}-.+\.md$")
 T_ID_RE = re.compile(r"\bT-\d{3}\b")
@@ -771,10 +772,6 @@ def task_state(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*[0-9a-f]{7,40}\s*")
-COMMIT_EVIDENCE_HASH_RE = re.compile(r"^-\s*commit:\s*([0-9a-f]{7,40})\s*$", re.MULTILINE)
-
-
 def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     """True when a terminal-task edit only swaps unreachable commit-evidence
     hashes for reachable ones (audit-chain repair after an upstream amend).
@@ -785,8 +782,10 @@ def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     admission resolves that conflict narrowly: same terminal state, same line
     count, only lines matching the `- commit:` evidence shape may differ and
     only at identical line positions (evidence lines cannot move between
-    sections), one-for-one hash replacement, every removed hash unreachable
-    and every added hash reachable from HEAD.
+    sections), each differing position pairing one unreachable old hash with
+    one reachable new hash. The shape check is line-local and section-blind:
+    any line carrying the evidence shape qualifies wherever it sits in the
+    document, so prose lines that happen to match are inside the coverage too.
     """
     old_state = task_state(old_text)
     if old_state is None or old_state not in TERMINAL_STATES:
@@ -797,31 +796,23 @@ def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     new_lines = new_text.splitlines()
     if len(old_lines) != len(new_lines):
         return False
+    replacements: list[tuple[str, str]] = []
     for old_line, new_line in zip(old_lines, new_lines):
         if old_line == new_line:
             continue
-        if not (
-            COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
-            and COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
-        ):
+        old_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
+        new_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
+        if not old_match or not new_match:
             return False
-    old_hashes = COMMIT_EVIDENCE_HASH_RE.findall(old_text)
-    new_hashes = COMMIT_EVIDENCE_HASH_RE.findall(new_text)
-    if not old_hashes or len(old_hashes) != len(new_hashes):
+        replacements.append((old_match["hash"], new_match["hash"]))
+    if not replacements:
         return False
-    delta: dict[str, int] = {}
-    for item in old_hashes:
-        delta[item] = delta.get(item, 0) + 1
-    for item in new_hashes:
-        delta[item] = delta.get(item, 0) - 1
-    changed = {item: count for item, count in delta.items() if count != 0}
-    if not changed:
-        return False
-    for item, count in changed.items():
-        reachable = resolves_to_reachable_commit(root, item)
-        if count > 0 and reachable:
+    for old_hash, new_hash in replacements:
+        if old_hash == new_hash:
             return False
-        if count < 0 and not reachable:
+        if resolves_to_reachable_commit(root, old_hash):
+            return False
+        if not resolves_to_reachable_commit(root, new_hash):
             return False
     return True
 
@@ -2131,12 +2122,19 @@ def self_test_terminal_evidence_repair() -> None:
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
         subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+
+        def commit(message: str) -> str:
+            subprocess.run(
+                ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", message],
+                cwd=root,
+                check=True,
+            )
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
-            cwd=root,
-            check=True,
-        )
+        initial = commit("initial")
         assert not lint(root, strict_tests=True).errors
         branch = subprocess.run(
             ["git", "branch", "--show-current"],
@@ -2145,23 +2143,13 @@ def self_test_terminal_evidence_repair() -> None:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        initial = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
         # A commit that becomes unreachable from HEAD (side branch deleted),
         # mirroring a referenced commit destroyed by an upstream amend.
         subprocess.run(["git", "checkout", "-qb", "side"], cwd=root, check=True)
         todo = root / "TODO.md"
         todo.write_text(todo.read_text(encoding="utf-8") + "\nscratch\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "dangling"],
-            cwd=root,
-            check=True,
-        )
-        dangling = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        dangling = commit("dangling")
         subprocess.run(["git", "checkout", "-q", branch], cwd=root, check=True)
         subprocess.run(["git", "branch", "-qD", "side"], cwd=root, check=True)
         assert not resolves_to_reachable_commit(root, dangling)
@@ -2188,14 +2176,7 @@ def self_test_terminal_evidence_repair() -> None:
             encoding="utf-8",
         )
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "close"],
-            cwd=root,
-            check=True,
-        )
-        closure = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        closure = commit("close")
 
         # Current-tree axis: the evidence repair edit is admitted.
         task.write_text(
@@ -2205,14 +2186,7 @@ def self_test_terminal_evidence_repair() -> None:
         repaired = lint(root, strict_tests=True)
         assert not any("terminal task is immutable" in error for error in repaired.errors), repaired.errors
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "repair"],
-            cwd=root,
-            check=True,
-        )
-        repair = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        repair = commit("repair")
 
         # History axis: the repair commit is admitted on push.
         result = Result()
@@ -2250,14 +2224,7 @@ def self_test_terminal_evidence_repair() -> None:
         tampered = lint(root, strict_tests=True)
         assert any("terminal task is immutable" in error for error in tampered.errors), tampered.errors
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "tamper"],
-            cwd=root,
-            check=True,
-        )
-        tamper = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        tamper = commit("tamper")
         result = Result()
         check_history_transition(root, result, repair, tamper, check_additions=True)
         assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
@@ -2268,14 +2235,7 @@ def self_test_terminal_evidence_repair() -> None:
             encoding="utf-8",
         )
         subprocess.run(["git", "add", "."], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "swap"],
-            cwd=root,
-            check=True,
-        )
-        swapped_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        swapped_commit = commit("swap")
         result = Result()
         check_history_transition(root, result, tamper, swapped_commit, check_additions=True)
         assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
