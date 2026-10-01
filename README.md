@@ -21,6 +21,8 @@ DeepSeek Harness（DSH）插件：把 [pi-advisor-flow](https://github.com/phili
 dsh plugin --profile web add dsh-advisor-flow
 ```
 
+> npm 包暂未发布：当前请从本仓库获取源码，待 npm 发布后上述命令即可用。
+
 零宿主补丁、零 postinstall；对 DSH 插件接缝的版本假设见 `package.json` 的 `dsh.compat`。
 
 ## 配置
