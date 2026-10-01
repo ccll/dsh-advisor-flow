@@ -60,7 +60,7 @@ test('R-02-003 禁用态与缺失路由在状态中可查询（disabled-with-rea
     assert.equal(snapshot.reason, 'missing-advisor-model');
     assert.equal(snapshot.pending, 0);
     assert.equal(snapshot.lastActivity, undefined);
-    assert.equal(snapshot.failureMode, 'block-session'); // C-008 ②：默认对齐 pi
+    assert.equal(snapshot.failureMode, 'block-tool'); // C-017：默认 block-tool（偏离 pi 记档）
 });
 
 test('R-02-002/AC-04 逐次明细可见：status 快照携带 usageRecords', () => {

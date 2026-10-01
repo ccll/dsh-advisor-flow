@@ -145,7 +145,7 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(empty.config.enabled, false);
     assert.equal(empty.config.failureMode, DEFAULT_FAILURE_MODE);
     assert.deepEqual(FAILURE_MODES, ['warn-and-continue', 'block-tool', 'block-session']);
-    // C-008 ②：默认值对齐 pi 0.8.2
+    // 默认值对齐 pi 0.8.2（C-008 ②）；偏离项 failureMode=block-tool（C-017）
     assert.equal(empty.config.privacy.fileContent, false);
     assert.equal(empty.config.privacy.untrackedContent, false);
     assert.equal(empty.config.privacy.redactSecrets, false);
@@ -191,10 +191,10 @@ test('R-02-001 门配置解析为结构化对象（三布尔 + 循环门阈值 +
     }
 });
 
-test('R-02-001/AC-04 默认值对齐 pi 0.8.2：block-session、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3', () => {
+test('R-02-001/AC-04 默认值：failureMode=block-tool（偏离 pi 0.8.2 记 C-017）、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3', () => {
     const resolved = resolveAdvisorFlowConfig({});
     assert.equal(resolved.ok, true);
-    assert.equal(resolved.config.failureMode, 'block-session');
+    assert.equal(resolved.config.failureMode, 'block-tool');
     assert.equal(resolved.config.gates.plan.enabled, true);
     assert.equal(resolved.config.gates.failure.enabled, true);
     assert.equal(resolved.config.gates.completion.enabled, true);

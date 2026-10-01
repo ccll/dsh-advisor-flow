@@ -347,6 +347,17 @@ test('R-02-001/AC-01 卡片开关与下拉编辑映射到正确配置路径（�
     assert.equal(controller.getState().patch.privacy.history, 'off');
 });
 
+test('R-02-001/AC-04 未配置 raw 的阻断模式下拉选中默认档位（C-017: block-tool）', async () => {
+    // gateway get 返回 RAW namespace：未配置时 config.failureMode 为 undefined，
+    // 下拉回退绑定 DEFAULT_FAILURE_MODE——展示默认须与运行时默认一致（T-018）。
+    const { container } = await renderedCard({ raw: { enabled: true } });
+    expandCard(container);
+    const select = findById(container, 'advisor-failure-mode');
+    assert.ok(select, '阻断模式下拉存在');
+    const selected = select.children.find((node) => node.attrs?.selected === 'selected');
+    assert.equal(selected?.attrs?.value, 'block-tool');
+});
+
 test('R-02-001/AC-01 官方 Switch 本体可点：点击翻转启用值（目验「点开关无反应」）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);

@@ -32,7 +32,7 @@ owner: agent 主笔，项目属主审批
 | 状态与生命周期 | 适用: 咨询终态一次性与意见回写一次性约束失败隔离设计 | SOLUTION.md#运行时、并发与失败语义 |
 | 运行时、并发与失败语义 | 适用: 门内联等待与非阻断保证的相互作用是本方案最大风险点 | SOLUTION.md#运行时、并发与失败语义 |
 | 外部集成 | 适用: LLM 路由、宿主工具层、会话存储、git 四类集成缝 | SOLUTION.md#静态架构 |
-| 配置与可变点 | 适用: 全部行为档位收敛到一个设置命名空间，默认值对齐 pi | SOLUTION.md#产品契约 |
+| 配置与可变点 | 适用: 全部行为档位收敛到一个设置命名空间，默认值对齐 pi（偏离项: failureMode 默认 block-tool，C-017） | SOLUTION.md#产品契约 |
 | 安全与信任边界 | 适用: 素材出境与意见入境双向信任问题 | SOLUTION.md#数据流与信任边界图 |
 | 部署、迁移与恢复 | 适用: web profile 装载与版本升级路径 | SOLUTION.md#部署视图 |
 | 兼容性与版本演进 | 适用: 依赖 dsh 插件接缝的版本契约需声明；工具参数 2→6 为兼容性变更 | SOLUTION.md#部署视图 |
@@ -337,12 +337,12 @@ flowchart TD
   - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要、逐次明细、剩余次数、门决策统计与干预计数。
   - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 增项，契约在此补记）。
-- **设置命名空间** `advisor-flow`（settings.yaml 顶层键；默认值对齐 pi 0.8.2，C-008）：
+- **设置命名空间** `advisor-flow`（settings.yaml 顶层键；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017）：
   - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
-  - `failureMode`：`block-session`（默认，对齐 pi）/ `block-tool` / `warn-and-continue`
+  - `failureMode`：`block-tool`（默认；偏离 pi 0.8.2 的 block-session，记 C-017）/ `warn-and-continue` / `block-session`
   - `blockOnBlocked`（默认 true：blocked 决策时是否尽力停止当前执行）
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）
@@ -460,7 +460,7 @@ flowchart TD
 ### 配置与状态服务
 - 职责: `advisor-flow` 命名空间注册与 live re-apply；settings section 注册；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计与干预计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
-  - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008）。
+  - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
   - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging；旧键警告保留。
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
@@ -519,7 +519,7 @@ flowchart TD
 
 ## 分阶段交付
 
-- **T-011 契约与守则对齐**：文案英文化（程序化断言）、六参工具面、UUID/空意见/前缀、Decision 语义、守则三行+custom+预算行+前置条件、连续计数+波动归一+threshold 下界、门预告/通告/问句、manual 替换+失败可见、JSON 解包移除、默认值对齐、新配置键、白名单、blockOnBlocked。
+- **T-011 契约与守则对齐**：文案英文化（程序化断言）、六参工具面、UUID/空意见/前缀、Decision 语义、守则三行+custom+预算行+前置条件、连续计数+波动归一+threshold 下界、门预告/通告/问句、manual 替换+失败可见、JSON 解包移除、默认值对齐（failureMode 后经 C-017 偏离为 block-tool）、新配置键、白名单、blockOnBlocked。
 - **T-012 素材出境链**（先 spike）：会话脉络来源双轨裁决（dsh-session-query vs 事件增量）、git 上下文构建器、六区装配与共享预算、attachments 归属校验与移交验证、per-tool 策略、redact 六模式+先脱敏后截断、偏好映射。
 - **T-013 回写与用量面**：record_advisor_outcome 工具+JSONL/HMAC/锁/轮转、逐次明细查询面、剩余次数、决策统计、设置卡同步。
 - **T-014 Scout 移植**（spike 先行）：manifest 分组→选组→重建→回退链路移植；依赖 T-012 素材管道；执行者模型解析缝待核，不可承载回报东家。
