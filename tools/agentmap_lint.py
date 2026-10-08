@@ -61,6 +61,7 @@ DECISION_EVIDENCE_RE = re.compile(
 )
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
+COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
 TASK_NAME_RE = re.compile(r"^(T-\d{3})-\d{8}-.+\.md$")
 LEGACY_TASK_NAME_RE = re.compile(r"^\d{8}-.+\.md$")
 T_ID_RE = re.compile(r"\bT-\d{3}\b")
@@ -172,7 +173,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "691d715f7ba4b058f778d178dead2f7528668eae703302e1d4bb2ef415d6337b",
+    "AGENTS.md": "12d9bc179ee47a695952c4c1ec423d5bffbcdbae25b549ebca6aa7cd81dc8e43",
     ".githooks/commit-msg": "8e2d1dd49ab9fd71e8bb3b87fe5786c0ea0314327e58558b518499541e75a51d",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "c85da06d5f5423959656195835bb570912839e9e65483d3cc20bf096aea9cd4c",
@@ -1015,6 +1016,51 @@ def task_state(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
+    """True when a terminal-task edit only swaps unreachable commit-evidence
+    hashes for reachable ones (audit-chain repair after an upstream amend).
+
+    The immutability contract protects the audit record, while completed-task
+    evidence must resolve to commits reachable from HEAD; once an amend
+    destroys a referenced commit the two rules cannot both hold. This
+    admission resolves that conflict narrowly: same terminal state, same line
+    count, only lines matching the `- commit:` evidence shape may differ and
+    only at identical line positions (evidence lines cannot move between
+    sections), each differing position pairing one unreachable old hash with
+    one reachable new hash. The shape check is line-local and section-blind:
+    any line carrying the evidence shape qualifies wherever it sits in the
+    document, so prose lines that happen to match are inside the coverage too.
+    """
+    old_state = task_state(old_text)
+    if old_state is None or old_state not in TERMINAL_STATES:
+        return False
+    if task_state(new_text) != old_state:
+        return False
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    if len(old_lines) != len(new_lines):
+        return False
+    replacements: list[tuple[str, str]] = []
+    for old_line, new_line in zip(old_lines, new_lines):
+        if old_line == new_line:
+            continue
+        old_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
+        new_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
+        if not old_match or not new_match:
+            return False
+        replacements.append((old_match["hash"], new_match["hash"]))
+    if not replacements:
+        return False
+    for old_hash, new_hash in replacements:
+        if old_hash == new_hash:
+            return False
+        if resolves_to_reachable_commit(root, old_hash):
+            return False
+        if not resolves_to_reachable_commit(root, new_hash):
+            return False
+    return True
+
+
 def git_ref_text(root: Path, ref: str, relative: Path) -> str | None:
     try:
         return subprocess.run(
@@ -1258,6 +1304,8 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
             continue
         renamed = renamed_paths.get(path)
         if renamed and new_tasks.get(renamed) == replace_task_ids(old_text, renamed_ids):
+            continue
+        if is_commit_evidence_repair(root, old_text, new_tasks.get(path, "")):
             continue
         result.errors.append(f"{commit[:12]}: {path} changed after reaching a terminal state")
 
@@ -1621,7 +1669,11 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
         changed_old = old if relative.as_posix() in changed else None
         if changed_old and parse_frontmatter_text(changed_old).get("mutation") == "lifecycle":
             old_state = task_state(changed_old)
-            if old_state in TERMINAL_STATES and changed_old != text:
+            if (
+                old_state in TERMINAL_STATES
+                and changed_old != text
+                and not is_commit_evidence_repair(root, changed_old, text)
+            ):
                 result.errors.append(f"tasks/{path.name}: terminal task is immutable")
     for task_id in sorted(duplicate_ids(task_ids)):
         result.errors.append(f"tasks/: duplicate task id {task_id}")
@@ -2310,6 +2362,139 @@ def self_test_merge_task_renumbering() -> None:
         assert not resolved.errors, resolved.errors
 
 
+def self_test_terminal_evidence_repair() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        (root / "tools").mkdir(exist_ok=True)
+        shutil.copy(Path(__file__).resolve(), root / "tools/agentmap_lint.py")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+
+        def commit(message: str) -> str:
+            subprocess.run(
+                ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", message],
+                cwd=root,
+                check=True,
+            )
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        initial = commit("initial")
+        assert not lint(root, strict_tests=True).errors
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        # A commit that becomes unreachable from HEAD (side branch deleted),
+        # mirroring a referenced commit destroyed by an upstream amend.
+        subprocess.run(["git", "checkout", "-qb", "side"], cwd=root, check=True)
+        todo = root / "TODO.md"
+        todo.write_text(todo.read_text(encoding="utf-8") + "\nscratch\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        dangling = commit("dangling")
+        subprocess.run(["git", "checkout", "-q", branch], cwd=root, check=True)
+        subprocess.run(["git", "branch", "-qD", "side"], cwd=root, check=True)
+        assert not resolves_to_reachable_commit(root, dangling)
+        assert resolves_to_reachable_commit(root, initial)
+
+        # Closure with evidence already referencing the destroyed hash: the
+        # state the real amend scenario leaves behind for the next commit.
+        task = root / "tasks/T-001-20260801-search.md"
+        active_text = task.read_text(encoding="utf-8")
+        task.write_text(
+            active_text.replace("状态: active", "状态: completed")
+            + f"""
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- review:
+  - 审核方: reviewer-agent
+  - 目的理解: 验证 Search task 的结果目标
+  - 执行方式: code-review skill
+  - 问题与修复: 无
+  - 复审结论: pass
+- commit: {dangling}
+""",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        closure = commit("close")
+
+        # Current-tree axis: the evidence repair edit is admitted.
+        task.write_text(
+            task.read_text(encoding="utf-8").replace(f"- commit: {dangling}", f"- commit: {initial}"),
+            encoding="utf-8",
+        )
+        repaired = lint(root, strict_tests=True)
+        assert not any("terminal task is immutable" in error for error in repaired.errors), repaired.errors
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        repair = commit("repair")
+
+        # History axis: the repair commit is admitted on push.
+        result = Result()
+        check_outgoing_history(root, result, f"refs/heads/{branch} {repair} refs/heads/{branch} {'0' * 40}\n")
+        assert not any("changed after reaching a terminal state" in error for error in result.errors), result.errors
+        result = Result()
+        check_history_transition(root, result, closure, repair, check_additions=True)
+        assert not result.errors, result.errors
+
+        # Shape-level assertions on multi-evidence-line texts: partial in-place
+        # replacement is admitted, moving an evidence line to another position
+        # is not.
+        synthetic_old = (
+            "---\ndoc-type: task\nmutation: lifecycle\nid: T-001\n---\n# T\n状态: completed\n\n## 终态与证据\n\n"
+            f"- 实现: x\n- 测试: x\n- commit: {dangling}\n- 注: mid\n- commit: {initial}\n"
+        )
+        synthetic_fixed = synthetic_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
+        assert is_commit_evidence_repair(root, synthetic_old, synthetic_fixed)
+        synthetic_moved = synthetic_old.replace(f"- commit: {initial}\n", "").replace(
+            "- 注: mid\n", f"- commit: {initial}\n- 注: mid\n"
+        )
+        assert not is_commit_evidence_repair(root, synthetic_old, synthetic_moved)
+        # Repeated same-hash replacement (the real 8eac96c shape: two lines
+        # citing one destroyed commit, both redirected to its amended self).
+        repeated_old = synthetic_old.replace(f"- commit: {initial}", f"- commit: {dangling}")
+        repeated_fixed = repeated_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
+        assert is_commit_evidence_repair(root, repeated_old, repeated_fixed)
+
+        # Negative: reachable → reachable hash swap is not a repair.
+        task.write_text(
+            task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
+            encoding="utf-8",
+        )
+        swapped = lint(root, strict_tests=True)
+        assert any("terminal task is immutable" in error for error in swapped.errors), swapped.errors
+        task.write_text(git_head_text(root, task.relative_to(root)) or "", encoding="utf-8")
+
+        # Negative: any non-commit-line post-terminal edit stays rejected.
+        task.write_text(task.read_text(encoding="utf-8") + "\ntampered\n", encoding="utf-8")
+        tampered = lint(root, strict_tests=True)
+        assert any("terminal task is immutable" in error for error in tampered.errors), tampered.errors
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        tamper = commit("tamper")
+        result = Result()
+        check_history_transition(root, result, repair, tamper, check_additions=True)
+        assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
+
+        # Negative: reachable → reachable hash swap stays rejected on push.
+        task.write_text(
+            task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        swapped_commit = commit("swap")
+        result = Result()
+        check_history_transition(root, result, tamper, swapped_commit, check_additions=True)
+        assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -2575,6 +2760,7 @@ def self_test() -> None:
             check=True,
         )
         assert "T-002" in historical_task_ids(root)
+    self_test_terminal_evidence_repair()
     self_test_merge_task_renumbering()
     print("agentmap lint self-test passed")
 

@@ -318,8 +318,14 @@ CONVENTIONS 是本项目的过程规范入口：记录在这个仓库工作必�
 - **已共享冲突**：若 commits 已推送或共享，默认不重写；canonical target 保号。
   - incoming tasks 按同一规则在 reconciliation commit 中整体重排。
   - 只有全部使用者同意时才 force-push。
-- **重排边界**：纯编号迁移是 terminal task 不可变规则的唯一例外，只允许改变 T-ID 及其引用，不得改变状态、正文语义或其他证据。
+- **重排边界**：纯编号迁移只允许改变 T-ID 及其引用。
+  - 不得改变状态、正文语义或其他证据。
   - 完成后必须运行 lint。
+- **证据指针修复**：终态 task 的 `- commit:` 证据行允许悬空修复。
+  - 证据引用的提交被改写销毁时，应当修复为可达引用。
+  - 仅限不可达哈希替换为可达哈希，方向由校验器机械判定。
+  - 状态、行数与证据行位置保持不变。
+  - 其余终态后编辑仍拒绝。
 - **生命周期**：frontmatter 使用 `mutation: lifecycle`；active 期间允许持续编辑。
   - 状态只能从 active 转为 completed、abandoned 或 superseded；进入终态后不可再修改、删除或移动。
   - completed 表示执行 agent 判断实现完成、已经测试且 SOLUTION 与结果实现一致；无需东家或独立 agent 确认。
