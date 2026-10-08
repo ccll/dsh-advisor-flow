@@ -61,7 +61,6 @@ DECISION_EVIDENCE_RE = re.compile(
 )
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
-COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
 TASK_NAME_RE = re.compile(r"^(T-\d{3})-\d{8}-.+\.md$")
 LEGACY_TASK_NAME_RE = re.compile(r"^\d{8}-.+\.md$")
 T_ID_RE = re.compile(r"\bT-\d{3}\b")
@@ -118,12 +117,18 @@ READINESS_RULES = {
     "现状差距已有 task 承接": True,
     "可派生验证": False,
 }
+# The modality must sit in the outcome clause, not anywhere in the line: a
+# global (?=.*应当) lookahead was satisfied by coincidental condition-internal
+# substrings (对应当协议, 响应当超过) and masked non-canonical outcome
+# modalities such as 系统应不/系统应限制 (postfix calibration, 2026-10).
 EARS_RE = re.compile(
-    r"^-\s*(?:AC-\d{2}\s+)?(?=.*应当)(?:系统|当.+时|若.+|在.+期间|具备.+时)",
+    r"^-\s*(?:AC-\d{2}\s+)?(?:系统(?=.*应当)|当.+时(?=.*应当)"
+    r"|若.+，(?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
     re.MULTILINE,
 )
 AC_LINE_RE = re.compile(
-    r"^-\s*(AC-\d{2})\s+(?=.*应当)(?:系统|当.+时|若.+|在.+期间|具备.+时)",
+    r"^-\s*(AC-\d{2})\s+(?:系统(?=.*应当)|当.+时(?=.*应当)"
+    r"|若.+，(?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
     re.MULTILINE,
 )
 REQUIRED_VERIFICATION_DIMENSIONS = {"成功", "异常", "边界配置", "副作用"}
@@ -167,7 +172,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "f147014436b5f7548e70dd176e1ce4bb7ea02b8d80a80b5c3d998e13850b13c4",
+    "AGENTS.md": "691d715f7ba4b058f778d178dead2f7528668eae703302e1d4bb2ef415d6337b",
     ".githooks/commit-msg": "8e2d1dd49ab9fd71e8bb3b87fe5786c0ea0314327e58558b518499541e75a51d",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "c85da06d5f5423959656195835bb570912839e9e65483d3cc20bf096aea9cd4c",
@@ -309,6 +314,54 @@ def head_decision_text(root: Path) -> str:
         or git_head_text(root, Path("DECISIONS.md"))
         or ""
     )
+
+
+DECISION_ID_RE = re.compile(
+    r"\b(?:R-\d{2}-\d{3}/AC-\d{2}|R-\d{2}-\d{3}|T-\d{3}|G-\d+|NG-\d+|C-\d{3}[A-Z]?)\b"
+)
+
+
+def decision_entry_signature(body: str) -> tuple:
+    """Semantic identity of one entry: heading, date, ID/evidence/number multisets."""
+    lines = body.splitlines()
+    heading = lines[0].rstrip() if lines else ""
+    date_match = re.search(r"^日期:.*$", body, re.MULTILINE)
+    date = date_match.group(0).rstrip() if date_match else ""
+    ids = tuple(sorted(DECISION_ID_RE.findall(body)))
+    evidence = tuple(sorted(DECISION_EVIDENCE_RE.findall(body)))
+    skeleton = DECISION_ID_RE.sub(" ", body)
+    numbers = tuple(sorted(re.findall(r"\d+(?:\.\d+)?", skeleton)))
+    return (heading, date, ids, evidence, numbers)
+
+
+def decision_entry_signatures(text: str) -> list:
+    """Pair each C-ID with its semantic signature, in document order."""
+    matches = list(C_HEADING_RE.finditer(text))
+    entries = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        entries.append((match.group(1), decision_entry_signature(text[match.start() : end])))
+    return entries
+
+
+def decision_transition_failure(old_text: str, new_text: str) -> str | None:
+    """Existing entries may be reworded in place; identity and semantics stay frozen.
+
+    东家授权（2026-10-06）：措辞层修订放行，语义漂移拒绝。指纹 = 标题行、日期行、
+    ID 多重集、实现证据多重集与数值多重集；分点重构只动文字与列表形状，指纹不变。
+    """
+    old_entries = decision_entry_signatures(decision_entries(old_text))
+    new_entries = decision_entry_signatures(decision_entries(new_text))
+    if len(new_entries) < len(old_entries):
+        return "removed existing history"
+    for index in range(len(old_entries)):
+        old_cid, old_signature = old_entries[index]
+        new_cid, new_signature = new_entries[index]
+        if old_cid != new_cid:
+            return "decision %s replaced by %s" % (old_cid, new_cid)
+        if old_signature != new_signature:
+            return "decision %s changed identity or semantics" % old_cid
+    return None
 
 
 def solution_trace_rows(body: str | None) -> list[tuple[str, str, str, str]]:
@@ -518,6 +571,20 @@ def git_changed_paths(root: Path) -> set[str]:
         return set()
 
 
+def git_untracked_paths(root: Path) -> set[str]:
+    try:
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        return set(untracked)
+    except OSError:
+        return set()
+
+
 @contextmanager
 def staged_checkout(root: Path):
     with tempfile.TemporaryDirectory() as directory:
@@ -599,12 +666,16 @@ def check_system_files(root: Path, result: Result, changed: set[str]) -> None:
             appended = ""
             if name in changed:
                 entries_old = decision_entries(head_decision_text(root))
-                if entries_old and not current_entries.startswith(entries_old):
-                    result.errors.append(
-                        f"{name}: append-only content was modified or removed"
-                    )
-                elif entries_old:
-                    appended = current_entries[len(entries_old):]
+                appended = ""
+                if entries_old:
+                    failure = decision_transition_failure(entries_old, current_entries)
+                    if failure:
+                        result.errors.append(f"{name}: append-only content {failure}")
+                    else:
+                        old_count = len(decision_entry_signatures(entries_old))
+                        new_matches = list(C_HEADING_RE.finditer(current_entries))
+                        start = new_matches[old_count].start() if len(new_matches) > old_count else len(current_entries)
+                        appended = current_entries[start:]
                 else:
                     appended = current_entries
             if appended and DECISION_EVIDENCE_RE.search(strip_code_fences(appended)):
@@ -623,6 +694,178 @@ def check_todo_entries(root: Path, result: Result) -> None:
             result.errors.append(
                 f"TODO.md:{line_number}: entry needs one valid intake type tag"
             )
+
+
+# Writing-style warnings enforce the AGENTS.md 写作风格 rule with heuristics:
+# one rule per list item, shallow parentheses. The framework canonical
+# AGENTS.md is excluded because bootstrap owns it, not project authors.
+# Terminal tasks are excluded because they are immutable history and the
+# style rule applies to living documents; their warnings could never be
+# remediated without violating task immutability.
+STYLE_FILES = ("PRD.md", "SOLUTION.md", "DOMAIN.md", "RATIONALE.md", "TODO.md", "CONVENTIONS.md")
+# RATIONALE narrative paragraphs are the designated home of prose reasoning.
+STYLE_PROSE_EXEMPT_FILES = {"RATIONALE.md", "DECISIONS.md"}
+STYLE_LIST_ITEM_MAX_CHARS = 160
+STYLE_LIST_ITEM_MAX_STOPS = 3
+STYLE_PROSE_MAX_CHARS = 240
+STYLE_LIST_ITEM_RE = re.compile(r"^(?:[-*]|\d+\.)\s+")
+STYLE_OPENERS = "([（［【"
+STYLE_CLOSERS = ")]）］】"
+# Closed set of vague hedges and quantities. Keep it a closed list. Some words
+# are productive substrings that can match across word boundaries (视情况 in
+# 忽视情况, 也许 in 也许诺); such hits stay warning-level review prompts, and
+# the known collision families are recorded here rather than promised away.
+STYLE_VAGUE_WORDS = (
+    "尽量", "酌情", "适当", "也许", "或许", "差不多", "原则上",
+    "必要时", "尽快", "视情况", "一些", "等等", "之类",
+)
+# A long run of CJK characters without particles, connectors, or prepositions
+# reads as stacked nouns whose referent cannot be parsed; the threshold is
+# deliberately high so normal four-character compounds never trigger it.
+# The breaker set stays closed; every addition must be backed by a real
+# false positive. 而且把被让使将向从到为以于给每该各中可都 come from the
+# postfix calibration (2026-10): predicate chains built on these particles
+# were flagged although they read fine. Accepted trade-off: 为/中/到 also
+# occur inside compound nouns (行为/中间件/到期), so a pile hinging on them
+# splits into shorter runs and stays unflagged.
+STYLE_NOUN_STACK_MAX_CHARS = 14
+STYLE_NOUN_BREAKERS = set(
+    "的了着过与和或之及是不等在并按地得"
+    "而且把被让使将向从到为以于给每该各中可都"
+)
+
+
+def style_prose_exempt(path: Path) -> bool:
+    return path.name in STYLE_PROSE_EXEMPT_FILES
+
+
+def strip_inline_noise(text: str) -> str:
+    text = re.sub(r"`[^`]*`", "", text)
+    return re.sub(r"\((?:https?://[^)]*)\)", "", text)
+
+
+def max_bracket_depth(text: str) -> int:
+    depth = 0
+    deepest = 0
+    for char in text:
+        if char in STYLE_OPENERS:
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        elif char in STYLE_CLOSERS:
+            depth = max(0, depth - 1)
+    return deepest
+
+
+def first_vague_word(text: str) -> str | None:
+    for word in STYLE_VAGUE_WORDS:
+        if word in text:
+            return word
+    return None
+
+
+def max_noun_stack(text: str) -> int:
+    longest = 0
+    current = 0
+    for char in text:
+        if "\u4e00" <= char <= "\u9fff" and char not in STYLE_NOUN_BREAKERS:
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    return longest
+
+
+def check_writing_style(root: Path, result: Result, changed: set[str]) -> None:
+    # Dirty tree (pre-commit / staged): only flag files inside the pending change
+    # (staged or unstaged edits, plus untracked new files) so historical warnings
+    # do not repeat on every commit. Clean tree (--report): scan everything as
+    # the standing inventory. In staged mode the snapshot worktree points at the
+    # real git dir, so git diff HEAD equals the staged change set.
+    paths = []
+    for name in STYLE_FILES:
+        path = root / name
+        if path.is_file():
+            paths.append(path)
+            continue
+        legacy = LEGACY_MAP_FILES.get(name)
+        if legacy and (root / legacy[0]).is_file():
+            paths.append(root / legacy[0])
+    tasks_dir = root / "tasks"
+    task_paths = set()
+    if tasks_dir.is_dir():
+        task_entries = sorted(tasks_dir.glob("*.md"))
+        paths.extend(task_entries)
+        task_paths.update(entry.relative_to(root).as_posix() for entry in task_entries)
+    scan = changed | git_untracked_paths(root)
+    scan_all = not scan
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if not scan_all and relative not in scan:
+            continue
+        if relative in task_paths:
+            state = task_state(path.read_text(encoding="utf-8"))
+            if state in TERMINAL_STATES:
+                continue
+        in_frontmatter = False
+        in_fence = False
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            if line_number == 1 and line.strip() == "---":
+                in_frontmatter = True
+                continue
+            if in_frontmatter:
+                if line.strip() == "---":
+                    in_frontmatter = False
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "|")):
+                continue
+            if stripped.startswith(">"):
+                stripped = stripped.lstrip(">").strip()
+                if not stripped:
+                    continue
+            noisy = strip_inline_noise(stripped)
+            list_match = STYLE_LIST_ITEM_RE.match(noisy)
+            if list_match:
+                content = noisy[list_match.end():]
+                stops = len(re.findall(r"[。；]", content))
+                if len(content) > STYLE_LIST_ITEM_MAX_CHARS or stops >= STYLE_LIST_ITEM_MAX_STOPS:
+                    result.warnings.append(
+                        f"{relative}:{line_number}: list item may carry multiple rules; "
+                        "split so each line has one condition and one action"
+                    )
+                    continue
+            elif not style_prose_exempt(path) and len(noisy) > STYLE_PROSE_MAX_CHARS:
+                result.warnings.append(
+                    f"{relative}:{line_number}: paragraph may pack multiple rules; prefer a list"
+                )
+                continue
+            if not style_prose_exempt(path):
+                # One style warning per line: vague wording, then noun stacks,
+                # then bracket depth.
+                vague = first_vague_word(noisy)
+                if vague:
+                    result.warnings.append(
+                        f'{relative}:{line_number}: vague wording "{vague}"; '
+                        "state the exact condition, quantity, or modality"
+                    )
+                    continue
+                if max_noun_stack(noisy) >= STYLE_NOUN_STACK_MAX_CHARS:
+                    result.warnings.append(
+                        f"{relative}:{line_number}: long noun stack; "
+                        "connect the nouns or split the phrase into a sub-list"
+                    )
+                    continue
+            if max_bracket_depth(noisy) >= 2:
+                result.warnings.append(
+                    f"{relative}:{line_number}: nested parentheses; move long parenthetical content into a sub-list"
+                )
 
 
 def check_traceability(root: Path, result: Result) -> None:
@@ -770,51 +1013,6 @@ def task_state(text: str) -> str | None:
         r"^状态:\s*(active|completed|abandoned|superseded)\s*$", text, re.MULTILINE
     )
     return match.group(1) if match else None
-
-
-def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
-    """True when a terminal-task edit only swaps unreachable commit-evidence
-    hashes for reachable ones (audit-chain repair after an upstream amend).
-
-    The immutability contract protects the audit record, while completed-task
-    evidence must resolve to commits reachable from HEAD; once an amend
-    destroys a referenced commit the two rules cannot both hold. This
-    admission resolves that conflict narrowly: same terminal state, same line
-    count, only lines matching the `- commit:` evidence shape may differ and
-    only at identical line positions (evidence lines cannot move between
-    sections), each differing position pairing one unreachable old hash with
-    one reachable new hash. The shape check is line-local and section-blind:
-    any line carrying the evidence shape qualifies wherever it sits in the
-    document, so prose lines that happen to match are inside the coverage too.
-    """
-    old_state = task_state(old_text)
-    if old_state is None or old_state not in TERMINAL_STATES:
-        return False
-    if task_state(new_text) != old_state:
-        return False
-    old_lines = old_text.splitlines()
-    new_lines = new_text.splitlines()
-    if len(old_lines) != len(new_lines):
-        return False
-    replacements: list[tuple[str, str]] = []
-    for old_line, new_line in zip(old_lines, new_lines):
-        if old_line == new_line:
-            continue
-        old_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
-        new_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
-        if not old_match or not new_match:
-            return False
-        replacements.append((old_match["hash"], new_match["hash"]))
-    if not replacements:
-        return False
-    for old_hash, new_hash in replacements:
-        if old_hash == new_hash:
-            return False
-        if resolves_to_reachable_commit(root, old_hash):
-            return False
-        if not resolves_to_reachable_commit(root, new_hash):
-            return False
-    return True
 
 
 def git_ref_text(root: Path, ref: str, relative: Path) -> str | None:
@@ -1038,8 +1236,12 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
     new_entry = ref_decision_entry(root, commit)
     if check_additions and old_entry and old_entry[1]:
         old_name, old_text = old_entry
-        if new_entry is None or not decision_entries(new_entry[1]).startswith(decision_entries(old_text)):
-            result.errors.append(f"{commit[:12]}: {old_name} modified or removed existing history")
+        if new_entry is None:
+            result.errors.append(f"{commit[:12]}: {old_name} removed existing history")
+        else:
+            failure = decision_transition_failure(decision_entries(old_text), decision_entries(new_entry[1]))
+            if failure:
+                result.errors.append(f"{commit[:12]}: {old_name} {failure}")
     if check_additions and new_entry is not None:
         old_ids = set(C_HEADING_RE.findall(decision_entries(old_entry[1]))) if old_entry else set()
         for cid in set(C_HEADING_RE.findall(decision_entries(new_entry[1]))) - old_ids:
@@ -1056,8 +1258,6 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
             continue
         renamed = renamed_paths.get(path)
         if renamed and new_tasks.get(renamed) == replace_task_ids(old_text, renamed_ids):
-            continue
-        if is_commit_evidence_repair(root, old_text, new_tasks.get(path, "")):
             continue
         result.errors.append(f"{commit[:12]}: {path} changed after reaching a terminal state")
 
@@ -1421,11 +1621,7 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
         changed_old = old if relative.as_posix() in changed else None
         if changed_old and parse_frontmatter_text(changed_old).get("mutation") == "lifecycle":
             old_state = task_state(changed_old)
-            if (
-                old_state in TERMINAL_STATES
-                and changed_old != text
-                and not is_commit_evidence_repair(root, changed_old, text)
-            ):
+            if old_state in TERMINAL_STATES and changed_old != text:
                 result.errors.append(f"tasks/{path.name}: terminal task is immutable")
     for task_id in sorted(duplicate_ids(task_ids)):
         result.errors.append(f"tasks/: duplicate task id {task_id}")
@@ -1558,7 +1754,7 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
     if missing:
         target.append(f"tests: acceptance criteria without test anchor: {', '.join(missing)}")
     if unknown:
-        target.append(
+        result.errors.append(
             f"tests: test anchors reference missing acceptance criteria: {', '.join(unknown)}"
         )
     for relative, ids in sorted(legacy_anchored.items()):
@@ -1803,6 +1999,7 @@ def lint(root: Path, strict_tests: bool = False) -> Result:
     changed = git_changed_paths(root)
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
+    check_writing_style(root, result, changed)
     check_traceability(root, result)
     check_tasks(root, result, changed)
     check_test_anchors(root, result, strict_test_anchors(root, result, strict_tests))
@@ -2113,139 +2310,6 @@ def self_test_merge_task_renumbering() -> None:
         assert not resolved.errors, resolved.errors
 
 
-def self_test_terminal_evidence_repair() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        write_fixture(root)
-        (root / "tools").mkdir(exist_ok=True)
-        shutil.copy(Path(__file__).resolve(), root / "tools/agentmap_lint.py")
-        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
-
-        def commit(message: str) -> str:
-            subprocess.run(
-                ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", message],
-                cwd=root,
-                check=True,
-            )
-            return subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-            ).stdout.strip()
-
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        initial = commit("initial")
-        assert not lint(root, strict_tests=True).errors
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        # A commit that becomes unreachable from HEAD (side branch deleted),
-        # mirroring a referenced commit destroyed by an upstream amend.
-        subprocess.run(["git", "checkout", "-qb", "side"], cwd=root, check=True)
-        todo = root / "TODO.md"
-        todo.write_text(todo.read_text(encoding="utf-8") + "\nscratch\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        dangling = commit("dangling")
-        subprocess.run(["git", "checkout", "-q", branch], cwd=root, check=True)
-        subprocess.run(["git", "branch", "-qD", "side"], cwd=root, check=True)
-        assert not resolves_to_reachable_commit(root, dangling)
-        assert resolves_to_reachable_commit(root, initial)
-
-        # Closure with evidence already referencing the destroyed hash: the
-        # state the real amend scenario leaves behind for the next commit.
-        task = root / "tasks/T-001-20260801-search.md"
-        active_text = task.read_text(encoding="utf-8")
-        task.write_text(
-            active_text.replace("状态: active", "状态: completed")
-            + f"""
-- 实现: src/search.py
-- 测试: tests/test_search.py passed
-- SOLUTION 对照: SOLUTION 与实现一致
-- review:
-  - 审核方: reviewer-agent
-  - 目的理解: 验证 Search task 的结果目标
-  - 执行方式: code-review skill
-  - 问题与修复: 无
-  - 复审结论: pass
-- commit: {dangling}
-""",
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        closure = commit("close")
-
-        # Current-tree axis: the evidence repair edit is admitted.
-        task.write_text(
-            task.read_text(encoding="utf-8").replace(f"- commit: {dangling}", f"- commit: {initial}"),
-            encoding="utf-8",
-        )
-        repaired = lint(root, strict_tests=True)
-        assert not any("terminal task is immutable" in error for error in repaired.errors), repaired.errors
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        repair = commit("repair")
-
-        # History axis: the repair commit is admitted on push.
-        result = Result()
-        check_outgoing_history(root, result, f"refs/heads/{branch} {repair} refs/heads/{branch} {'0' * 40}\n")
-        assert not any("changed after reaching a terminal state" in error for error in result.errors), result.errors
-        result = Result()
-        check_history_transition(root, result, closure, repair, check_additions=True)
-        assert not result.errors, result.errors
-
-        # Shape-level assertions on multi-evidence-line texts: partial in-place
-        # replacement is admitted, moving an evidence line to another position
-        # is not.
-        synthetic_old = (
-            "---\ndoc-type: task\nmutation: lifecycle\nid: T-001\n---\n# T\n状态: completed\n\n## 终态与证据\n\n"
-            f"- 实现: x\n- 测试: x\n- commit: {dangling}\n- 注: mid\n- commit: {initial}\n"
-        )
-        synthetic_fixed = synthetic_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
-        assert is_commit_evidence_repair(root, synthetic_old, synthetic_fixed)
-        synthetic_moved = synthetic_old.replace(f"- commit: {initial}\n", "").replace(
-            "- 注: mid\n", f"- commit: {initial}\n- 注: mid\n"
-        )
-        assert not is_commit_evidence_repair(root, synthetic_old, synthetic_moved)
-        # Repeated same-hash replacement (the real 8eac96c shape: two lines
-        # citing one destroyed commit, both redirected to its amended self).
-        repeated_old = synthetic_old.replace(f"- commit: {initial}", f"- commit: {dangling}")
-        repeated_fixed = repeated_old.replace(f"- commit: {dangling}", f"- commit: {closure}")
-        assert is_commit_evidence_repair(root, repeated_old, repeated_fixed)
-
-        # Negative: reachable → reachable hash swap is not a repair.
-        task.write_text(
-            task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
-            encoding="utf-8",
-        )
-        swapped = lint(root, strict_tests=True)
-        assert any("terminal task is immutable" in error for error in swapped.errors), swapped.errors
-        task.write_text(git_head_text(root, task.relative_to(root)) or "", encoding="utf-8")
-
-        # Negative: any non-commit-line post-terminal edit stays rejected.
-        task.write_text(task.read_text(encoding="utf-8") + "\ntampered\n", encoding="utf-8")
-        tampered = lint(root, strict_tests=True)
-        assert any("terminal task is immutable" in error for error in tampered.errors), tampered.errors
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        tamper = commit("tamper")
-        result = Result()
-        check_history_transition(root, result, repair, tamper, check_additions=True)
-        assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
-
-        # Negative: reachable → reachable hash swap stays rejected on push.
-        task.write_text(
-            task.read_text(encoding="utf-8").replace(f"- commit: {initial}", f"- commit: {closure}"),
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "add", "."], cwd=root, check=True)
-        swapped_commit = commit("swap")
-        result = Result()
-        check_history_transition(root, result, tamper, swapped_commit, check_additions=True)
-        assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
-
-
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -2266,6 +2330,36 @@ def self_test() -> None:
         )
         valid = lint(root, strict_tests=True)
         assert not valid.errors, valid.errors
+
+        style_conventions = root / "CONVENTIONS.md"
+        style_original = style_conventions.read_text(encoding="utf-8")
+        style_conventions.write_text(style_original + "- " + "一条超长规则。" * 30 + "\n", encoding="utf-8")
+        style_flagged = lint(root, strict_tests=True)
+        assert any("list item may carry multiple rules" in warning for warning in style_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 外层（中含嵌套（内层））括号的列表项。\n", encoding="utf-8"
+        )
+        nested_flagged = lint(root, strict_tests=True)
+        assert any("nested parentheses" in warning for warning in nested_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 尽量在完成后适当调整相关文档。\n", encoding="utf-8"
+        )
+        vague_flagged = lint(root, strict_tests=True)
+        assert any("vague wording" in warning for warning in vague_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 系统配置文件读取模块错误处理逻辑由该层负责。\n", encoding="utf-8"
+        )
+        stack_flagged = lint(root, strict_tests=True)
+        assert any("long noun stack" in warning for warning in stack_flagged.warnings)
+        style_conventions.write_text(style_original, encoding="utf-8")
+        style_clean = lint(root, strict_tests=True)
+        assert not any(
+            "may carry multiple rules" in warning
+            or "nested parentheses" in warning
+            or "vague wording" in warning
+            or "long noun stack" in warning
+            for warning in style_clean.warnings
+        )
         implementation_commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -2481,7 +2575,6 @@ def self_test() -> None:
             check=True,
         )
         assert "T-002" in historical_task_ids(root)
-    self_test_terminal_evidence_repair()
     self_test_merge_task_renumbering()
     print("agentmap lint self-test passed")
 
