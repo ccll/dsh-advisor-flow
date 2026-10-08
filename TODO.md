@@ -29,3 +29,4 @@ owner: 双方
 - [维护想法] tool-result-cap 默认行数 200（东家裁决记档）：pi 宿主常量 PI_DEFAULT_MAX_LINES 不可从制品提取，待联调对照核定（字节 8192 已与 config 对齐）
 - [维护想法] parity 证据基础标注（顾问 adv-19 缺口二）：迁移系列 T-001~T-014 的闭环方式——T-002~T-005、T-007~T-011 为行为测试闭环（AC-ID 锚点 + staging 实弹）；T-006 卡片视觉与 T-012/013/014 的 staging 联调项（scout 接线已补/getCwd/200 默认值）为审核闭环+抽样实弹；与 pi 0.8.2 的同输入差分对照未做（宿主形态不同，等价性由逐字移植 + 锚定 AC 承载），后续可用 staging 差分探针补强
 - [需求候选] 失败/blocked 分流处置：「门审基础设施故障」（解析失败/超时/预算耗尽）与「advisor 实质拦截」（blocked 裁决）目前共用同一 failureMode 档位——是否分流出不同处置（如故障降级、裁决升级）待裁决（默认值已定 block-tool 并记 C-017，本条为剩余的语义分档待议项）
+- [维护想法] 清理 map 存量风格 warning（68 条，agentmap lint 全量扫描常驻打印；涉及 PRD/SOLUTION/DOMAIN/TODO，逐条拆分列表或改写收敛；2026-10-08 bootstrap 升级后登记）
