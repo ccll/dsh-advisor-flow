@@ -144,3 +144,54 @@ export async function pump(turns = 6) {
         await new Promise((resolve) => setImmediate(resolve));
     }
 }
+
+/** 语义合规的假呈现提供方（spawn 形态：零父上下文 + 路由覆盖 + 零工具能力）。 */
+export function eligibleSpawnProvider(name = 'spawn') {
+    return {
+        name,
+        capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+        inheritsParentContext: false,
+    };
+}
+
+/** 构造一个结算为给定 result 的假 run；记录 dispose 调用。 */
+export function fakeRun(result, { failDispose = false, id = 'subsession-1' } = {}) {
+    return {
+        id,
+        result: Promise.resolve(result),
+        disposeCalls: 0,
+        dispose() {
+            this.disposeCalls += 1;
+            return failDispose ? Promise.reject(new Error('dispose failed')) : Promise.resolve();
+        },
+    };
+}
+
+/**
+ * 假 subagents 缝：登记 providers；start 捕获请求并按脚本返回 run（或抛错
+ * 模拟发布前失败）。脚本 run 耗尽时经 `makeRun(callIndex)` 兜底生成。
+ */
+export function createFakeSubagents({ providers = [eligibleSpawnProvider()], runs = [], startError, makeRun } = {}) {
+    const registry = new Map(providers.map((provider) => [provider.name, provider]));
+    const requests = [];
+    let autoRuns = 0;
+    return {
+        registry,
+        requests,
+        startCalls: 0,
+        async start(name, request) {
+            this.startCalls += 1;
+            requests.push({ name, request });
+            if (startError) {
+                throw startError;
+            }
+            const run = runs.shift() ?? (makeRun ? makeRun(++autoRuns) : undefined);
+            if (!run) {
+                throw new Error('fake subagents: no scripted run');
+            }
+            return run;
+        },
+        getProvider: (name) => registry.get(name),
+        list: () => [...registry.keys()],
+    };
+}

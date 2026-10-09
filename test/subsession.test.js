@@ -1,61 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSubsessionPresenter, subsessionLabel, subsessionOutputText, SUBSESSION_LABEL_BASE } from '../lib/subsession.js';
+import { createFakeSubagents, fakeRun, eligibleSpawnProvider } from './helpers.js';
 
 const quietLogger = { info() {}, warn() {}, debug() {} };
 
-/** 语义合规的假呈现提供方（spawn 形态：零父上下文 + 路由覆盖 + 零工具能力）。 */
-function eligibleProvider(name = 'spawn') {
-    return {
-        name,
-        capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
-        inheritsParentContext: false,
-    };
-}
-
 const PARENT = { id: 'parent-session-1' };
-
-/** 构造一个结算为给定 result 的假 run；记录 dispose 调用。 */
-function fakeRun(result, { failDispose = false } = {}) {
-    const run = {
-        id: 'subsession-1',
-        result: Promise.resolve(result),
-        disposeCalls: 0,
-        dispose() {
-            this.disposeCalls += 1;
-            return failDispose ? Promise.reject(new Error('dispose failed')) : Promise.resolve();
-        },
-    };
-    return run;
-}
-
-/**
- * 构造假 subagents 缝：登记 providers；start 捕获请求并按脚本返回 run
- * （或抛错模拟发布前失败）。
- */
-function createFakeSubagents({ providers = [eligibleProvider()], runs = [], startError } = {}) {
-    const registry = new Map(providers.map((provider) => [provider.name, provider]));
-    const requests = [];
-    return {
-        registry,
-        requests,
-        startCalls: 0,
-        async start(name, request) {
-            this.startCalls += 1;
-            this.requests.push({ name, request });
-            if (startError) {
-                throw startError;
-            }
-            const run = runs.shift();
-            if (!run) {
-                throw new Error('fake subagents: no scripted run');
-            }
-            return run;
-        },
-        getProvider: (name) => registry.get(name),
-        list: () => [...registry.keys()],
-    };
-}
 
 test('R-02-007/AC-01 子会话发起：label 标识顾问与入口，start 请求承载 prompt/parent/signal/agentOptions/toolFilter/persona', async () => {
     const run = fakeRun({ stopReason: 'completed', output: [{ type: 'text', text: '意见全文。' }] });
@@ -211,7 +161,7 @@ test('R-02-007/AC-04 发布后拒绝且信号已中止 → aborted 终态（超�
 });
 
 test('R-02-007/AC-05 呈现提供方语义约束：零工具 allowlist 与素材透传经 start 请求断言；优先 spawn 后端', async () => {
-    const renamed = eligibleProvider('spawn-renamed'); // 部署改名场景
+    const renamed = eligibleSpawnProvider('spawn-renamed'); // 部署改名场景
     const run = fakeRun({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] });
     const subagents = createFakeSubagents({ providers: [renamed], runs: [run] });
     const promptText = '<conversation>...</conversation>\nTargeted focus: q';

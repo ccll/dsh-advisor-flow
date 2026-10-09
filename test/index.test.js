@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
-import { createFakeLlm, answer, failure } from './helpers.js';
+import { createFakeLlm, answer, failure, createFakeSubagents } from './helpers.js';
 
 const endpoints = [];
 
@@ -876,36 +876,15 @@ test('R-02-001/AC-07 Scout 二次调用与主咨询同语义跟随宿主模型 m
     services.dispose();
 });
 
-/** 语义合规的假呈现提供方（spawn 形态，与 test/subsession.test.js 夹具同形）。 */
-function eligibleSpawnProvider() {
-    return {
-        name: 'spawn',
-        capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
-        inheritsParentContext: false,
-    };
-}
-
 /** 假 subagents 缝：每次 start 发布一个即时结算为 proceed 裁决的 one-shot 顾问子会话。 */
 function fakeAdvisorSubagents() {
-    const requests = [];
-    const registry = new Map([['spawn', eligibleSpawnProvider()]]);
-    let next = 0;
-    return {
-        requests,
-        startCalls: 0,
-        async start(name, request) {
-            this.startCalls += 1;
-            requests.push({ name, request });
-            const id = `advisor-child-${++next}`;
-            return {
-                id,
-                result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'Decision: proceed\n\nAdvisor 子会话意见。' }] }),
-                dispose: async () => {},
-            };
-        },
-        getProvider: (name) => registry.get(name),
-        list: () => [...registry.keys()],
-    };
+    return createFakeSubagents({
+        makeRun: (callIndex) => ({
+            id: `advisor-child-${callIndex}`,
+            result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'Decision: proceed\n\nAdvisor 子会话意见。' }] }),
+            dispose: async () => {},
+        }),
+    });
 }
 
 test('T-022 接线级递归守卫：收口评审生成的顾问子会话，其收口不再触发评审；会话清理摘除登记', async () => {
