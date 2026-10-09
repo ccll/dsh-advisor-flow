@@ -125,14 +125,14 @@ test('R-01-009/AC-03 软模式永不触发：不评审不送达', async () => {
     assert.equal(delivered.length, 0);
 });
 
-test('R-01-009/AC-03 config 无 mode 键时按软模式处理（缺省不评审）', async () => {
+test('R-01-009/AC-03 处置器对缺 mode 键的兜底：非 hard 即不评审（解析层缺省为准）', async () => {
     const logs = { error: [], info: [], warn: [] };
     const logger = { error: (m, f) => logs.error.push({ m, f }), info: (m, f) => logs.info.push({ m, f }), warn: (m, f) => logs.warn.push({ m, f }) };
     const consultCalls = [];
     const review = createTurnReview({
         consult: async (request) => { consultCalls.push(request); return { ok: true, adviceId: 'adv-1', decision: 'proceed', markdown: 'ok' }; },
         delivery: () => {},
-        getConfig: () => ({ enabled: true }), // 无 mode 键：解析层缺省 soft，处置器按非 hard 兜底
+        getConfig: () => ({ enabled: true }), // 无 mode 键：处置器按非 hard fail-safe 兜底（解析层缺省以 config.js 为准）
         logger,
     });
     await review.handleTurnStopping(payload('turn-1'));

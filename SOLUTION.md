@@ -367,13 +367,15 @@ flowchart TD
   - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要、逐次明细、剩余次数、门决策统计与干预计数。
   - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 增项，契约在此补记）。
-- **设置命名空间** `advisor-flow`（settings.yaml 顶层键；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017）：
+- **设置命名空间** `advisor-flow`（settings.yaml 顶层键；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017；mode 默认 hard，C-022）：
   - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
   - `failureMode`：`block-tool`（默认；偏离 pi 0.8.2 的 block-session，记 C-017）/ `warn-and-continue` / `block-session`
-  - `mode`：介入强度——`hard`（默认，回合收口前强制收口评审；偏离 pi 行为，C-022）/ `soft`（守则建议，pi 行为）；设置卡中介入强度控件置于总开关紧下、高于其余选项（C-022）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查
+  - `mode`：介入强度——`hard`（默认，回合收口前强制收口评审；偏离 pi 行为，C-022）/ `soft`（守则建议，pi 行为）。
+    - 设置卡中介入强度控件置于总开关紧下、高于其余选项（C-022）。
+    - 非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查。
   - `blockOnBlocked`（默认 true：blocked 决策时是否尽力停止当前执行）
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）

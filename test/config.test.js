@@ -238,6 +238,5 @@ test('R-01-009/AC-01 mode 非法值拒绝且原因可查；合法值透传（C-0
 test('R-01-009/AC-02 mode 缺省 hard（开箱即获收口评审，C-022；废弃 C-021 缺省 soft）', () => {
     const result = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' } });
     assert.equal(result.ok, true);
-    assert.equal(result.config.mode, 'hard');
     assert.equal(result.config.mode, 'hard'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
 });
