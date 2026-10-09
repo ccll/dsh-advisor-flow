@@ -62,8 +62,9 @@ flowchart LR
     agent -->|工具调用 exec| tools[dsh 工具层]
     tools -->|pre-execute waterfall| plugin
     plugin -->|素材装配：会话查询/事件 + git 上下文| material[素材装配器]
-    plugin -->|llm.stream 咨询请求| route[顾问模型路由]
-    route -->|意见/决策行| plugin
+    plugin -->|subagents.start one-shot 顾问子会话| subsession[顾问子会话]
+    subsession -->|意见/决策行| plugin
+    plugin -->|降级：llm.stream 咨询请求| route[顾问模型路由]
     plugin <-->|advisor-flow 设置命名空间| settings[settings.yaml]
 ```
 
@@ -120,7 +121,9 @@ flowchart TB
     consult --> ctxasm[素材装配器 六区共享预算]
     ctxasm --> gitq[git 上下文构建器]
     ctxasm --> redact[脱敏器 先脱敏后截断]
-    redact --> llmcall[顾问模型调用器]
+    redact --> present[子会话呈现缝 subagents.start]
+    present -->|one-shot 顾问子会话| subsession[顾问子会话 零工具]
+    present -->|缝缺失/发布前失败降级| llmcall[顾问模型调用器]
     llmcall --> parse[决策行解析 proceed/revise/blocked]
     parse --> policy[阻断模式处置]
     consult --> ledger[意见账本 issue/reserve/commit/release]
@@ -149,7 +152,7 @@ sequenceDiagram
     else 命中
         G->>D: 预通告（Automatic Advisor loop review）
         G->>C: 同步咨询（决策协议提示 + 全量素材）
-        C->>A: llm.stream（素材经装配+脱敏）
+        C->>A: 子会话呈现（素材经装配+脱敏；降级时 llm.stream）
         A-->>C: Decision: proceed/revise/blocked + 意见
         G->>D: 门结果 steer 送达（**Decision: X** + 全文）
         alt 决策 proceed
@@ -165,7 +168,7 @@ sequenceDiagram
     end
     E->>C: ask_advisor（按需咨询）
     C->>C: 素材装配（六区）+ 脱敏（先于截断）
-    C->>A: llm.stream（Verdict 协议提示）
+    C->>A: 子会话呈现（Verdict 协议提示；降级时 llm.stream）
     A-->>C: 意见
     C-->>E: Advisor (model) + 意见全文 + adviceId（UUID）
 ```
@@ -312,7 +315,9 @@ flowchart TD
     mat --> sq[dsh-session-query 会话查询]
     mat --> git[git 上下文构建器 子进程]
     obs --> transcript[会话事件流]
-    consult --> llm[dsh LLM 运行时]
+    consult --> present[子会话呈现缝]
+    present -->|one-shot 委托| subag[dsh subagents 缝]
+    present -->|降级| llm[dsh LLM 运行时]
     deliver[意见送达] --> agent[dsh agent 表面]
     consult --> deliver
 ```
@@ -350,6 +355,7 @@ flowchart TD
   - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
 - `userPreferences`（可选非空字符串，缺省=无偏好区；素材装配偏好区来源，R-02-006/AC-05）
 - `scout.enabled`（默认 false；Scout 策展二次调用开关）与 `scout.timeoutMs`（缺省 = 不限，接线层兜底 30s；T-014）
+- `presentation`：`subagent`（默认；咨询经 `ctx.subagents.start` one-shot 顾问子会话发起，会话界面出现顾问子会话条目，R-02-007）/ `direct`（保持 llm.stream 直调，无子会话条目）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查；子会话缝缺失或发布前发起失败时自动降级 direct 并显性化（R-02-007/AC-03，运行时语义）
   - `budget.maxPerSession`（未配置 = 不限）
   - `outcomeLogging`（默认 false）
   - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
@@ -380,19 +386,21 @@ flowchart TD
 | R-02-004 | 咨询服务 | SOLUTION.md#数据流与信任边界图 | lib/redact.js；lib/materials.js；lib/consultation.js（collectFileEntries） |
 | R-02-005 | 咨询服务 | SOLUTION.md#运行时、并发与失败语义 | lib/consultation.js；lib/gates/index.js |
 | R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js |
+| R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js |
 
 ## 子系统与模块
 
 ### 咨询服务
-- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、llm.stream 调用（根作用域 LLM 解析、reasoningEffort 能力门控）、两套回复协议的英文提示词（按需咨询 Verdict 行 / 循环门 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-02-004、R-02-005、R-02-006）
+- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、子会话呈现缝发起（`subagents.start` one-shot 顾问子会话，缝缺失或发布前失败降级 llm.stream 直调；承接 R-02-007）、reasoningEffort 能力门控、两套回复协议的英文提示词（按需咨询 Verdict 行 / 循环门 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-02-004、R-02-005、R-02-006、R-02-007）
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
+  - 子会话呈现缝（R-02-007）：呈现提供方经已注册名单解析（`subagents.list()`），无可用提供方即发布前失败——按降级语义走 llm.stream；`start()` 发布成功后的 run 失败一律映射诊断码，不得降级重发（AC-04）。
   - `resolveModelInfo` 能力门控 effort：仅模型声明时发送（记适配：pi 无条件发送）。
   - `maxTokens`（缺省跟随宿主模型配置：resolveModelInfo.defaultMaxTokens，未声明省略参数；显式配置覆盖）与 `callTimeoutMs`（默认 600000，C-015）可配置；deadline 融合 dispose 信号，race 每 chunk。
   - 失败无重试：咨询失败（provider 错误/空回复/缺决策行/矛盾决策行/预算耗尽）直接上抛为门失败类别，按阻断模式处置。
   - 意见为自由文本原样采用（无 JSON 解包——dsh-advisor 谱系遗留物退役）；空意见 = 失败（AdvisorNoAdviceError 语义）；按需咨询协议为英文 `Verdict: sound` 首行约定。
   - 意见账本：issue（含 normalizedQuestion 与 draft 标记）→ outcome 回写 reserve/commit/release 一次性；`reattachAdvice` 同问去重（归一化 question 匹配历史意见）；预留生命周期随引擎实例存活——引擎重建/会话终止时未决预留释放，不跨进程持久。
-- 代码位置: lib/consultation.js；lib/materials.js；lib/redact.js；lib/outcomes.js
+- 代码位置: lib/consultation.js；lib/subsession.js；lib/materials.js；lib/redact.js；lib/outcomes.js
 - 实现: 单端（宿主）
 
 ### 素材装配器
@@ -502,18 +510,19 @@ flowchart TD
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`；可选服务一律条件 `ctx.inject` 子上下文；绝不以 try/catch 探测 ctx 代理属性。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 与 record_advisor_outcome 为用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径。
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`agent.steer`、`ctx.systemPrompt.section`、settings bridge `onChange`、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`agent.steer`、`ctx.systemPrompt.section`、settings bridge `onChange`、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）、`ctx.subagents.list()/start()`（子会话呈现缝，R-02-007）。
 - 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
 - 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
 
 ## 运行时、并发与失败语义
 
 - **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
+- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。发布前失败（缝缺失、名单无提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。
-- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层。
+- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）。
 - **会话封锁**：block-session 模式下 blocked 决策使会话进入封锁态——`blockOnBlocked`（默认 true）时宿主 `agents.cancel` 尽力停止当前执行，且后续所有工具调用一律拦截（拒绝原因 = 封锁原因），直至会话重建。
 - **恢复**：无独立暂停/停机态；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
 

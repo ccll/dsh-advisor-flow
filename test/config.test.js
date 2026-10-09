@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES } from '../lib/config.js';
+import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES, DEFAULT_PRESENTATION, PRESENTATION_MODES } from '../lib/config.js';
 
 test('R-02-001/AC-01 解析后的配置驱动后续咨询，重新应用即时生效', async () => {
     const first = resolveAdvisorFlowConfig({
@@ -115,6 +115,10 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.equal(badFailureMode.ok, false);
     assert.match(badFailureMode.error, /failureMode/);
 
+    const badPresentation = resolveAdvisorFlowConfig({ presentation: 'floating' });
+    assert.equal(badPresentation.ok, false);
+    assert.match(badPresentation.error, /presentation/);
+
     const badLoopThreshold = resolveAdvisorFlowConfig({ gates: { loop: { enabled: true, threshold: 0 } } });
     assert.equal(badLoopThreshold.ok, false);
     assert.match(badLoopThreshold.error, /threshold/);
@@ -158,6 +162,9 @@ test('R-02-001 非法值被拒绝；未知键不算拒绝；空配置取默认�
     assert.deepEqual(empty.config.toolPolicies, {});
     assert.equal(empty.config.outcomeLogging, false);
     assert.equal(empty.config.customInvocation, undefined);
+    // R-02-007：presentation 缺省 subagent（C-020）
+    assert.equal(empty.config.presentation, DEFAULT_PRESENTATION);
+    assert.deepEqual(PRESENTATION_MODES, ['subagent', 'direct']);
     // 守则三门与循环门默认开启（C-008 ②），循环门阈值缺省 3
     assert.equal(empty.config.gates.plan.enabled, true);
     assert.equal(empty.config.gates.failure.enabled, true);
@@ -188,6 +195,13 @@ test('R-02-001 门配置解析为结构化对象（三布尔 + 循环门阈值 +
         const resolved = resolveAdvisorFlowConfig({ failureMode: mode });
         assert.equal(resolved.ok, true);
         assert.equal(resolved.config.failureMode, mode);
+    }
+
+    // R-02-007：presentation 两值逐一可解析
+    for (const mode of PRESENTATION_MODES) {
+        const resolved = resolveAdvisorFlowConfig({ presentation: mode });
+        assert.equal(resolved.ok, true);
+        assert.equal(resolved.config.presentation, mode);
     }
 });
 

@@ -682,3 +682,111 @@ test('T-014 Scout 引擎接线：scout.enabled 时顾问收到策展脉络；策
     const fallbackSent = llm2.calls[0].options.messages[0].content[0].text;
     assert.ok(fallbackSent.includes('旧长内容'));
 });
+
+// ---- R-02-007 子会话呈现（C-020）-----------------------------------------
+
+test('R-02-007/AC-02 presentation=subagent 时咨询经呈现缝发起：结算意见即咨询结果，直调不触发', async () => {
+    const llm = createFakeLlm([]); // 直调不应被触发
+    const presentations = [];
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        presentSubsession: async (request) => {
+            presentations.push(request);
+            return { kind: 'answered', text: '子会话意见全文。', usage: { inputTokens: 5, outputTokens: 7 } };
+        },
+    });
+    const result = await engine.consult({ entry: 'tool', question: '这个方案稳吗？', parent: { id: 'p1' } });
+    assert.equal(result.ok, true);
+    assert.equal(result.text, '子会话意见全文。'); // AC-02：结算意见与呈现结果一致
+    assert.equal(llm.calls.length, 0); // 直调未触发
+    assert.equal(presentations.length, 1);
+    assert.equal(presentations[0].entry, 'tool');
+    assert.equal(presentations[0].parent.id, 'p1'); // 父会话 Agent 透传
+    assert.ok(presentations[0].promptText.includes('这个方案稳吗？')); // 装配产物出境（R-02-006 契约不变）
+    assert.equal(presentations[0].persona, ADVISOR_SYSTEM_PROMPT); // 协议提示经 persona
+    assert.equal(presentations[0].agentOptions.provider, 'test');
+    assert.equal(presentations[0].agentOptions.model, 'test-model');
+    assert.ok(presentations[0].signal instanceof AbortSignal);
+    // 门入口协议提示为 Decision 版本，决策行结算不受呈现形态影响。
+    const gatePresentations = [];
+    const gateEngine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        presentSubsession: async (request) => {
+            gatePresentations.push(request);
+            return { kind: 'answered', text: 'Decision: proceed\n\n可以放行。' };
+        },
+    });
+    const gateResult = await gateEngine.consult({ entry: 'gate', question: 'gq' });
+    assert.equal(gateResult.ok, true);
+    assert.equal(gateResult.decision, 'proceed');
+    assert.equal(gatePresentations[0].persona, ADVISOR_DECISION_SYSTEM);
+});
+
+test('R-02-007/AC-02 presentation=direct 时保持 llm.stream 直调：呈现缝不得被调用', async () => {
+    const llm = createFakeLlm([answer('直调意见。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ presentation: 'direct' }),
+        logger: quietLogger,
+        presentSubsession: async () => { throw new Error('direct 模式不得调用呈现缝'); },
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, true);
+    assert.equal(result.text, '直调意见。');
+    assert.equal(llm.calls.length, 1);
+});
+
+test('R-02-007/AC-03 呈现缝不可用（fallback）时降级 llm.stream 直调：咨询照常收敛', async () => {
+    const llm = createFakeLlm([answer('降级后的直调意见。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        presentSubsession: async () => ({ kind: 'fallback', reason: 'subagents 缝未接入' }),
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, true); // 降级直调成功，不回退为失败
+    assert.equal(result.text, '降级后的直调意见。');
+    assert.equal(llm.calls.length, 1);
+});
+
+test('R-02-007/AC-04 发布后 run 失败直接映射诊断码：不降级直调重发（无双倍成本）', async () => {
+    const llm = createFakeLlm([answer('不应被调用。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        presentSubsession: async () => ({ kind: 'failure', failure: { message: '子会话结算异常（error）', code: 'SUBSESSION' } }),
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ADVISOR_FAILED');
+    assert.match(result.reason, /子会话结算异常/);
+    assert.equal(llm.calls.length, 0); // 不降级重发
+});
+
+test('R-02-007/AC-04 呈现缝中止以取消终态收敛：不误报失败、不降级重发', async () => {
+    const llm = createFakeLlm([answer('不应被调用。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig(),
+        logger: quietLogger,
+        presentSubsession: async () => ({ kind: 'aborted', reason: 'disposed or cancelled' }),
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /disposed or cancelled/);
+    assert.equal(llm.calls.length, 0);
+});
+
+test('R-02-007/AC-03 呈现缝缺席（presentSubsession 未注入）时降级直调：默认 presentation 兼容无缝宿主', async () => {
+    const llm = createFakeLlm([answer('无缝宿主的直调意见。')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, true);
+    assert.equal(llm.calls.length, 1); // 默认 presentation=subagent 但缝缺席 → 直调兜底
+});
