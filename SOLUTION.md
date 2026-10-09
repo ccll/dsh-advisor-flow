@@ -373,7 +373,7 @@ flowchart TD
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
   - `failureMode`：`block-tool`（默认；偏离 pi 0.8.2 的 block-session，记 C-017）/ `warn-and-continue` / `block-session`
-  - `mode`：介入强度——`soft`（默认，pi 行为）/ `hard`（回合收口前强制收口评审，C-021）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查
+  - `mode`：介入强度——`hard`（默认，回合收口前强制收口评审；偏离 pi 行为，C-022）/ `soft`（守则建议，pi 行为）；设置卡中介入强度控件置于总开关紧下、高于其余选项（C-022）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查
   - `blockOnBlocked`（默认 true：blocked 决策时是否尽力停止当前执行）
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）

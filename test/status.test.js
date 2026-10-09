@@ -101,8 +101,13 @@ test('R-02-003/AC-03 门决策统计呈现：revise 计数与干预累计随决�
 });
 
 
-test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（软模式缺省 soft、计数缺省零）', () => {
-    const soft = config({ enabled: true, advisor: { provider: 'p', model: 'm' } });
+test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（缺省 hard、显式 soft、计数缺省零）', () => {
+    // 缺省配置（无 mode 键）= hard（C-022）；软模式为显式选择。
+    const defaulted = config({ enabled: true, advisor: { provider: 'p', model: 'm' } });
+    const defaultProvider = createStatusProvider({ config: defaulted });
+    assert.equal(defaultProvider.snapshot().mode, 'hard');
+
+    const soft = config({ enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'soft' });
     const provider = createStatusProvider({ config: soft });
     const snapshot = provider.snapshot();
     assert.equal(snapshot.mode, 'soft');
