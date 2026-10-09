@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAdviceDelivery } from '../lib/delivery.js';
+import { createAdviceDelivery, ADVICE_SOURCE_KIND } from '../lib/delivery.js';
 
 /**
  * 意见送达契约（R-01-005；SOLUTION.md#意见送达，C-007）：
  * - 门结果一律 steer（唤醒式，pi 原生语义：无 severity 分流、无冷却）；
  * - 消息为 user 角色、content 为 ContentBlock 数组且带稳定 id，插件身份在
- *   `source.plugin`；
+ *   直接来源 kind 前缀 `plugin:advisor-flow`（dsh 0.2.0 v4 准入；T-019）；
  * - 无 agent 的会话丢弃消息并留 warn（advisory only）；
  * - 送达路由绝不抛出：通道损坏不得让门 fail-open 崩溃。
  */
@@ -34,8 +34,7 @@ test('R-01-005/AC-02 门结果一律 steer 送达：块数组、稳定 id、插�
     assert.ok(Array.isArray(message.content)); // content 是 ContentBlock 数组
     assert.equal(message.content[0].type, 'text');
     assert.equal(message.content[0].text, '**Decision: revise**\n\n先改用回收站流程。');
-    assert.equal(message.source.kind, 'plugin');
-    assert.equal(message.source.plugin, 'advisor-flow');
+    assert.equal(message.source.kind, ADVICE_SOURCE_KIND); // dsh 0.2.0 v4：直接生产者来源（插件名保留在 kind 前缀）
     assert.equal(message.source.form, 'notice');
     assert.ok(message.source.summary.length <= 120); // 折叠行摘要有界
 });

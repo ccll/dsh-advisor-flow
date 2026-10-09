@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
+import { ADVICE_SOURCE_KIND } from '../lib/delivery.js';
 import { createFakeLlm, answer, failure } from './helpers.js';
 
 const endpoints = [];
@@ -315,7 +316,7 @@ test('R-01-005/AC-02 wiring 处置矩阵：决策 proceed → steer 送达 + 计
     assert.equal(steered.length, 2);
     assert.ok(steered[0].content[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated 3 times'));
     assert.equal(steered[1].content[0].text, '**Decision: proceed**\n\nDecision: proceed\n\n重复动作已评审，本次放行。');
-    assert.equal(steered[0].source.plugin, 'advisor-flow');
+    assert.equal(steered[0].source.kind, ADVICE_SOURCE_KIND); // dsh 0.2.0 v4 直接来源（T-019）
     // proceed → 等价计数重置：同一 exec 再两次不拦，第 3 次才再次评审
     await preExecute(exec, () => ({ kind: 'allow' }));
     await preExecute(exec, () => ({ kind: 'allow' }));
