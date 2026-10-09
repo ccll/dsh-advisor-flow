@@ -155,9 +155,9 @@ export function eligibleSpawnProvider(name = 'spawn') {
 }
 
 /** 构造一个结算为给定 result 的假 run；记录 dispose 调用。 */
-export function fakeRun(result, { failDispose = false, id = 'subsession-1' } = {}) {
+export function fakeRun(result, { failDispose = false } = {}) {
     return {
-        id,
+        id: 'subsession-1',
         result: Promise.resolve(result),
         disposeCalls: 0,
         dispose() {
