@@ -275,7 +275,7 @@ test('R-01-003/004/006 守则文本随活配置求值：守则全关时整段不
     assert.equal(spec.text(undefined), '');
 });
 
-test('事件订阅形态回归：工具生命周期缝全局订阅；approval 与 turn-stopping 缝已退役（不锚定 AC）', async () => {
+test('事件订阅形态回归：工具生命周期缝全局订阅；软模式缺省不订阅收口评审（不锚定 AC）', async () => {
     const { ctx, subscriptions } = makeCtx({ llm: createFakeLlm([]) });
     apply(ctx, entryConfig);
     for (const toolEvent of ['tools/pre-execute', 'tools/result', 'session/event', 'agent/created', 'agent/disposed', 'session/disposed']) {
@@ -283,8 +283,17 @@ test('事件订阅形态回归：工具生命周期缝全局订阅；approval �
         assert.ok(registration, `${toolEvent} 监听已注册`);
         assert.equal(registration.options?.global, true, `${toolEvent} 必须 {global:true}`);
     }
-    // 退役缝：approval 审批缝与 agent/turn-stopping 监听不再存在（C-007）
-    assert.equal(subscriptions.find((entry) => entry.event === 'agent/turn-stopping'), undefined);
+    // 缺省配置（entryConfig 无 mode 键）= 软模式：接线无条件注册监听，评审由处置器按活配置短路（C-021）
+    assert.ok(subscriptions.find((entry) => entry.event === 'agent/turn-stopping'), '收口评审监听已注册（处置器按活配置短路）');
+});
+
+test('R-01-009/AC-05 硬模式订阅 agent/turn-stopping 收口评审缝', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n本轮行为可收口。')]);
+    const { ctx, subscriptions } = makeCtx({ llm });
+    apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
+    const registration = subscriptions.find((entry) => entry.event === 'agent/turn-stopping');
+    assert.ok(registration, '硬模式订阅收口评审缝');
+    assert.equal(registration.options?.global, true, '必须 {global:true}');
 });
 
 test('R-01-005/AC-02 wiring 处置矩阵：决策 proceed → steer 送达 + 计数重置 + 放行', async () => {

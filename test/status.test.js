@@ -99,3 +99,18 @@ test('R-02-003/AC-03 门决策统计呈现：revise 计数与干预累计随决�
     assert.equal(stats.interventions, 1);
     assert.equal(stats.proceed, 0);
 });
+
+
+test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（软模式缺省 soft、计数缺省零）', () => {
+    const soft = config({ enabled: true, advisor: { provider: 'p', model: 'm' } });
+    const provider = createStatusProvider({ config: soft });
+    const snapshot = provider.snapshot();
+    assert.equal(snapshot.mode, 'soft');
+    assert.equal(snapshot.turnReviewStats, undefined); // 无 turnReview 访问器时不可得（非零值虚构）
+
+    const review = { turnReviewStats: () => ({ triggers: 2, proceed: 1, revise: 1, blocked: 0, failed: 0, skipped: 0 }) };
+    const hardProvider = createStatusProvider({ config: { ...soft, mode: 'hard' }, engine: review });
+    const hardSnapshot = hardProvider.snapshot();
+    assert.equal(hardProvider.snapshot().mode, 'hard');
+    assert.deepEqual(hardSnapshot.turnReviewStats, { triggers: 2, proceed: 1, revise: 1, blocked: 0, failed: 0, skipped: 0 });
+});

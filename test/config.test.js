@@ -222,3 +222,22 @@ test('R-02-001/AC-05 循环门阈值下界：小于 2 的配置被拒绝', () =>
     const low = resolveAdvisorFlowConfig({ gates: { loop: { threshold: 1 } } });
     assert.equal(low.ok, false);
 });
+
+
+test('R-01-009/AC-01 mode 非法值拒绝且原因可查；合法值透传（C-021）', () => {
+    const bad = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'aggressive' });
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /mode 必须为 soft\|hard 之一/);
+    for (const value of ['soft', 'hard']) {
+        const ok = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' }, mode: value });
+        assert.equal(ok.ok, true);
+        assert.equal(ok.config.mode, value);
+    }
+});
+
+test('R-01-009/AC-02 mode 缺省 soft（软模式即 pi 行为，C-021）', () => {
+    const result = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' } });
+    assert.equal(result.ok, true);
+    assert.equal(result.config.mode, 'soft');
+    assert.equal(result.config.mode, 'soft'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
+});

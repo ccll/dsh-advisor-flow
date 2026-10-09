@@ -173,6 +173,31 @@ sequenceDiagram
     C-->>E: Advisor (model) + 意见全文 + adviceId（UUID）
 ```
 
+硬模式收口评审时序（`mode=hard`，C-021）：
+
+```mermaid
+sequenceDiagram
+    participant E as 执行者
+    participant T as 收口评审
+    participant C as 咨询服务
+    participant A as 顾问路由
+    participant D as 意见送达
+    E->>T: 回合收口（agent/turn-stopping）
+    T->>T: 模式与去重判定（hard 且未评审）
+    alt 已评审 / 软模式 / 评审失败
+        T-->>E: 放行收口（失败留原因）
+    else 未评审
+        T->>C: 同步评审咨询（Decision 协议 + 全量素材，聚焦本轮行为）
+        C->>A: 子会话呈现（素材经装配+脱敏；降级时 llm.stream）
+        A-->>C: Decision: proceed/revise/blocked + 意见
+        alt 裁决 proceed
+            T-->>E: 放行收口（意见仅日志留痕）
+        else 裁决 revise/blocked
+            T->>D: 意见全文 steer 送达（收口被反对，执行者续跑）
+        end
+    end
+```
+
 - 门内联等待有硬上限（`callTimeoutMs`）；超时按阻断模式处置并记录。
 - 三类守则（计划/失败/收尾）+ 公共约定行（空对象调用/自定义触发/剩余次数预告）经 `ctx.systemPrompt.section` 注入执行者系统提示（文本函数实时求值），非拦截门；硬拦截门仅循环门。
 - 门咨询被 caller 中止时的放行/拦截极性为 staging 实弹验证项（审计 G-13，待核）。
@@ -348,6 +373,7 @@ flowchart TD
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
   - `failureMode`：`block-tool`（默认；偏离 pi 0.8.2 的 block-session，记 C-017）/ `warn-and-continue` / `block-session`
+  - `mode`：介入强度——`soft`（默认，pi 行为）/ `hard`（回合收口前强制收口评审，C-021）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查
   - `blockOnBlocked`（默认 true：blocked 决策时是否尽力停止当前执行）
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）
@@ -387,11 +413,15 @@ flowchart TD
 | R-02-005 | 咨询服务 | SOLUTION.md#运行时、并发与失败语义 | lib/consultation.js；lib/gates/index.js |
 | R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js |
 | R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js |
+| R-01-009 | 门控服务 | SOLUTION.md#门控服务 | lib/turn-review.js；lib/consultation.js；lib/delivery.js |
 
 ## 子系统与模块
 
 ### 咨询服务
-- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、子会话呈现缝发起（`subagents.start` one-shot 顾问子会话，缝缺失或发布前失败降级 llm.stream 直调；承接 R-02-007）、reasoningEffort 能力门控、两套回复协议的英文提示词（按需咨询 Verdict 行 / 循环门 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-02-004、R-02-005、R-02-006、R-02-007）
+- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、子会话呈现缝发起（`subagents.start` one-shot 顾问子会话，缝缺失或发布前失败降级 llm.stream 直调；承接 R-02-007）、reasoningEffort 能力门控、回复协议英文提示词（按需咨询 Verdict 行 / 循环门与收口评审 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-01-009、R-02-004、R-02-005、R-02-006、R-02-007）
+- 关键内部结构:
+  - 入口枚举 `entry ∈ tool|manual|gate|turn-review`；`turn-review` 为收口评审入口（C-021），Decision 协议问句聚焦执行者本轮行为，素材六区契约不变。
+  - `turn-review` 意见不入意见账本、用量照常入台账（与 gate 意见同口径）。
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
   - 子会话呈现缝（R-02-007）：呈现提供方经已注册名单解析（`subagents.list()`），无可用提供方即发布前失败——按降级语义走 llm.stream；`start()` 发布成功后的 run 失败一律映射诊断码，不得降级重发（AC-04）。
@@ -427,14 +457,15 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 门控服务
-- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）
+- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）；硬模式下注册 `agent/turn-stopping` 收口评审监听（承接 R-01-009）
 - 关键内部结构:
   - 连续签名计数：本次签名 ≠ 上一次签名时计数归 1（pi 语义）；波动归一（timestamp/date/datetime→占位、correlationId/requestId/traceId→占位、临时路径归一、bash 命令空白归一）；`ask_advisor` 豁免。
   - 载体契约（dsh-tools 0.1.5-rc.2 实测）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`。
   - 决策处置矩阵：proceed → steer 送达门结果 + 重置计数 + 放行；revise → steer 送达 + deny(意见全文)；blocked → 按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁；blockOnBlocked 控制 stopSession）。
   - 门命中先发预通告（`Automatic Advisor loop review`）再咨询；门问句不携带当次参数；咨询失败按阻断模式处置；决策行解析含对抗性检查。
   - 门组件异常 fail-open（放行 + 记录）。
-- 代码位置: lib/gates/index.js
+  - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
+- 代码位置: lib/gates/index.js；lib/turn-review.js
 - 实现: 单端（宿主）
 
 ### 执行者守则
@@ -458,15 +489,16 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 意见送达
-- 职责: 门结果意见到会话的送达——一律 `agent.steer`（唤醒式）；预通告、门结果、失败通告三种文本形状（承接 R-01-005）
+- 职责: 门结果与收口评审意见到会话的送达——一律 `agent.steer`（唤醒式）；预通告、门结果、失败通告、守则提醒四种文本形状（承接 R-01-005、R-01-009）
 - 关键内部结构:
   - `agent/created` 注册 + 注册表回退双通道。
   - 无 severity 分流、无冷却（pi 原生语义）。
+  - 守则提醒（C-021）：软模式下会话压缩/重写事件后送达一条守则提醒文本（英文，对齐守则词汇）；送达失败 contained（留痕、不掷出）。
 - 代码位置: lib/delivery.js
 - 实现: 单端（宿主）
 
 ### 配置与状态服务
-- 职责: `advisor-flow` 命名空间注册与 live re-apply；settings section 注册；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计与干预计数）（承接 R-02-001、R-02-002、R-02-003）
+- 职责: `advisor-flow` 命名空间注册与 live re-apply；settings section 注册；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
   - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging；旧键警告保留。
@@ -502,7 +534,7 @@ flowchart TD
 
 - 非阻断性优先于功能完整：任何 advisor 路径不得 park 主循环（见 DOMAIN 不变量）。
 - 门内联等待是唯一同步点，且受 `callTimeoutMs` 硬约束、超时按阻断模式处置。
-- 素材出境单一通道：三入口（工具/手动/门）一律经素材装配器；禁止旁路直拼消息。
+- 素材出境单一通道：四入口（工具/手动/门/收口评审）一律经素材装配器；禁止旁路直拼消息。
 - 宿主载体契约（T-008 实测，dsh 0.1.5-rc.1 / dsh-tools 0.1.5-rc.2）：工具载体 `{name, arguments, agent, callId, token, signal}`；结果缝 `(exec, result)`、失败真值 `result.isError`；送达消息 content 为 ContentBlock 数组且带 id；工具定义必须含 `output {schema, render}`；执行者守则经 `ctx.systemPrompt.section`（text 函数实时求值）。
 - LLM 请求契约（T-009 staging 实测，dsh-llm GenerateOptions）：`messages[].content` 为 ContentBlock 数组；`system` 为字符串；流 chunk 为 `text-delta`/`usage`/`finish`。
 - 用量契约（T-009 staging 核对，dsh-llm TokenUsage）：离散计数，无 `cacheTokens` 与 `cost` 字段；台账未收到的字段记 unavailable。
@@ -510,7 +542,7 @@ flowchart TD
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`；可选服务一律条件 `ctx.inject` 子上下文；绝不以 try/catch 探测 ctx 代理属性。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 与 record_advisor_outcome 为用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径。
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`agent.steer`、`ctx.systemPrompt.section`、settings bridge `onChange`、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）、`ctx.subagents.list()/start()`（子会话呈现缝，R-02-007）。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`ctx.on('agent/turn-stopping', …, {global:true})`（收口评审缝，T-008 实测载体）、`agent.steer`、`ctx.systemPrompt.section`、settings bridge `onChange`、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）、`ctx.subagents.list()/start()`（子会话呈现缝，R-02-007）。
 - 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
 - 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
 
@@ -519,6 +551,7 @@ flowchart TD
 - **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
 - **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
+- **收口评审语义**（C-021，`mode=hard`）：回合收口前同步评审；proceed 放行收口（意见仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；同回合同一收口事件至多一次评审（已评审标记放行后续派发）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口并留痕；`failureMode` 不适用于收口缝；软模式下会话压缩/重写事件后经 steer 送达一条守则提醒（非阻断、不发起咨询）。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。
