@@ -17,7 +17,7 @@ import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.j
 const payload = (turn, sessionId = 's1') => ({ turn, signal: undefined, agent: { id: sessionId } });
 
 /** 收口评审夹具：可编程裁决与咨询行为 + 送达/日志捕获。 */
-function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled } = {}) {
+function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled, isAdvisorSubsession } = {}) {
     const logs = { error: [], info: [], warn: [] };
     const logger = {
         error: (message, fields) => logs.error.push({ message, fields }),
@@ -44,6 +44,7 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
         getConfig: () => ({ enabled, mode }),
         budgetExhausted,
         sessionEnabled,
+        isAdvisorSubsession,
         logger,
     });
     return { review, consultCalls, delivered, logs };
@@ -184,6 +185,19 @@ test('R-01-009/AC-03 会话级停用短路：/advisor off 时收口评审跳过�
     assert.equal(consultCalls.length, 0);
     assert.equal(delivered.length, 0);
     assert.ok(logs.info.some((row) => row.message.includes('session advisor off')));
+});
+
+test('T-022 顾问子会话豁免：呈现登记会话的收口不评审且留痕（阻断评审—呈现—再收口递归）', async () => {
+    // 判定源：呈现缝登记表（接线注入）；命中 'sub-1' 的会话收口直接放行。
+    const { review, consultCalls, delivered, logs } = makeReview({ isAdvisorSubsession: (id) => id === 'sub-1' });
+    await review.handleTurnStopping(payload('turn-1', 'sub-1'));
+    assert.equal(consultCalls.length, 0); // 豁免：不发起评审
+    assert.equal(delivered.length, 0);
+    assert.ok(logs.info.some((row) => row.message.includes('advisor subsession')));
+    // 未登记会话照常评审：豁免面收敛于呈现登记，不外溢到执行者与工作子代理。
+    await review.handleTurnStopping(payload('turn-1', 's1'));
+    assert.equal(consultCalls.length, 1);
+    assert.equal(consultCalls[0].session, 's1');
 });
 
 test('R-01-009/AC-08 模型白名单不满足时跳过并留痕（skipped 计数与预算路径对称）', async () => {

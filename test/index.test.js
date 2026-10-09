@@ -875,3 +875,60 @@ test('R-02-001/AC-07 Scout 二次调用与主咨询同语义跟随宿主模型 m
     assert.ok(llm.modelInfoCalls[0].signal instanceof AbortSignal);
     services.dispose();
 });
+
+/** 语义合规的假呈现提供方（spawn 形态，与 test/subsession.test.js 夹具同形）。 */
+function eligibleSpawnProvider() {
+    return {
+        name: 'spawn',
+        capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+        inheritsParentContext: false,
+    };
+}
+
+/** 假 subagents 缝：每次 start 发布一个即时结算为 proceed 裁决的 one-shot 顾问子会话。 */
+function fakeAdvisorSubagents() {
+    const requests = [];
+    const registry = new Map([['spawn', eligibleSpawnProvider()]]);
+    let next = 0;
+    return {
+        requests,
+        startCalls: 0,
+        async start(name, request) {
+            this.startCalls += 1;
+            requests.push({ name, request });
+            const id = `advisor-child-${++next}`;
+            return {
+                id,
+                result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'Decision: proceed\n\nAdvisor 子会话意见。' }] }),
+                dispose: async () => {},
+            };
+        },
+        getProvider: (name) => registry.get(name),
+        list: () => [...registry.keys()],
+    };
+}
+
+test('T-022 接线级递归守卫：收口评审生成的顾问子会话，其收口不再触发评审；会话清理摘除登记', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n兜底直调意见。')]);
+    const subagents = fakeAdvisorSubagents();
+    const { ctx, subscriptions, provide } = makeCtx({ llm });
+    apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
+    provide('subagents', subagents);
+    const handler = subscriptions.find((s) => s.event === 'agent/turn-stopping').handler;
+    // 执行者收口：发起一次收口评审，经子会话呈现发布一个顾问子会话（零工具 + turn-review 标签）。
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'exec-1' } });
+    await settle();
+    assert.equal(subagents.startCalls, 1);
+    assert.equal(subagents.requests[0].request.label, 'Advisor review (turn-review)');
+    assert.equal(subagents.requests[0].request.toolFilter.allow.length, 0);
+    // 顾问子会话自己的收口：命中呈现登记，豁免——不再发布子会话（递归被阻断）。
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'advisor-child-1' } });
+    await settle();
+    assert.equal(subagents.startCalls, 1);
+    // 会话清理摘除登记：判定源失效后同 id 收口恢复评审语义（登记不泄漏）。
+    const disposedHandler = subscriptions.find((s) => s.event === 'session/disposed').handler;
+    disposedHandler({ id: 'advisor-child-1' });
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'advisor-child-1' } });
+    await settle();
+    assert.equal(subagents.startCalls, 2);
+});

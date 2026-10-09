@@ -466,7 +466,7 @@ flowchart TD
   - 决策处置矩阵：proceed → steer 送达门结果 + 重置计数 + 放行；revise → steer 送达 + deny(意见全文)；blocked → 按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁；blockOnBlocked 控制 stopSession）。
   - 门命中先发预通告（`Automatic Advisor loop review`）再咨询；门问句不携带当次参数；咨询失败按阻断模式处置；决策行解析含对抗性检查。
   - 门组件异常 fail-open（放行 + 记录）。
-  - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
+  - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；评审对象是执行者回合——顾问子会话豁免（T-022，命中呈现登记即跳过并留痕）；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
 - 代码位置: lib/gates/index.js；lib/turn-review.js
 - 实现: 单端（宿主）
 
@@ -554,6 +554,12 @@ flowchart TD
 - **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate|turn-review)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **收口评审语义**（C-021，`mode=hard`）：回合收口前同步评审；proceed 放行收口（意见仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；同回合同一收口事件至多一次评审（已评审标记放行后续派发）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口并留痕；`failureMode` 不适用于收口缝；软模式下会话压缩/重写事件后经 steer 送达一条守则提醒（非阻断、不发起咨询）。
+- **顾问子会话豁免**（T-022）：
+  - 顾问子会话不是执行者（R-01-009/AC-05 评审对象是执行者回合收口），其收口不评审。
+  - 呈现缝发布成功即登记子会话 id。
+  - 处置器命中登记即跳过并留痕。
+  - 会话清理随 `session/disposed` 摘除登记。
+  - 动机：评审对象若含子会话，每代评审又生成下一带子会话，形成无界深度优先递归；豁免阻断该递归。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。

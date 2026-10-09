@@ -85,11 +85,46 @@ test('R-02-007/AC-01 子会话发起：label 标识顾问与入口，start 请�
     assert.equal(run.disposeCalls, 1); // 结算后句柄释放
 });
 
-test('R-02-007/AC-01 标签按入口区分：tool/manual/gate 三态；非入口值回退 tool', () => {
+test('R-02-007/AC-01 标签按入口区分：tool/manual/gate/turn-review 四态；非入口值回退 tool', () => {
     assert.equal(subsessionLabel('tool'), 'Advisor review (tool)');
     assert.equal(subsessionLabel('manual'), 'Advisor review (manual)');
     assert.equal(subsessionLabel('gate'), 'Advisor review (gate)');
+    assert.equal(subsessionLabel('turn-review'), 'Advisor review (turn-review)');
     assert.equal(subsessionLabel('other'), 'Advisor review (tool)');
+});
+
+test('T-022 登记缝：发布成功即以子会话 id 调用 onPresented；发布前失败与缝缺失不调用；onPresented 抛错被包含', async () => {
+    // 发布成功：登记先于 result 结算发生，label 如实标识 turn-review 入口。
+    const run = fakeRun({ stopReason: 'completed', output: [{ type: 'text', text: '意见全文。' }] });
+    const subagents = createFakeSubagents({ runs: [run] });
+    const presented = [];
+    const presenter = createSubsessionPresenter({ subagents, logger: quietLogger, onPresented: (id) => presented.push(id) });
+    const outcome = await presenter.present({
+        promptText: '素材全文',
+        parent: PARENT,
+        signal: new AbortController().signal,
+        entry: 'turn-review',
+    });
+    assert.equal(outcome.kind, 'answered');
+    assert.deepEqual(presented, ['subsession-1']);
+    assert.equal(subagents.requests[0].request.label, 'Advisor review (turn-review)');
+    // 发布前失败（start 抛错）：无 run，不登记。
+    const failing = createFakeSubagents({ startError: new Error('provider rejected') });
+    const presentedOnFailure = [];
+    const failingPresenter = createSubsessionPresenter({ subagents: failing, logger: quietLogger, onPresented: (id) => presentedOnFailure.push(id) });
+    await failingPresenter.present({ promptText: 'x', parent: PARENT, signal: new AbortController().signal, entry: 'tool' });
+    assert.deepEqual(presentedOnFailure, []);
+    // 缝缺失：不登记。
+    const presentedOnMissing = [];
+    const missing = createSubsessionPresenter({ logger: quietLogger, onPresented: (id) => presentedOnMissing.push(id) });
+    await missing.present({});
+    assert.deepEqual(presentedOnMissing, []);
+    // onPresented 抛错被包含：呈现结果不受登记失败影响。
+    const runBoom = fakeRun({ stopReason: 'completed', output: [{ type: 'text', text: '意见全文。' }] });
+    const boomSubagents = createFakeSubagents({ runs: [runBoom] });
+    const boomPresenter = createSubsessionPresenter({ subagents: boomSubagents, logger: quietLogger, onPresented: () => { throw new Error('registry boom'); } });
+    const boomOutcome = await boomPresenter.present({ promptText: 'x', parent: PARENT, signal: new AbortController().signal, entry: 'tool' });
+    assert.equal(boomOutcome.kind, 'answered');
 });
 
 test('R-02-007/AC-03 降级链：缝缺失、无合规提供方、发布前失败均返回 fallback（不抛错）', async () => {
