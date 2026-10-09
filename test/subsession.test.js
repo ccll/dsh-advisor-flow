@@ -143,6 +143,38 @@ test('R-02-007/AC-04 max-tokens 与 refusal 停止同为 failure 终态（不降
     }
 });
 
+test('R-02-007/AC-04 发布后 run.result 拒绝映射失败终态：绝不 fallback（不降级直调重发）', async () => {
+    // run.result 的 rejection 承载 seam 无法以 stopReason 表达的基础设施故障。
+    let disposed = 0;
+    const run = {
+        id: 'subsession-1',
+        result: Promise.reject(new Error('infra fault after publish')),
+        dispose: async () => { disposed += 1; },
+    };
+    const subagents = createFakeSubagents({ runs: [run] });
+    const outcome = await createSubsessionPresenter({ subagents, logger: quietLogger })
+        .present({ promptText: 'x', parent: PARENT, signal: new AbortController().signal, entry: 'tool' });
+    assert.equal(outcome.kind, 'failure'); // 非 fallback——fallback 会触发降级重发（AC-04 禁止）
+    assert.match(outcome.failure.message, /infra fault after publish/);
+    assert.equal(outcome.failure.code, 'SUBSESSION');
+    assert.equal(disposed, 1); // 句柄仍无条件释放
+});
+
+test('R-02-007/AC-04 发布后拒绝且信号已中止 → aborted 终态（超时区分归调用方）', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('manual consultation cancelled'));
+    const run = {
+        id: 'subsession-1',
+        result: Promise.reject(new Error('aborted mid-flight')),
+        dispose: async () => {},
+    };
+    const subagents = createFakeSubagents({ runs: [run] });
+    const outcome = await createSubsessionPresenter({ subagents, logger: quietLogger })
+        .present({ promptText: 'x', parent: PARENT, signal: controller.signal, entry: 'manual' });
+    assert.equal(outcome.kind, 'aborted');
+    assert.match(outcome.reason, /manual consultation cancelled/);
+});
+
 test('R-02-007/AC-05 呈现提供方语义约束：零工具 allowlist 与素材透传经 start 请求断言；优先 spawn 后端', async () => {
     const renamed = eligibleProvider('spawn-renamed'); // 部署改名场景
     const run = fakeRun({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] });

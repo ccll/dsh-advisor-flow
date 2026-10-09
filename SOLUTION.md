@@ -517,7 +517,7 @@ flowchart TD
 ## 运行时、并发与失败语义
 
 - **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
-- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。发布前失败（缝缺失、名单无提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
+- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
