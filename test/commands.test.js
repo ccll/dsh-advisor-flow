@@ -212,3 +212,17 @@ test('R-01-002/AC-03 手动咨询失败：会话经唤醒式消息看到含原�
     assert.ok(notify, '失败通告经唤醒式消息送达');
     assert.equal(notify.advice, 'Manual Advisor consultation failed: no provider adapter for route'); // pi 文案逐字
 });
+
+test('R-01-009/AC-10 status 与 gates 呈现介入强度与收口评审计数', () => {
+    const { controller } = makeController({ raw: { enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
+    const snapshot = controller.snapshotFor('s1');
+    const text = advisorStatusText({ ...snapshot, turnReviewStats: { triggers: 2, proceed: 1, revise: 1, blocked: 0, failed: 0, skipped: 0 } });
+    assert.match(text, /介入强度: hard/);
+    assert.match(text, /收口评审: 触发=2 proceed=1 revise=1 blocked=0 failed=0 skipped=0/);
+    const gatesText = advisorGatesText(snapshot.gates, snapshot.failureMode, snapshot.mode);
+    assert.match(gatesText, /mode=hard/);
+    // 软模式缺省呈现
+    const softText = advisorStatusText({ ...snapshot, mode: 'soft' });
+    assert.match(softText, /介入强度: soft/);
+    assert.doesNotMatch(softText, /收口评审/); // 无计数访问器时不呈现（非零值虚构禁令）
+});

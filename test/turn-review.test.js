@@ -17,7 +17,7 @@ import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.j
 const payload = (turn, sessionId = 's1') => ({ turn, signal: undefined, agent: { id: sessionId } });
 
 /** 收口评审夹具：可编程裁决与咨询行为 + 送达/日志捕获。 */
-function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted } = {}) {
+function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled } = {}) {
     const logs = { error: [], info: [], warn: [] };
     const logger = {
         error: (message, fields) => logs.error.push({ message, fields }),
@@ -43,6 +43,7 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
         delivery: (sessionId, text) => delivered.push({ sessionId, text }),
         getConfig: () => ({ enabled, mode }),
         budgetExhausted,
+        sessionEnabled,
         logger,
     });
     return { review, consultCalls, delivered, logs };
@@ -64,9 +65,7 @@ test('R-01-009/AC-06 proceed 放行收口：不 steer（意见仅日志留痕）
         outcomes: [{ ok: true, adviceId: 'adv-1', decision: 'proceed', markdown: '本轮行为可收口。' }],
     });
     await review.handleTurnStopping(payload('turn-1'));
-    assert.equal(delivered.length, 1); // 仅预通告
-    assert.match(delivered[0].text, /Automatic Advisor turn review/);
-    assert.ok(!delivered.some((row) => row.text.includes('**Decision:')));
+    assert.equal(delivered.length, 0); // proceed：不 steer（无预通告、无意见）
     assert.ok(logs.info.some((row) => row.message.includes('proceed — stop allowed')));
 });
 
@@ -177,6 +176,31 @@ test('R-01-009/AC-09 mode 变更即时生效：getConfig 读时求值驱动处�
     mode = 'hard';
     await review.handleTurnStopping(payload('turn-2'));
     assert.equal(consultCalls.length, 1); // hard：评审生效，无需重订阅
+});
+
+test('R-01-009/AC-03 会话级停用短路：/advisor off 时收口评审跳过并留痕', async () => {
+    const { review, consultCalls, delivered, logs } = makeReview({ sessionEnabled: () => false });
+    await review.handleTurnStopping(payload('turn-1'));
+    assert.equal(consultCalls.length, 0);
+    assert.equal(delivered.length, 0);
+    assert.ok(logs.info.some((row) => row.message.includes('session advisor off')));
+});
+
+test('R-01-009/AC-08 模型白名单不满足时跳过并留痕（skipped 计数与预算路径对称）', async () => {
+    const { review, consultCalls, logs } = makeReview({
+        outcomes: [],
+        consultImpl: (request) => ({ ok: true, adviceId: 'adv-1', decision: 'proceed', markdown: 'ok', request }),
+    });
+    // 白名单前置：顾问模型不在白名单内 → 不评审（advisorModelAllowed 共享谓词）。
+    const reviewNotAllowed = createTurnReview({
+        consult: async (request) => { consultCalls.push(request); return { ok: true, adviceId: 'adv-2', decision: 'proceed', markdown: 'ok' }; },
+        delivery: () => {},
+        getConfig: () => ({ enabled: true, mode: 'hard', modelWhitelist: ['allowed-model'], advisor: { provider: 'p', model: 'other-model' } }),
+        logger: { error() {}, info: (m, f) => logs.info.push({ message: m, fields: f }), warn() {} },
+    });
+    await reviewNotAllowed.handleTurnStopping(payload('turn-1'));
+    assert.ok(!consultCalls.some((row) => row.entry === 'turn-review' && row.session === 's1'));
+    assert.ok(logs.info.some((row) => (row.message ?? '').includes('advisor model not allowed')));
 });
 
 test('R-01-009/AC-04 提醒送达失败 contained：无 agent 时返回 false 不掷出', () => {

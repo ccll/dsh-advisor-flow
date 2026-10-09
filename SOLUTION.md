@@ -210,7 +210,7 @@ sequenceDiagram
 classDiagram
     class Consultation {
         +adviceId: UUID
-        +entry: tool|manual|gate
+        +entry: tool|manual|gate|turn-review
         +state
         +素材区字节数
     }
@@ -457,7 +457,7 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 门控服务
-- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）；硬模式下注册 `agent/turn-stopping` 收口评审监听（承接 R-01-009）
+- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）；接线无条件注册 `agent/turn-stopping` 收口评审监听，处置器按活配置判定（软模式短路，承接 R-01-009）
 - 关键内部结构:
   - 连续签名计数：本次签名 ≠ 上一次签名时计数归 1（pi 语义）；波动归一（timestamp/date/datetime→占位、correlationId/requestId/traceId→占位、临时路径归一、bash 命令空白归一）；`ask_advisor` 豁免。
   - 载体契约（dsh-tools 0.1.5-rc.2 实测）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`。
@@ -549,7 +549,7 @@ flowchart TD
 ## 运行时、并发与失败语义
 
 - **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
-- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
+- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate|turn-review)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **收口评审语义**（C-021，`mode=hard`）：回合收口前同步评审；proceed 放行收口（意见仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；同回合同一收口事件至多一次评审（已评审标记放行后续派发）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口并留痕；`failureMode` 不适用于收口缝；软模式下会话压缩/重写事件后经 steer 送达一条守则提醒（非阻断、不发起咨询）。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。

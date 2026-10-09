@@ -464,6 +464,38 @@ test('tools/result 权威成败缝：两参投递计数、callId 去重；sessio
     assert.equal(services.observer.failureStreak('s1', 'bash'), 1); // 事件缝不计数
 });
 
+test('R-01-009/AC-04 wiring 级：压缩/重写事件后软模式送达守则提醒；整体停用不发', async () => {
+    const llm = createFakeLlm([]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx, subscriptions } = makeCtx({ llm, agents });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        mode: 'soft',
+    });
+    const sessionEvent = subscriptions.find((s) => s.event === 'session/event');
+    assert.ok(sessionEvent, 'session/event 缝在场');
+    sessionEvent.handler({ id: 's1' }, { type: 'session/compact', seq: 1, time: 0, data: {} });
+    assert.equal(steered.length, 1); // 软模式压缩后送达一条守则提醒
+    assert.match(steered[0].content[0].text, /compacted/);
+    // 硬模式下压缩不提醒（每回合收口已强制评审）
+    steered.length = 0;
+    services.applyConfig({
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        mode: 'hard',
+    });
+    sessionEvent.handler({ id: 's1' }, { type: 'session/compact', seq: 2, time: 0, data: {} });
+    assert.equal(steered.length, 0); // 硬模式不发提醒
+    // 整体停用后不发提醒
+    services.applyConfig({ enabled: false });
+    sessionEvent.handler({ id: 's1' }, { type: 'session/compact', seq: 3, time: 0, data: {} });
+    assert.equal(steered.length, 0);
+});
+
 test('R-01-002/AC-01 wiring 级端到端：startManual → agent.steer 收到意见（附 adviceId 回查行）', async () => {
     // 钉住「index.js 传入的是函数而非路由对象」的接线形态（commands.js
     // startManual 以回调 delivery(sessionId, advice) 送达；手动意见经
