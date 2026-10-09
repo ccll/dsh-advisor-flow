@@ -6,7 +6,7 @@ id: T-019
 # T-019 顾问咨询以 one-shot 子会话呈现（R-02-007）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-02-007（C-020；东家 2026-10-09 会话裁决走全链，呈现范围三入口统一、形态 one-shot）
 
 ## 背景与目标
@@ -96,4 +96,15 @@ id: T-019
 
 ## 终态与证据
 
-（待实现完成后填写）
+- 实现: ① `lib/subsession.js`（新增）子会话呈现缝纯逻辑——呈现提供方解析（getProvider 优先 `spawn`，否则扫描名单取语义合规者：`inheritsParentContext===false && agentOptions && toolFilter`）、`subagents.start` one-shot 委托（label=`Advisor review (entry)`、prompt=装配产物、agentOptions=顾问路由、`toolFilter:{allow:[]}` 零工具、persona=协议提示）、`SubagentResult.output` 文本块提取（非文本块过滤）、空输出 EMPTY 失败、`stopReason: 'aborted'` 中止终态、error/max-tokens/refusal 映射 SUBSESSION 失败、`finally` 无条件 dispose（dispose 抛错被包含）、发布前失败与内部异常一律 fallback（本缝绝不抛错）。② `lib/consultation.js`：`callAdvisor` 装配后按 `config.presentation` 分流——非 direct 且呈现缝在场时经 `presentSubsession`（deadline 融合信号、能力门控 effort 与 maxTokens 经 agentOptions 下传、EMPTY 记账与直调同语义、aborted 经 timedOut() 区分超时/取消、fallback 降级直调并 info 留痕）；`consult` 请求新增 `parent` 透传。③ `lib/config.js`：`PRESENTATION_MODES`/`DEFAULT_PRESENTATION='subagent'`（C-020）常量 + 标量键表 + KNOWN 清单（非法值按库纪律拒绝）。④ `lib/settings.js`：Schema `presentation` 键（双清单纪律）。⑤ `lib/index.js`：`subagents` 条件子上下文接呈现缝（`degradations.subsessionPresentation` 显性化）、`presentSubsession` 读时求值闭包、`extractUsage` 用量取数缝（子会话 `assistant/message` 事件 usage，dispose 前提取；不可得记 unavailable）。⑥ 三入口 parent 透传：`lib/tools/ask-advisor.js`（exec.agent）、`lib/gates/index.js`（exec.agent）、`lib/commands.js`（invocation.agent 经 startManual）。⑦ `lib/client.js` 经 `scripts/build-client.mjs` 重建（内联 config.js 新常量，与源码同步）。
+- 测试: 全套件 `npm test` 246 通过 / 0 失败（基线 230 + 新增 16：`test/subsession.test.js` 9 用例锚定 AC-01/03/04/05/06（含发布后 rejection 两用例）、`test/consultation.test.js` 6 用例锚定 AC-02/03/04、`test/config.test.js` presentation 默认/两值/非法拒绝断言）；`anchor_coverage` passed（prd-ac=74 anchored=74 unanchored=0，R-02-007 六 AC 全锚定）；`expected_fail_check` passed（executed=246 与账本基线一致，`test/expected-fail.json` 230→244→246）；`agentmap_lint` passed（15 需求 / 74 AC 全锚定；本 task 新增内容零警告）。staging 实弹（af-verify 真实会话，go/no-go 通过）：tool 入口探针——子会话 `c102689c…` 创建，会话头 `origin:subagent / parentSession:<主会话> / delegationDepth:1`，主会话 `subagent/catalog` 登记 `label: Advisor review (tool)`，子会话 system = 部署 persona + ADVISOR_SYSTEM_PROMPT 完整在场、无工具清单段、全事件流零 tool 事件（NG-1 实证），user 消息 = 六区装配产物（素材契约不变），意见 `Verdict:` 协议结算经工具返回值送达主会话（`Advisor (gpu/glm-5.3-flash)` 渲染行），usage 经子会话 `assistant/message` 事件提取（inputTokens/outputTokens/totalTokens 实得）；gate 入口探针——循环门命中后子会话 `e21e08da…` 创建，catalog `label: Advisor review (gate)`，`Decision: proceed` 结算、门结果送达执行者；结算后两子会话 session 落盘留存（go/no-go 留存项通过，无消失问题）。
+- SOLUTION 对照: PRD R-02-007 六 AC 新增、NG-8 括注演进（可见性承载新增子会话呈现）；SOLUTION 系统上下文图/内部组件分解图/分层依赖图/运行时交互图、产品契约 `presentation` 键、咨询服务子系统职责、运行时语义「子会话呈现语义」条（含呈现提供方「可用」判定标准）、需求追溯索引 R-02-007 行、接缝清单 `ctx.subagents` 同步；DOMAIN「子会话呈现（Subagent Presentation）」术语与实体关系登记；RATIONALE C-020 追加（四段式）。修复提交 c7f1795 补写呈现提供方「可用」判定标准（spec 轴首轮发现③收敛）。SOLUTION 与实现对照无差异。
+- commit: 4ef493d —— 实现提交（正文引用 T-019）；c7f1795 —— 审核修复提交（发布后 rejection 分类 + rejection 两用例 + SOLUTION 判定标准补写）。
+- 锚定理由: R-02-007 六 AC 由 test/subsession.test.js 与 test/consultation.test.js 测试标题直接锚定，机械门禁 `anchor_coverage` 74/74 与 `agentmap_lint` 通过为权威依据。
+- review:
+  - 审核方: code-review skill 双轴并行独立子代理（Standards 轴 1e4c1d2e、Spec 轴 751ac2bd）+ 同审核方复审轮
+  - 目的理解: 在不动素材装配（R-02-006 六区契约）、送达通道、隐私档位、失败/预算/取消语义的前提下，为咨询（tool/manual/gate 三入口统一）新增 one-shot 子会话呈现缝——会话界面出现顾问子会话条目（R-02-007/AC-01），意见结算与送达不变；验证方式为 244→246 用例全套件 + agentmap_lint/anchor_coverage/expected_fail_check/bundle 同步四道门禁 + af-verify staging 实弹 go/no-go。
+  - 执行方式: code-review skill 双轴并行独立子代理，基线 6ff0454...4ef493d（实现提交）；复审轮接收首轮全部发现与处置逐条裁决，基线扩展至 c7f1795。
+  - 问题与修复: 双轴一致命中 1 项高危——`run.result` rejection 穿过内层 finally 落入外层兜底 catch 被折叠为 fallback，经 consultation 分支降级直调重发同一请求，违背 AC-04「不得降级直调重发」与 C-020 → 修复（c7f1795）：run 在手后的异常内层分类（signal.aborted → aborted 终态；否则 failure/SUBSESSION 诊断），fallback 仅保留发布前，补 rejection 两用例锚定 AC-04；处置保留 3 项——实现提交正文重复「## 影响」段（commit-msg 门禁仅校验 task 引用，未推送历史不改写，沿 T-018 先例，后续提交正文改用规范三段式——复审确认 c7f1795 正文同形态，沿例不改写）、subsession/subagent 词根差异（DOMAIN 中文规范名「子会话呈现」统一承载，宿主服务名 subagents 属宿主词汇）、测试假件与 outcome 映射的结构性重复（两处假件服务不同抽象层：引擎分流 vs 缝本体，强行共享反致耦合）；处置收敛 1 项——呈现提供方语义合规判定属实现自行加严 → SOLUTION 运行时语义补写「可用」判定标准（不继承父上下文 + agentOptions + toolFilter 能力，判定先于 start），scope creep 消除；label 非法入口回退——不可达防御分支（consult() 已规范 entry），不改。
+  - 复审结论: 双轴复审全部通过——两轴对 4 条发现逐条裁决「接受修复/接受处置」，无新发现（Standards 轴仅提示后续提交正文规范三段式，已列入处置理由）；全部问题已修复或处置完毕，可关闭 T-019。
+- 残余风险: ① one-shot 结算后子会话条目在宿主 GUI 的长期留存行为以落盘与 catalog 实证为据，宿主版本升级后的呈现行为变化由宿主侧承载（插件无承诺面）；② `extractUsage` 依赖 sessionQuery 对子会话 id 的可读性，部署形态变化时台账按 unavailable 呈现（R-02-002/AC-02 语义兼容，无零值虚构）；③ 生产 web 宿主重启前仍运行旧 bundle——子会话条目出现以宿主重启加载新代码为前提（宿主重启由东家执行）；④ 实现/修复提交正文的重复「## 影响」段为已落历史瑕疵，反查链不受影响，后续提交正文以规范三段式为准。
