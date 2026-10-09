@@ -20,6 +20,7 @@ owner: 双方
 
 - [维护想法] dsh-tui 专属设置界面与 `/advisor` 命令面（NG-4 排除于首版，市场需求再现时升级）
 - [缺陷线索] dsh 全局未注册 kimi-coding provider 路由，而 pi 侧 advisor 用 kimi-coding/k3-256k——移植版默认 advisor 路由待定（曾实测 NO_ADAPTER）
+- [缺陷线索] 顾问子会话系统提示含执行者守则「Advisor invocation settings」段（命令其 declare success 前调 ask_advisor；2026-10-09 第 9 层子会话日志逐字可见）——当前被 `toolFilter={allow:[]}` 挡住不构成递归，但属第二递归向量：工具过滤一旦失效即点燃模型侧自咨询；建议守则注入对顾问子会话豁免或 persona 显式压制（T-022 残余风险关联）
 - [缺陷线索] 咨询素材装配缺口：默认隐私档位下顾问仅收到问题文本，无会话历史/工作摘要（staging 第三轮实测：收口评审时顾问报「无可评审素材」）；SOLUTION 会话观察模块声称维护转写增量但实现未投喂——是否立项补齐（涉及隐私档位与素材装配语义）待裁决（T-009 终态登记）
 - [维护想法] 向 dsh-advisor（omdsh-dev）上游提 maxTokens/timeout 配置化 issue；本机 node_modules 补丁在插件更新时会被覆盖
 - [需求候选] 意见采纳结果回写（record_advisor_outcome 对应物）与 outcome 统计（pi 侧默认关闭，移植版是否跟进待定）
