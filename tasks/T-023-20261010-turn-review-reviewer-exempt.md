@@ -6,7 +6,7 @@ id: T-023
 # T-023 收口评审审核类子会话豁免（R-01-009、R-02-001）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-01-009（评审对象语义细化）、R-02-001/AC-01（新配置键即时生效）、T-022（豁免机制先例）
 
 ## 背景与目标
@@ -124,10 +124,22 @@ id: T-023
   - 理由：风格检查显式豁免 RATIONALE 散文段（STYLE_PROSE_EXEMPT_FILES），拆句无 lint 收益，避免触碰 append-only 历史。
 - 复审登记（2026-10-10 Spec 轴复审，独立 reviewer）：四项发现，同轮全部修复。
   - settings Schema 漏写 `turnReviewExemptPatterns`（双清单纪律违例 + R-02-001 web 设置卡承诺未兑现）→ lib/settings.js Schema 补键、lib/client/render.js 补设置卡字段、SOLUTION.md#配置与状态服务新键清单同步。
-  - 失败判定被缓存（注释声明不缓存，实现无条件缓存 false；生产缝以 undefined 表达读取失败，失败走成功路径被缓存，暂态故障致同会话持续漏豁免）→ lib/turn-review.js 仅缓存成功读取（events 为数组）所得判定，失败一律不缓存、次轮收口重判；SOLUTION.md 缓存语义行同步。
+  - 失败判定被缓存（注释声明不缓存，实现无条件缓存 false；暂态故障致同会话持续漏豁免）。
+    - 修复：lib/turn-review.js 仅缓存成功读取（events 为数组）所得判定，失败一律不缓存、次轮收口重判。
+    - 生产缝以 undefined 表达读取失败（不抛错），与抛错同型 fail-open；SOLUTION.md 缓存语义行同步。
   - R-02-001/AC-04 锚点缺（豁免清单缺省断言未并入 AC-04 默认值用例）→ test/config.test.js 默认值用例补断言，解析用例锚改 R-02-001/AC-04。
   - label 与 prompt 拼接 haystack 可跨界拼出清单词（误豁免方向）→ 分离匹配（等价 OR，不跨源拼接）。
 
 ## 终态与证据
 
-（active 期间未填）
+- 实现: ① `lib/config.js`：`DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS` 双语预置（review/审核/审查/评审/审计）、默认值区、标量键表（parseStringArray，空数组合法 = 豁免关闭）、KNOWN 登记。② `lib/turn-review.js`：`subsessionExemptFrom` 纯函数（header `origin === 'subagent'` 自证 + `subagent/descriptor` label 与首条 `agent/inbox/spliced` 提示词分离匹配，大小写不敏感）；`exemptSubsession`（清单空零读取；仅成功读取的判定按会话缓存——含 false；patternsKey 失配重判；缝缺失/读取失败/解析失败 fail-open 不缓存、次轮重判并 info 留痕）；`getEvents` 缝与 `forgetSession` 缝；处置器豁免位于 T-022 判定之后、预算核查之前。③ `lib/index.js`：`getEvents: getSessionEvents` 注入（与素材装配同源）；`session/disposed` 摘除豁免缓存。④ `lib/settings.js` Schema 补键 + `lib/client/render.js` 设置卡豁免关键词输入（逗号/中文逗号/换行分隔，空 = 豁免关闭，随总开关禁用）+ `lib/client.js` 产物重建（复审收编，东家裁决）。⑤ PRD（R-01-009 陈述句与 AC-11/AC-12、R-02-001 清单与 AC-04 偏离项）、DOMAIN（两词条 + 执行类/审核类子会话词条 + 不变量行）、SOLUTION（收口评审语义、子会话审核豁免语义块、门控服务职责、配置服务新键清单）、RATIONALE（C-023）、TODO（语义边界观察）同步。
+- 测试: 全套件 `npm test` 280/280 全绿（基线 269→277 实现、277→280 复审修复）。新增锚点：`test/config.test.js::T-023 turnReviewExemptPatterns 解析`；`test/turn-review.test.js::T-023 审核类子会话豁免`、`T-023 主会话不豁免`、`T-023 豁免判定 fail-open`、`T-023 判定缓存`、`T-023 豁免清单为空时豁免关闭`；`test/index.test.js::T-023 接线级豁免`、`T-023 接线级豁免 fail-open`；`test/client/settings-card.test.js` 设置卡字段用例。`agentmap_lint` / `anchor_coverage`（prd-ac=86 全锚定）/ `expected_fail_check`（executed=280）三道门禁通过；client bundle fresh 闸门通过。
+- SOLUTION 对照: R-01-009/AC-11（自证 + 命中即豁免留痕）与 AC-12（判定失败照常评审）由实现兑现，评审对象语义（执行者回合与执行类子会话收口；顾问/审核类子会话不评审）与 DOMAIN 不变量一致；R-02-001 的 settings.yaml 与 web 设置卡双面承诺兑现（东家 2026-10-10 裁决收下设置卡实现，原方案 b 作废）。SOLUTION 与实现对照无差异。
+- commit: cab1b79 —— 实现提交（正文引用 T-023）；3d3b108 —— DOMAIN 不变量拆行排版；1f5138e —— Standards 复审收口提交（DOMAIN 词条登记、长句拆分、判定失败留痕）；1120002 —— Spec 复审修复收编提交（缓存语义、设置卡豁免字段、AC-04 锚点、分离匹配）。
+- review:
+  - 审核方: code-review skill 双轴独立子代理（Standards/Spec 并行）+ Standards 复核轮（独立 reviewer）。
+  - 目的理解: hard 模式下 skill 发起的审核类子会话收口触发收口评审构成元评审（高频路径成本放大）；修复 = 子会话自证（日志 header origin）+ 关键词清单豁免，判定失败 fail-open、判定按会话缓存；机制依据 T-023 立项前的真实会话日志实证（descriptor 事件、header origin、inbox splice 首条提示词）；验证方式 = 280 用例全套件 + 三道门禁 + anchor coverage。
+  - 执行方式: 双轴并行独立子代理，基线 1825f02...HEAD（cab1b79 → 1120002 四提交）；评审对象含三份 map 文本与实现、测试、task 登记。
+  - 问题与修复: 首轮 Standards——DOMAIN 未登记不变量新词（硬违规）→ 词条登记（1f5138e）；SOLUTION/PRD 新增长句 → 拆子列表（1f5138e）；判定失败 catch 静默 → info 留痕（1f5138e）；夹具双份 → 判断项记残余风险。Standards 复核轮——缓存语义与注释矛盾（失败结论被缓存，重试承诺不成立）→ 仅成功读取才缓存（1120002，与 Spec 轴交叉确认）；config 缺省共享数组别名 → 判断项记残余风险（消费方全只读）。Spec 轴——settings Schema 漏键（双清单纪律违例）→ Schema + 设置卡补齐（1120002，东家裁决收下）；失败判定缓存 → 同上；R-02-001/AC-04 锚点缺 → 默认值用例补断言（1120002）；拼接匹配清晰度 → 分离匹配（1120002）。
+  - 流程偏差登记: 双轴子代理均越权直接修复（Standards 轴自行提交 1f5138e；Spec 轴留下未提交改动），违反「审核方只报告、修复归执行方」纪律；执行方逐项核验全部改动内容后收编（内容全部合格），独立性由 Standards 复核轮（合规形态、结论可关闭）重建；越权事实向东家如实报告。
+  - 复审结论: Standards 复核轮硬违规清零、结论可关闭；Spec 轴四项发现全部修复并经执行方核验、东家裁决设置卡收下；残余风险两项联调验证项（observeSession header 形态、宿主 disposed 派发）与两项判断项（夹具双份、缺省数组别名）已登记。
