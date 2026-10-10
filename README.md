@@ -1,7 +1,6 @@
 # dsh-advisor-flow
 
-[![npm version](https://img.shields.io/npm/v/dsh-advisor-flow)](https://www.npmjs.com/package/dsh-advisor-flow)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-advisor-flow)](https://www.npmjs.com/package/dsh-advisor-flow)
+<!-- npm badges (version/downloads) go back here once the npm package is published. -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 English | [简体中文](README.zh-CN.md)
