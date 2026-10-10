@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES, DEFAULT_PRESENTATION, PRESENTATION_MODES } from '../lib/config.js';
+import { resolveAdvisorFlowConfig, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_GATE_THRESHOLD, DEFAULT_FAILURE_MODE, FAILURE_MODES, DEFAULT_PRESENTATION, PRESENTATION_MODES, DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS } from '../lib/config.js';
 
 test('R-02-001/AC-01 解析后的配置驱动后续咨询，重新应用即时生效', async () => {
     const first = resolveAdvisorFlowConfig({
@@ -239,4 +239,26 @@ test('R-01-009/AC-02 mode 缺省 hard（开箱即获收口评审，C-022；废�
     const result = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'p', model: 'm' } });
     assert.equal(result.ok, true);
     assert.equal(result.config.mode, 'hard'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
+});
+
+test('T-023 turnReviewExemptPatterns 解析：默认双语预置、显式覆盖、空数组关闭、非法拒绝（R-02-001；C-023）', () => {
+    const base = { enabled: true, advisor: { provider: 'p', model: 'm' } };
+    const def = resolveAdvisorFlowConfig(base);
+    assert.equal(def.ok, true);
+    assert.deepEqual(def.config.turnReviewExemptPatterns, DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS);
+    assert.ok(def.config.turnReviewExemptPatterns.includes('review')); // 英文词
+    assert.ok(def.config.turnReviewExemptPatterns.includes('审核')); // 中文词
+    // 显式覆盖生效
+    const override = resolveAdvisorFlowConfig({ ...base, turnReviewExemptPatterns: ['audit'] });
+    assert.deepEqual(override.config.turnReviewExemptPatterns, ['audit']);
+    // 空数组合法 = 豁免关闭
+    const empty = resolveAdvisorFlowConfig({ ...base, turnReviewExemptPatterns: [] });
+    assert.deepEqual(empty.config.turnReviewExemptPatterns, []);
+    // 非法值：含空串的数组 / 非数组类型均拒绝且原因可查
+    const badItem = resolveAdvisorFlowConfig({ ...base, turnReviewExemptPatterns: ['ok', ''] });
+    assert.equal(badItem.ok, false);
+    assert.match(badItem.error, /turnReviewExemptPatterns/);
+    const badType = resolveAdvisorFlowConfig({ ...base, turnReviewExemptPatterns: 'review' });
+    assert.equal(badType.ok, false);
+    assert.match(badType.error, /turnReviewExemptPatterns/);
 });

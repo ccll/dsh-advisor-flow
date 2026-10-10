@@ -911,3 +911,55 @@ test('T-022 接线级递归守卫：收口评审生成的顾问子会话，其�
     await settle();
     assert.equal(subagents.startCalls, 2);
 });
+
+/** T-023 子会话日志夹具（实测形状：header origin 顶层、inbox splice 承载首条提示词、descriptor 承载标签）。 */
+function reviewSubsessionLog({ label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
+    return [
+        { type: 'session', seq: 0, id: 'review-child', origin: 'subagent' },
+        { type: 'agent/inbox/spliced', seq: 3, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } },
+        { type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } },
+    ];
+}
+
+test('T-023 接线级豁免：审核子会话（真实形状日志）收口不评审；缓存复用与 disposed 复位', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n不应被调用的意见。')]);
+    const { ctx, subscriptions } = makeCtx({ llm });
+    const observeCalls = [];
+    ctx.sessionQuery = {
+        observeSession: async (sessionId) => {
+            observeCalls.push(sessionId);
+            return { events: reviewSubsessionLog(), [Symbol.dispose]() {} };
+        },
+    };
+    apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
+    const handler = subscriptions.find((s) => s.event === 'agent/turn-stopping').handler;
+    // 审核子会话收口：自证（header origin）+ label 'review' 命中默认清单 → 豁免（零咨询、日志读取恰一次）。
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'review-child' } });
+    await settle();
+    assert.equal(llm.calls.length, 0);
+    assert.equal(observeCalls.length, 1);
+    assert.equal(observeCalls[0], 'review-child');
+    // 同会话第二回合收口：判定缓存复用，零重读（continuable 子会话多回合不放大读取）。
+    await handler({ turn: 'turn-2', signal: undefined, agent: { id: 'review-child' } });
+    await settle();
+    assert.equal(observeCalls.length, 1);
+    assert.equal(llm.calls.length, 0);
+    // 会话清理摘除缓存：同 id 收口重新判定（getEvents 再次调用）。
+    const disposedHandler = subscriptions.find((s) => s.event === 'session/disposed').handler;
+    disposedHandler({ id: 'review-child' });
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'review-child' } });
+    await settle();
+    assert.equal(observeCalls.length, 2);
+    assert.equal(llm.calls.length, 0); // 重判仍命中豁免
+});
+
+test('T-023 接线级豁免 fail-open：sessionQuery 缝缺失时审核子会话照常评审（R-01-009/AC-12）', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n直调路径意见。')]);
+    const { ctx, subscriptions } = makeCtx({ llm }); // 不注入 sessionQuery
+    apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
+    const handler = subscriptions.find((s) => s.event === 'agent/turn-stopping').handler;
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'review-child' } });
+    await settle();
+    // 缝缺失 → 判定失败 fail-open → 评审照常（经子会话呈现或直调，llm 至少一笔）
+    assert.ok(llm.calls.length >= 1);
+});

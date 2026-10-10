@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTurnReview, TURN_REVIEW_QUESTION } from '../lib/turn-review.js';
 import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.js';
+import { DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS } from '../lib/config.js';
 
 /**
  * 收口评审（R-01-009；C-021）行为面：
@@ -17,7 +18,7 @@ import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.j
 const payload = (turn, sessionId = 's1') => ({ turn, signal: undefined, agent: { id: sessionId } });
 
 /** 收口评审夹具：可编程裁决与咨询行为 + 送达/日志捕获。 */
-function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled, isAdvisorSubsession } = {}) {
+function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled, isAdvisorSubsession, getEvents, config } = {}) {
     const logs = { error: [], info: [], warn: [] };
     const logger = {
         error: (message, fields) => logs.error.push({ message, fields }),
@@ -41,10 +42,11 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
     const review = createTurnReview({
         consult,
         delivery: (sessionId, text) => delivered.push({ sessionId, text }),
-        getConfig: () => ({ enabled, mode }),
+        getConfig: () => (config ?? { enabled, mode }),
         budgetExhausted,
         sessionEnabled,
         isAdvisorSubsession,
+        getEvents,
         logger,
     });
     return { review, consultCalls, delivered, logs };
@@ -220,4 +222,105 @@ test('R-01-009/AC-08 模型白名单不满足时跳过并留痕（skipped 计数
 test('R-01-009/AC-04 提醒送达失败 contained：无 agent 时返回 false 不掷出', () => {
     const delivery = createAdviceDelivery({ lookupAgent: () => undefined });
     assert.equal(delivery.steerReminder('missing'), false);
+});
+
+/** T-023 子会话事件流夹具（实测形状：header origin 顶层、inbox splice、descriptor）。 */
+function subsessionLog({ header = { type: 'session', seq: 0, id: 'sub-1', origin: 'subagent' }, label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
+    const events = [];
+    if (header) {
+        events.push(header);
+    }
+    if (prompt !== undefined) {
+        events.push({ type: 'agent/inbox/spliced', seq: 3, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } });
+    }
+    if (label !== undefined) {
+        events.push({ type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } });
+    }
+    return events;
+}
+
+/** T-023 豁免判定夹具：config 携带默认豁免清单。 */
+const exemptConfig = (extra = {}) => ({ enabled: true, mode: 'hard', turnReviewExemptPatterns: DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS, ...extra });
+
+test('T-023 审核类子会话豁免：自证 + label 或首条提示词命中即跳过并留痕（R-01-009/AC-11）', async () => {
+    // 创建标签命中（prompt 不含关键词）
+    const byLabel = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => subsessionLog({ label: 'Standards review of T-032', prompt: '请独立完成差异核对并汇报。' }),
+    });
+    await byLabel.review.handleTurnStopping(payload('turn-1', 'sub-1'));
+    assert.equal(byLabel.consultCalls.length, 0);
+    assert.ok(byLabel.logs.info.some((row) => row.message.includes('exempt patterns')));
+    // 首条提示词命中（label 不含关键词）
+    const byPrompt = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => subsessionLog({ label: '数据整理', prompt: 'Please REVIEW the diff before reporting.' }),
+    });
+    await byPrompt.review.handleTurnStopping(payload('turn-1', 'sub-2'));
+    assert.equal(byPrompt.consultCalls.length, 0); // 大小写不敏感命中
+    // 双源不命中：执行类子会话照常评审
+    const worker = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => subsessionLog({ label: '数据整理', prompt: '搜索仓库中的相关实现并汇报结论。' }),
+    });
+    await worker.review.handleTurnStopping(payload('turn-1', 'sub-3'));
+    assert.equal(worker.consultCalls.length, 1);
+});
+
+test('T-023 主会话不豁免：header 无 subagent origin（根会话与 fork 形态）时 prompt 命中仍照常评审（R-01-009/AC-11 自证前置）', async () => {
+    // 根会话：无 header origin 字段（undefined），prompt 含 review
+    const root = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => subsessionLog({ header: { type: 'session', seq: 0, id: 'root-1' }, label: undefined, prompt: 'review this repo for issues' }),
+    });
+    await root.review.handleTurnStopping(payload('turn-1', 'root-1'));
+    assert.equal(root.consultCalls.length, 1); // 主会话是评审对象本位：照常评审
+    // fork 形态：isSeeded 但无 origin 字段
+    const fork = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => subsessionLog({ header: { type: 'session', seq: 0, id: 'f-1', isSeeded: true }, label: 'fork review', prompt: 'review the diff' }),
+    });
+    await fork.review.handleTurnStopping(payload('turn-1', 'f-1'));
+    assert.equal(fork.consultCalls.length, 1); // fork 不是 subagent，照常评审
+});
+
+test('T-023 豁免判定 fail-open：读取抛错/缝缺失/空流一律照常评审（R-01-009/AC-12）', async () => {
+    const throwing = makeReview({ config: exemptConfig(), getEvents: async () => { throw new Error('seam down'); } });
+    await throwing.review.handleTurnStopping(payload('turn-1'));
+    assert.equal(throwing.consultCalls.length, 1);
+    const noSeam = makeReview({ config: exemptConfig() }); // getEvents 未注入
+    await noSeam.review.handleTurnStopping(payload('turn-1'));
+    assert.equal(noSeam.consultCalls.length, 1);
+    const emptyLog = makeReview({ config: exemptConfig(), getEvents: async () => [] });
+    await emptyLog.review.handleTurnStopping(payload('turn-1'));
+    assert.equal(emptyLog.consultCalls.length, 1);
+});
+
+test('T-023 判定缓存：同会话判定复用零重读，patterns 变更触发重判（读时求值）', async () => {
+    let reads = 0;
+    const events = subsessionLog({ label: 'Spec 轴审核 T-049' });
+    const config = { enabled: true, mode: 'hard', turnReviewExemptPatterns: ['review'] };
+    const { review } = makeReview({
+        config,
+        getEvents: async () => { reads += 1; return events; },
+    });
+    await review.handleTurnStopping(payload('turn-1', 'sub-9'));
+    assert.equal(reads, 1); // 首次判定读取
+    await review.handleTurnStopping(payload('turn-2', 'sub-9'));
+    assert.equal(reads, 1); // 同会话缓存复用
+    config.turnReviewExemptPatterns = ['cleanup']; // 清单变更 → 缓存签名失配 → 重判
+    await review.handleTurnStopping(payload('turn-3', 'sub-9'));
+    assert.equal(reads, 2);
+    assert.equal(review.decisionStats().skipped, 2); // 两次收口均命中 '审核'（重判后仍豁免）
+});
+
+test('T-023 豁免清单为空时豁免关闭：零日志读取直接照常评审', async () => {
+    let reads = 0;
+    const { review, consultCalls } = makeReview({
+        config: { enabled: true, mode: 'hard', turnReviewExemptPatterns: [] },
+        getEvents: async () => { reads += 1; return subsessionLog({}); },
+    });
+    await review.handleTurnStopping(payload('turn-1'));
+    assert.equal(consultCalls.length, 1);
+    assert.equal(reads, 0); // 空清单短路：不读日志
 });
