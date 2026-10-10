@@ -90,5 +90,17 @@ jobs:
       # First publish of a brand-new package cannot use OIDC (the package must exist
       # before the Trusted Publisher can be configured on npmjs.com): publish 0.2.1
       # once manually, then all later releases go through this workflow.
+      # Guard: until the package exists on the registry, `npm view` fails — skip the
+      # publish step with a green outcome instead of failing the release run.
+      - name: Check package exists on registry
+        id: published
+        continue-on-error: true
+        run: npm view dsh-advisor-flow version
+
       - name: Publish package
+        if: steps.published.outcome == 'success'
         run: npm publish --provenance
+
+      - name: First publish pending
+        if: steps.published.outcome != 'success'
+        run: echo "npm 首发暂缓——包尚不存在，需人工首发一次；配置 Trusted Publisher 后本 workflow 自动承接后续发布。"
