@@ -531,6 +531,11 @@ flowchart TD
 ### web 设置卡
 - 职责: 设置页 Advisor Flow 卡片（开关、模型、门矩阵、新配置键、隐私档位、风险提示），经自有 gateway RPC 读写（承接 R-02-001 的 GUI 面）
 - 关键内部结构: 旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省（T-016）。
+  - 保存控件常驻: footer 按钮组以 sticky 定位常驻滚动视口底部（R-02-001/AC-09；C-024）。
+  - 长表单滚动到任意位置时，保存与放弃修改控件保持可见。
+  - 未保存徽标: 存在暂存修改时，卡片头部呈现「未保存」标识（R-02-001/AC-10）。
+  - 徽标在折叠态保留（R-02-001/AC-11）。
+  - 保存或放弃修改后，徽标消失（R-02-001/AC-12）。
 - 代码位置: lib/client/
 - 实现: client bundle（web profile）
 

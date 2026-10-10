@@ -837,3 +837,79 @@ test('R-02-001 T-023 收口评审豁免关键词输入：默认清单回显、�
     const offInput = findById(offContainer, 'advisor-turn-review-exempt-patterns');
     assert.equal(offInput.attrs.disabled, 'disabled');
 });
+
+// ─── T-024 保存控件常驻与未保存显性化（R-02-001/AC-09～12；C-024） ───
+
+/** 支持 head + querySelector 的独立桩：驱动 injectStyles 真实注入（共享桩跳过样式层）。 */
+function createStyleCapableDom() {
+    const dom = createDomStub();
+    dom.head = dom.createElement('head');
+    const rawCreate = dom.createElement.bind(dom);
+    dom.createElement = (tag) => {
+        const node = rawCreate(tag);
+        node.dataset = {}; // injectStyles 写 dataset.plugin / dataset.pluginCss
+        return node;
+    };
+    dom.querySelector = (selector) => {
+        const match = selector.match(/^style\[data-plugin-css="(.+)"\]$/);
+        if (!match) {
+            return null;
+        }
+        return findAll(dom.head, (node) => node.attrs['data-plugin-css'] === match[1])[0] ?? null;
+    };
+    return dom;
+}
+
+test('R-02-001/AC-09 footer sticky 常驻：样式声明固定于滚动视口底部，按钮组为 body 末尾', async () => {
+    const { controller } = makeCard();
+    const dom = createStyleCapableDom(); // 共享桩无 head，injectStyles 被跳过——样式断言须独立桩
+    const container = dom.createElement('div');
+    renderSettingsCard({ document: dom, container, controller });
+    const styleTag = findAll(dom.head, (node) => node.tag === 'style')[0];
+    assert.ok(styleTag, '样式表已注入');
+    assert.match(styleTag.textContent, /\.advisorflow_footer\{[^}]*position:sticky/);
+    assert.match(styleTag.textContent, /\.advisorflow_footer\{[^}]*bottom:0/);
+    assert.match(styleTag.textContent, /\.advisorflow_footer\{[^}]*background:var\(--dsw-alias-bg-layer-2\)/);
+    // 结构层：footer 为 body 末尾元素，含保存与放弃修改按钮组（须先 load + 展开）
+    await controller.load();
+    expandCard(container);
+    const body = findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_body'))[0];
+    const footer = body.children[body.children.length - 1];
+    assert.ok((footer.attrs.class ?? '').includes('advisorflow_footer'), 'footer 为 body 末尾按钮组');
+    assert.ok(byTag(footer, 'button').some((node) => (node.attrs.class ?? '').includes('advisor-flow-save')));
+    assert.ok(byTag(footer, 'button').some((node) => (node.attrs.class ?? '').includes('advisor-flow-discard')));
+});
+
+test('R-02-001/AC-10 未保存徽标：编辑出现且折叠保留（R-02-001/AC-11 折叠态可见）', async () => {
+    const { controller, container } = await renderedCard();
+    const badges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
+    assert.equal(controller.getState().dirty, false);
+    assert.equal(badges().length, 0, '初始无未保存徽标');
+    expandCard(container);
+    controller.setField('advisor.model', 'm2');
+    assert.equal(controller.getState().dirty, true);
+    assert.equal(badges().length, 1, '编辑后头部出现未保存徽标');
+    assert.equal(badges()[0].textContent, '未保存');
+    // 折叠态徽标保留（R-02-001/AC-11）：关闭页面前唯一可见的未保存信号
+    expandCard(container); // header 点击 = 折叠
+    assert.equal(badges().length, 1, '折叠态徽标保留');
+});
+
+test('R-02-001/AC-12 未保存徽标：放弃修改与保存成功后消失', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    const badges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
+    // 放弃修改 → 徽标消失
+    controller.setField('advisor.model', 'm2');
+    assert.equal(badges().length, 1);
+    controller.discard();
+    assert.equal(controller.getState().dirty, false);
+    assert.equal(badges().length, 0, '放弃修改后徽标消失');
+    // 再编辑 → 保存成功 → 徽标消失
+    controller.setField('advisor.model', 'm2');
+    assert.equal(badges().length, 1);
+    const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
+    await save.listeners.click[0]();
+    assert.equal(controller.getState().dirty, false);
+    assert.equal(badges().length, 0, '保存成功后徽标消失');
+});
