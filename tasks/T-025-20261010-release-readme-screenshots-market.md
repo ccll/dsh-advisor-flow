@@ -6,7 +6,7 @@ id: T-025
 
 # T-025 README 双语重写、演示截图与 dsh-market 发布
 
-状态: active
+状态: completed
 风险等级: standard
 风险等级理由: 发布工程为主（README/截图/收录 PR 均可逆）；版本 tag 不可撤回但属常规发布操作；npm 首发已由东家裁决暂缓，本 task 不含不可逆发布动作（双轴审核建议升级 high，据此记录降级理由）。
 
@@ -67,4 +67,13 @@ id: T-025
 
 ## 终态与证据
 
-（关闭时填写）
+- 实现: README 双语重写并嵌入七张隔离环境截图；screenshots.json 契约（7 条 ≤8 上限）；scripts/screenshot.mjs 四模式截图与链路冒烟工具（内联 SSE mock + 临时 $DSH_HOME + playwright）；npm-publish.yml（双入口双校验 + provenance OIDC）；package.json 发布元数据与 devDeps 锁定；.npmrc legacy-peer-deps；README 安装节如实反映 npm 暂缓（东家裁决）。
+- 测试: npm test 283/283 两轮通过（开发树 + 干净克隆 npm ci）；agentmap lint 通过；HEAD=571f9db 冒烟全绿（ok=true，advisorHits=1，mock scenarioLog [consult,consult,advisor-tool,fast]）；tarball 准出：npm pack 产物装入全新临时 profile 起服，设置卡渲染并展开（/tmp 一次性验收，PASS）；build:client 后 git diff --exit-code 干净。
+- SOLUTION 对照: lib/ 零改动，产品契约与运行时行为未触碰；README 事实陈述与 PRD/SOLUTION 对照无冲突；审核发现的契约漏记（/advisor cancel 子命令）按纪律登记 TODO 缺陷线索，待东家确认后走 map 修正，不在本 task 内擅改。
+- commit: 571f9db
+- review:
+  - 审核方: code-review skill 双轴独立子代理（Standards 轴 bff498e0 / Spec 轴 5625aa4b，各自独立上下文）
+  - 目的理解: 本 task 的目的是在不动运行时的前提下补齐对外发布面（双语 README、市场契约截图、发布通道与元数据），审核约束为 lib/ 零改动、README 事实与 PRD/SOLUTION 一致、截图产自无真实项目信息的隔离环境、发布工件满足 dsh-market 收录契约。
+  - 执行方式: code-review skill；基线 dfa058f...HEAD（v0.2.0 发布点至修复后 HEAD），Standards 轴对照 CONVENTIONS/AGENTS 写作规范 + Fowler 味道基线，Spec 轴对照本 task 收敛方案/测试计划逐项核查。
+  - 问题与修复: Standards 轴 3 硬伤（keep 双注册与不可达 cleanup、两处 node:fs/promises 动态导入、themeInfo/usage/bootShotEnv 死代码）+ 注释失真 + .npmrc 无理由 → 全部修复（571f9db）；judgement 项（页内脚本重复、TODO 行长、风险等级、workflow 门禁子集）维持并记录取舍。Spec 轴 4 缺口（advisor 命中断言强度、status 吞错、dsh-market 超前声明、.npmrc 理由）+ 可疑项（手动咨询断言假阳、零宿主补丁措辞）→ 断言改锚定命令回执并做决定性实验（瞬态文案不入持久化、mock 零命中坐实环境异常）、README 如实化、.npmrc 补理由；契约漏记按纪律挂起待东家。
+  - 复审结论: 两轴复审均通过——Standards 轴 5 消解/4 维持/0 仍有问题；Spec 轴 7 消解/4 维持/0 仍有问题。残余（不阻断）：keep 模式信号处理不再关闭 browser/context 可能遗留孤儿 chromium（一次性调试脚本可接受）；npm 首发暂缓致 npm badges 暂态 404；package.json files 不含 assets/ 与 README.zh-CN.md，npm 包页 README 相对链接将 404（与隔壁 dsh-activity-pane 同口径，发布 npm 时可改绝对链接或纳入 files）；收录 PR 提交与合并状态待 GitHub 授权后核验。
