@@ -8,6 +8,8 @@ owner: 双方
 
 ## 条目
 
+- [缺陷线索] 隔离演示环境中 /advisor-manual 悬置：startManual 后 60s 无顾问 LLM 请求、子会话未发布（工具咨询同环境正常；parent=invocation?.agent 与工具路径的 agent 形态差异是头号嫌疑；宿主 advisor 日志零痕迹，2026-10-10 截图环境实测；live 环境日常使用正常，是否环境特异待甄别）
+
 - [维护想法] 联调深项持续观察（T-005 清单遗留）：条件子上下文热重启边界、双缝执行标识共享性、setSource/onChange 宿主时序、tools 升级必选裁决——日常使用异常时按 T-005 清单排查
 
 - [维护想法] render.js 新旧 CSS 类名并存（advisorflow_* 新体系 + advisor-flow-gate/notice 旧语义钩子）——旧类无消费方后清理

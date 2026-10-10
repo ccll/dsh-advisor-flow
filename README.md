@@ -1,54 +1,107 @@
 # dsh-advisor-flow
 
-DeepSeek Harness（DSH）插件：把 [pi-advisor-flow](https://github.com/philipbrembeck/pi-advisor) 的执行者/顾问工作流移植到 DSH。日常任务由执行者用日常模型完成；关键决策、反复失败与收尾时刻由更强大的顾问模型提供第二意见。顾问只给意见、不接管工作（advisory only），会话主对成本、隐私与阻断行为拥有完全的配置与可见性。
+[![npm version](https://img.shields.io/npm/v/dsh-advisor-flow)](https://www.npmjs.com/package/dsh-advisor-flow)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-advisor-flow)](https://www.npmjs.com/package/dsh-advisor-flow)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-可观察行为对齐 pi-advisor-flow 0.8.2（分歧行逐项记录于 `RATIONALE.md`）。
+English | [简体中文](README.zh-CN.md)
 
-## 核心能力
+A DeepSeek Harness (DSH) plugin that ports the [pi-advisor-flow](https://github.com/philipbrembeck/pi-advisor) executor/advisor workflow to DSH. Everyday work runs on the everyday model; at key decisions, after repeated failures and before a turn closes, a stronger advisor model provides a second opinion. The advisor only advises — it never takes over the work (no tools, no file edits), and the session owner keeps full configurability and visibility over cost, privacy and blocking behavior.
 
-- **按需咨询**：执行者经 `ask_advisor` 工具主动请求第二意见（可带问题、草稿、仓库上下文档位与文件移交清单）；意见带 `adviceId` 可回查。
-- **手动咨询**：会话主随时用 `/advisor-manual [聚焦词]` 发起咨询，进行中可取消（`/advisor cancel`）。
-- **循环硬门**：同一工具以等价签名连续重复达到阈值（默认 3）时，宿主在该次调用执行前拦截并发起顾问评审；顾问以三值决策裁定 `proceed | revise | blocked`，阻断模式可选 `warn-and-continue | block-tool | block-session`。
-- **执行者守则**：计划前 / 失败后 / 完成前三类咨询守则以 systemPrompt 守则注入（软约束，默认开启，文本与 pi 0.8.2 英文原文逐字一致）。
-- **意见采纳回写**：`advisor_record_outcome` 工具支持自愿回写采纳与验证结果（单行 JSON + HMAC 哈希，默认关闭）。
-- **用量核算与状态**：每次与累计的输入/输出/缓存 token 与成本明细，按需/手动/门触发分类计数；`/advisor status` 展示模型路由、门控状态与门决策统计。
-- **隐私分级**：仓库上下文 `关闭 | 摘要 | 完整` 三档、文件内容默认不外发（独立授权后按归属校验外发）、六类密钥形状脱敏且先脱敏后截断。
-- **非阻断保障**：advisor 与门控的任何失败不停摆主 agent 循环。
+Observable behavior is aligned with pi-advisor-flow 0.8.2 (divergences are listed item by item in `RATIONALE.md`).
 
-## 安装
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-consultation-dark.png">
+    <img src="assets/screenshot-consultation-light.png" width="1000" alt="A DSH session in an isolated demo environment: the executor calls ask_advisor for a second opinion on a retry-strategy draft, the advisor consultation appears as a labeled sub-session entry, and the advice comes back to the executor with an adviceId">
+  </picture>
+</p>
+<p align="center"><sub>The same clean isolated environment: the <a href="assets/screenshot-settings-light.png">web settings card</a> (also in <a href="assets/screenshot-settings-dark.png">dark</a>, with the <a href="assets/screenshot-settings-privacy-light.png">guideline gates &amp; privacy tiers</a> in <a href="assets/screenshot-settings-privacy-dark.png">dark</a>) and the <a href="assets/screenshot-status-light.png">/advisor status</a> readout with per-call usage, gate decision stats and remaining budget.</sub></p>
 
-```
+## How it works
+
+- **On-demand consultation**: the executor calls the `ask_advisor` tool whenever it wants a second opinion — with no arguments for a general review, or with a question, a draft, a repo-context tier (it can only narrow the owner's allowed tier) and a hand-picked file list. Every answer carries an `adviceId` for later reference.
+- **Manual consultation**: the session owner can trigger a consultation at any time with `/advisor-manual [focus]`, and cancel one in flight with `/advisor cancel`.
+- **Hard loop gate**: when the same tool call with an equivalent signature repeats up to the threshold (default 3), the host intercepts the call *before* it executes and asks the advisor to review; the advisor answers with a three-value decision — `proceed | revise | blocked` — and `blocked` is handled according to the configured blocking mode (`warn-and-continue | block-tool | block-session`).
+- **Executor guidelines**: before-plan / after-failure / before-completion guidelines are injected into the system prompt as soft constraints (on by default; the text matches the pi 0.8.2 English original verbatim).
+- **Hard completion review (default mode)**: in the default *hard* intervention mode, every executor turn is reviewed by the advisor before it closes; a `revise` or `blocked` verdict sends the full advice back to the executor to keep working. In *soft* mode the plugin behaves exactly like pi-advisor-flow: guidelines only.
+- **Outcome recording**: the `record_advisor_outcome` tool lets the executor voluntarily record whether an advice was followed and validated (one-shot JSONL entries, advice text stored as an HMAC hash; off by default).
+- **Usage ledger and status**: per-call and cumulative input/output/cache tokens with cost details, categorized by trigger (on-demand / manual / gate); `/advisor status` shows the model routing, gate state and gate decision statistics.
+- **Privacy tiers**: repo context `off | summary | full`, file contents never leave the machine without an independent opt-in (ownership-checked), and secret-shaped values are replaced with placeholders before anything is sent — redaction runs *before* truncation.
+- **Non-blocking guarantee**: any advisor or gate failure never stalls the main agent loop.
+
+## Install
+
+```sh
 dsh plugin --profile web add dsh-advisor-flow
 ```
 
-> npm 包暂未发布：当前请从本仓库获取源码，待 npm 发布后上述命令即可用。
+The npm package ships prebuilt, so no local build step is needed. If the settings card does not appear after installing, restart `dsh web` once. The plugin is also listed in [dsh-market](https://github.com/dsh-market/dsh-market#readme) (`dsh plugin --profile web add dshmarket`), where it can be installed and updated with one click.
 
-零宿主补丁、零 postinstall；对 DSH 插件接缝的版本假设见 `package.json` 的 `dsh.compat`。
+No npm? Install straight from this repository:
 
-## 配置
-
-配置位于 `settings.yaml` 的 `advisor-flow` 命名空间，也可在 web 设置卡编辑，变更即时生效、无需重启。要点：
-
-- 启用前提：`advisor-flow.enabled: true` 且 `advisor.provider` / `advisor.model` 配齐；配置不齐时功能整体禁用且原因可查询（`/advisor status`）。
-- `advisor.callTimeoutMs`：单次咨询整体超时，默认 600000ms（10 分钟）。
-- `advisor.maxTokens`：单次咨询输出上限，缺省跟随宿主对所选模型的配置。
-- 循环门阈值默认 3（下界 2）；三类守则与循环门默认开启；脱敏默认关闭（可在设置卡开启，建议开启后咨询素材中的密钥形状值以占位符外发）。
-- 完整键位以 `lib/config.js`（命名空间契约的 SSOT）与 `SOLUTION.md#产品契约` 为准。
-
-## 命令
-
-- `/advisor-manual [聚焦词]` — 立即发起一次手动咨询；进行中可 `/advisor cancel`。
-- `/advisor [on|off|toggle|status|gates|cancel]` — 会话级开关与状态查询。
-
-## 开发
-
-```bash
-npm test                # 单元测试（node --test）
-npm run build:client    # 重建 web 设置卡 client 产物
+```sh
+dsh plugin --profile web add github:ccll/dsh-advisor-flow
 ```
 
-提交与验证门禁（AgentMap 活文档 + `.githooks/`）见 `CONVENTIONS.md`。
+Zero host patches, zero postinstall scripts. Version assumptions about DSH's plugin seams are declared in `package.json` under `dsh.compat`.
 
-## 许可
+## Requirements
 
-[MIT](LICENSE)
+- DSH web, tested against `@deepseek-ai/dsh@0.1.5-rc.1` (see `dsh.compat` in `package.json`).
+- An advisor model reachable through DSH's own model routing — pick any provider/model already configured in DSH; the plugin reuses the host LLM service and never talks to providers directly.
+
+## Configuration
+
+Configuration lives in the `advisor-flow` namespace of `settings.yaml` and can also be edited in the web settings card. Changes apply live, no restart needed. Highlights:
+
+- Enable prerequisites: `advisor-flow.enabled: true` plus `advisor.provider` / `advisor.model`; with an incomplete configuration the whole feature stays disabled and the reason is queryable via `/advisor status`.
+- `mode` — intervention strength: `hard` (default; forces a completion review before every turn closes) or `soft` (guidelines only, pi behavior).
+- `advisor.callTimeoutMs` — overall timeout for one consultation, default 600000 ms (10 minutes).
+- `advisor.maxTokens` — output cap for one consultation; by default it follows the host's configured cap for the selected model.
+- Loop-gate threshold defaults to 3 (minimum 2); the three guidelines and the loop gate are on by default; secret redaction is off by default (enable it in the settings card — recommended, secret-shaped values are then sent as placeholders).
+- `privacy.repoContext` (`off | summary | full`, default `summary`), `privacy.fileContent` / `privacy.untrackedContent` / `privacy.trackedFileContent` (default `false`), per-tool disclosure policies via `toolPolicies`.
+- For the full key list, `lib/config.js` is the source of truth for the namespace contract, and `SOLUTION.md#产品契约` documents every key with its default.
+
+```yaml
+advisor-flow:
+  enabled: true
+  advisor:
+    provider: deepseek-official
+    model: deepseek-reasoner
+  mode: hard
+  gates:
+    plan: { enabled: true }
+    failure: { enabled: true }
+    loop: { enabled: true, threshold: 3 }
+    completion: { enabled: true }
+  failureMode: block-tool
+  privacy:
+    repoContext: summary
+    redactSecrets: true
+```
+
+## Commands
+
+- `/advisor-manual [focus]` — start a manual consultation immediately; cancel one in flight with `/advisor cancel`.
+- `/advisor [on|off|toggle|status|gates|cancel]` — session-level switch and status queries; bare `/advisor` toggles.
+
+## Development
+
+```sh
+npm test                # unit tests (node --test)
+npm run build:client    # rebuild the web settings-card client bundle
+node scripts/screenshot.mjs shots   # regenerate README screenshots in an isolated demo environment
+```
+
+Commit and verification gates (AgentMap living docs + `.githooks/`) are described in `CONVENTIONS.md`.
+
+## Acknowledgments & Disclaimers
+
+- This project ports the executor/advisor workflow of the MIT-licensed [`pi-advisor-flow`](https://github.com/philipbrembeck/pi-advisor) (version 0.8.2) to DeepSeek Harness; the guideline and protocol texts are kept verbatim where the host allows it. Thanks to the original author for the design.
+- Advisor reviews are model output, not ground truth: treat them as a second opinion, not as a verification oracle.
+- 99.99% of this project's code and documentation was written and reviewed by AI, so bugs and doc/code drift are quite likely. If you run into any problems, please open an issue.
+
+## License
+
+MIT — see [LICENSE](LICENSE) for the full text.
