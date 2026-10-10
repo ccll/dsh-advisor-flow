@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisor-flow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "dsh plugin bundle porting pi-advisor-flow: an on-demand executor/advisor workflow with consultation tool, review gates, usage ledger, privacy tiers and secret redaction.",
   "keywords": [
