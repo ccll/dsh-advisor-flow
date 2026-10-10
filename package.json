@@ -86,6 +86,6 @@
     "@deepseek-ai/dsh-typert-protocol": "^0.1.5-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4",
     "esbuild": "^0.28.2",
-    "playwright": "^1.62.1"
+    "playwright": "1.62.1"
   }
 }

@@ -312,7 +312,7 @@ export async function bootShotEnv() {
 
     try {
         await execFileAsync('dsh', ['plugin', '--profile', 'web', 'add', repoRoot], { env });
-        web = spawn('dsh', ['web', '--port', '0'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        web = spawn('dsh', ['web', '--port', '0', '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
         web.stderr.on('data', (data) => {
             webStderr.push(String(data));
             if (webStderr.length > 200) webStderr.shift();
