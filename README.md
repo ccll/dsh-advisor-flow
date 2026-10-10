@@ -38,7 +38,7 @@ dsh plugin --profile web add dsh-advisor-flow
 
 The npm package ships prebuilt, so no local build step is needed. If the settings card does not appear after installing, restart `dsh web` once. The plugin is also listed in [dsh-market](https://github.com/dsh-market/dsh-market#readme) (`dsh plugin --profile web add dshmarket`), where it can be installed and updated with one click.
 
-No npm? Install straight from this repository:
+npm publication is in progress — until it lands, install straight from this repository:
 
 ```sh
 dsh plugin --profile web add github:ccll/dsh-advisor-flow

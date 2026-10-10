@@ -38,7 +38,7 @@ dsh plugin --profile web add dsh-advisor-flow
 
 npm 包为预构建产物，无需本地构建。安装后若设置卡未出现，重启一次 `dsh web` 即可。本插件已收录于 [dsh-market](https://github.com/dsh-market/dsh-market#readme)（`dsh plugin --profile web add dshmarket`），可在市场内一键安装与更新。
 
-没有 npm 环境时也可直接从本仓库安装：
+npm 发布进行中——落地前可直接从本仓库安装：
 
 ```sh
 dsh plugin --profile web add github:ccll/dsh-advisor-flow
