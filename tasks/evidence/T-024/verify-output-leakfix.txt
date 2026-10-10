@@ -1,0 +1,15 @@
+PASS 卡片存在且可展开
+PASS 存在可滚动容器 — {"found":true,"scrollTop":0,"scrollHeight":2095,"clientHeight":746}
+PASS 展开态顶部保存按钮可见 — {"x":942.984375,"y":814.5,"width":56.015625,"height":31.5}
+PASS 表单中部滚动后保存按钮仍在视口内（sticky 生效） — scrollTop=674 rect={"x":942.984375,"y":814.5,"width":56.015625,"height":31.5}
+PASS footer 底缘之下条带无表单内容泄漏 — {"footerBottom":850,"winH":900,"hits":[{"y":853,"hit":"VOzbGW_mask"},{"y":858,"hit":"VOzbGW_mask"},{"y":863,"hit":"VOzbGW_mask"},{"y":868,"hit":"VOzbGW_mask"}]}
+PASS 滚回顶部后保存按钮可见 — {"x":942.984375,"y":814.5,"width":56.015625,"height":31.5}
+PASS 初始无未保存徽标
+PASS 编辑后头部出现未保存徽标
+PASS 折叠态未保存徽标保留
+PASS 放弃修改后徽标消失
+PASS 再编辑后徽标重现
+PASS 保存成功后徽标消失
+PASS 保存回执可见
+PASS 未超高时 footer 维持自然原位（未被钉到视口底缘） — {"x":942.984375,"y":1564.5,"width":56.015625,"height":31.5}
+ALL PASS

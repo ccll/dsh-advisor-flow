@@ -1,6 +1,6 @@
 const { chromium } = require('/home/cailei/.npm-global/lib/node_modules/agent-browser/node_modules/playwright-core');
 
-const BASE = 'http://127.0.0.1:3460/?token=xZbsKDhPWmo-E8AW7wZuadWqPXQu4ri4KBi90V7hlZw';
+const BASE = 'http://127.0.0.1:3460/?token=Kmbw0YUifiida_6Izh7un47r4AeZE_YITEvehB0MB2c';
 const OUT = '/tmp/af-sticky';
 
 function rectVisible(rect, viewportH) {
@@ -73,6 +73,21 @@ function rectVisible(rect, viewportH) {
     rect = await saveBtn.boundingBox();
     check('表单中部滚动后保存按钮仍在视口内（sticky 生效）', scrolledTo >= 0 && rect && rect.y + rect.height <= vp.height + 1 && rect.y >= -1,
         `scrollTop=${scrolledTo} rect=${JSON.stringify(rect)}`);
+    // 泄漏检查（T-024 目验缺陷回归）：footer 底缘之下的条带不得露出表单内容——
+    // 钉位线经宿主滚动容器 padding-bottom 补偿后，条带内 elementFromPoint 应命中 footer 自身
+    const leak = await page.evaluate(() => {
+        const footer = document.querySelector('.advisorflow_footer');
+        const r = footer.getBoundingClientRect();
+        const hits = [];
+        for (let dy = 3; dy <= 18; dy += 5) {
+            const y = Math.min(r.bottom + dy, window.innerHeight - 2);
+            const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), y);
+            hits.push({ y: Math.round(y), hit: hit ? hit.className?.toString().slice(0, 40) || hit.tagName : 'none' });
+        }
+        return { footerBottom: Math.round(r.bottom), winH: window.innerHeight, hits };
+    });
+    const leakedField = leak.hits.find((sample) => /advisorflow_(field|fieldset|toggleRow|form|hint)/.test(sample.hit));
+    check('footer 底缘之下条带无表单内容泄漏', !leakedField, JSON.stringify(leak));
 
     // 滚回顶部再验证一次
     await page.evaluate(() => {
