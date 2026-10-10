@@ -466,7 +466,9 @@ flowchart TD
   - 决策处置矩阵：proceed → steer 送达门结果 + 重置计数 + 放行；revise → steer 送达 + deny(意见全文)；blocked → 按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁；blockOnBlocked 控制 stopSession）。
   - 门命中先发预通告（`Automatic Advisor loop review`）再咨询；门问句不携带当次参数；咨询失败按阻断模式处置；决策行解析含对抗性检查。
   - 门组件异常 fail-open（放行 + 记录）。
-  - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；评审对象是执行者回合与执行类子会话收口——顾问子会话豁免（T-022，命中呈现登记即跳过并留痕）与审核类子会话豁免（T-023，子会话自证且关键词命中即跳过并留痕，判定失败 fail-open）；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
+  - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；评审对象是执行者回合与执行类子会话收口；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
+    - 顾问子会话豁免（T-022）：命中呈现登记即跳过并留痕。
+    - 审核类子会话豁免（T-023）：子会话自证且关键词命中即跳过并留痕；判定失败 fail-open。
 - 代码位置: lib/gates/index.js；lib/turn-review.js
 - 实现: 单端（宿主）
 

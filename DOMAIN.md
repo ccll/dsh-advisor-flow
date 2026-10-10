@@ -48,6 +48,8 @@ owner: 双方
 - **子会话自证（Subsession Self-Identification）**: 以会话自身日志 header 的 `origin` 字段判定子会话身份。
   - `origin` 为 `subagent` 即子会话。
   - fork 会话无该字段，不判为子会话。
+- **执行类子会话（Worker Subsession）**: 承担实质执行工作的子会话，其回合收口属于收口评审对象。
+- **审核类子会话（Reviewer Subsession）**: 承担审核职能的子会话，审核者本身是质量闸门。
 - **豁免模式清单（Exempt Pattern List）**: 收口评审豁免的关键词配置清单。
   - 命中对象为子会话的创建标签与首条提示词。
   - 清单为空时豁免关闭。

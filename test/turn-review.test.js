@@ -288,6 +288,7 @@ test('T-023 豁免判定 fail-open：读取抛错/缝缺失/空流一律照常�
     const throwing = makeReview({ config: exemptConfig(), getEvents: async () => { throw new Error('seam down'); } });
     await throwing.review.handleTurnStopping(payload('turn-1'));
     assert.equal(throwing.consultCalls.length, 1);
+    assert.ok(throwing.logs.info.some((row) => row.message.includes('exempt check failed'))); // 判定失败留痕（丢弃可见性同口径）
     const noSeam = makeReview({ config: exemptConfig() }); // getEvents 未注入
     await noSeam.review.handleTurnStopping(payload('turn-1'));
     assert.equal(noSeam.consultCalls.length, 1);

@@ -113,6 +113,11 @@ id: T-023
 - 素材缺口（TODO.md:24 登记）不阻塞本 task。
   - 该缺口影响全部收口评审的有效性，另行裁决。
 - 语义边界观察已登记 TODO：实质执行移入 continuable 子会话时 DOMAIN 词条须重审。
+- 复审登记（2026-10-10 Standards 轴复审）：豁免判定夹具在两个测试文件各建一份，事件形状相同。
+  - 位置：test/turn-review.test.js 的 subsessionLog 与 test/index.test.js 的 reviewSubsessionLog。
+  - 处置：判断项不阻断收口，合并提取留待后续维护，不顺手重构。
+- 复审登记（2026-10-10 Standards 轴复审）：C-023 上下文长句维持原文不改写。
+  - 理由：风格检查显式豁免 RATIONALE 散文段（STYLE_PROSE_EXEMPT_FILES），拆句无 lint 收益，避免触碰 append-only 历史。
 
 ## 终态与证据
 
