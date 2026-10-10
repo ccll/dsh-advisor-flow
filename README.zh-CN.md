@@ -36,7 +36,7 @@ DeepSeek Harness（DSH）插件：把 [pi-advisor-flow](https://github.com/phili
 dsh plugin --profile web add dsh-advisor-flow
 ```
 
-npm 包为预构建产物，无需本地构建。安装后若设置卡未出现，重启一次 `dsh web` 即可。本插件已收录于 [dsh-market](https://github.com/dsh-market/dsh-market#readme)（`dsh plugin --profile web add dshmarket`），可在市场内一键安装与更新。
+npm 包为预构建产物，无需本地构建。安装后若设置卡未出现，重启一次 `dsh web` 即可。dsh-market（`dsh plugin --profile web add dshmarket`）收录正在进行——经 curated 的 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin) 索引提交，合并后即可在市场内一键安装与更新。
 
 npm 发布进行中——落地前可直接从本仓库安装：
 
@@ -44,7 +44,7 @@ npm 发布进行中——落地前可直接从本仓库安装：
 dsh plugin --profile web add github:ccll/dsh-advisor-flow
 ```
 
-零宿主补丁、零 postinstall 脚本；对 DSH 插件接缝的版本假设见 `package.json` 的 `dsh.compat`。
+零宿主源码补丁、零 postinstall 脚本——插件集成完全经由标准 `dsh.bundle` manifest 声明（`cordis.patch.yml` 声明的是插件自身的插入点，不是对 DSH 的修改）；对 DSH 插件接缝的版本假设见 `package.json` 的 `dsh.compat`。
 
 ## 环境要求
 

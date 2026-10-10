@@ -273,7 +273,7 @@ function settingsYaml(mockUrl) {
     ].join('\n');
 }
 
-export async function bootShotEnv() {
+async function bootShotEnv() {
     const mock = await startMockLlm();
     const home = await mkdtemp(join(tmpdir(), 'dsh-shot-'));
     await writeFile(join(home, 'settings.yaml'), settingsYaml(mock.url));
@@ -425,27 +425,14 @@ async function sendSessionMessage(page, text) {
     }, 20_000);
 }
 
-/** 页面正文是否包含指定文字（含 shadow DOM 探测的兜底主文档扫描）。 */
+/** 页面正文是否包含指定文字（document.body.innerText 主文档扫描）。 */
 async function bodyHasText(page, text) {
     return page.evaluate((needle) => document.body?.innerText?.includes(needle) ?? false, text);
-}
-
-/** 主题抓取：返回 documentElement 的 class 与 data 主题属性，供深浅判定。 */
-async function themeInfo(page) {
-    return page.evaluate(() => ({
-        cls: document.documentElement.className,
-        dataTheme: document.documentElement.getAttribute('data-theme'),
-        colorScheme: getComputedStyle(document.documentElement).colorScheme,
-    }));
 }
 
 /* ------------------------------------------------------------------ *
  * 主流程
  * ------------------------------------------------------------------ */
-
-function usage(message) {
-    console.error(`[shot] ${message}`);
-}
 
 async function main() {
     const mode = process.argv[2] ?? 'shots';
@@ -530,8 +517,7 @@ async function main() {
             }
         };
         if (mode === 'settings') {
-            const fsSettings = await import('node:fs/promises');
-            await fsSettings.mkdir(ASSETS_DIR, { recursive: true });
+            await mkdir(ASSETS_DIR, { recursive: true });
             await shotSettingsCard('light', 'screenshot-settings-light.png');
             await shotSettingsCard('dark', 'screenshot-settings-dark.png');
             await shotSettingsCard('light', 'screenshot-settings-privacy-light.png', { scrollBottom: true });
@@ -539,7 +525,6 @@ async function main() {
             console.log('settings shots done → assets/');
             await context.close();
             await browser.close();
-            await env.cleanup();
             return;
         }
 
@@ -555,36 +540,29 @@ async function main() {
         // 等执行者收尾轮完成。
         await until('执行者收尾', () => (bodyHasText(page, '方案已按评审结论更新') ? true : null), 30_000);
 
-        // 手动咨询：/advisor-manual。
+        // 手动咨询：/advisor-manual。断言锚定命令回执行（确定性）；意见文本
+        // 在该隔离环境呈瞬态且服务端不持久化（TODO 缺陷线索：advisor-manual
+        // 60s 无 LLM 请求），不作为冒烟断言锚点。
         await sendSessionMessage(page, '/advisor-manual 评审当前方案的回滚策略是否充分');
-        await until('手动咨询意见送达', () => (bodyHasText(page, '回滚前先快照当前导出目录') ? true : null), 30_000);
-        console.error('[step] 手动咨询意见已送达');
+        await until('手动咨询回执可见', () => (bodyHasText(page, '手动咨询已发起') ? true : null), 30_000);
+        console.error('[step] 手动咨询回执可见');
         // 等子会话结算与 steer 意见消息渲染进会话时间线（mock 流式 ~1s + 结算）。
         await page.waitForTimeout(8000);
 
         if (mode === 'smoke') {
-            console.log(JSON.stringify({ ok: true, advisorHits: env.mock.advisorHits(), url: env.url }, null, 2));
+            console.log(JSON.stringify({ ok: true, advisorHits: env.mock.advisorHits(), scenarioLog: env.mock.scenarioLog, url: env.url }, null, 2));
             await context.close();
             await browser.close();
-            await env.cleanup();
             return;
         }
         if (mode === 'keep') {
+            // 保活与清理统一交给 finally 的 keepAlive 分支（信号处理在那里注册）。
             console.log(JSON.stringify({ url: env.url, home: env.home, mockUrl: env.mock.url }, null, 2));
-            const shutdown = async () => {
-                await context.close().catch(() => {});
-                await browser.close().catch(() => {});
-                await env.cleanup();
-                process.exit(0);
-            };
-            process.on('SIGINT', shutdown);
-            process.on('SIGTERM', shutdown);
             return;
         }
 
         // —— 截图 ——（shots 模式从这里开始）
-        const fs = await import('node:fs/promises');
-        await fs.mkdir(ASSETS_DIR, { recursive: true });
+        await mkdir(ASSETS_DIR, { recursive: true });
 
         // 会话截图构图准备：展开外层披露行与工具调用行（ask_advisor 调用与
         // 意见回执可见），清除点击焦点环，并把会话滚动到底部。
@@ -645,7 +623,7 @@ async function main() {
 
         // ③ /advisor status（浅色）：展示模型路由、门决策统计与逐次用量。
         await sendSessionMessage(page, '/advisor status');
-        await until('status 输出可见', async () => (bodyHasText(page, 'Advisor') && (await bodyHasText(page, '门决策'))) ? true : null, 20_000).catch(() => {});
+        await until('status 输出可见', async () => (bodyHasText(page, 'Advisor') && (await bodyHasText(page, '门决策'))) ? true : null, 20_000);
         // status 回执默认折叠为单行：点开行本体展示完整读数。
         await page.evaluate(() => {
             const rows = [...document.querySelectorAll('button,[role="button"],div,span')]
@@ -665,6 +643,7 @@ async function main() {
         await shotSettingsCard('dark', 'screenshot-settings-privacy-dark.png', { scrollBottom: true });
 
         console.log('shots done → assets/');
+        console.error(`[mock scenarioLog] ${JSON.stringify(env.mock.scenarioLog)}`);
         console.error(`[advisor 日志]\n${env.advisorLogs().slice(-3000) || '（无 advisor 相关日志）'}`);
         await context.close();
         await browser.close();

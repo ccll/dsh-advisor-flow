@@ -9,6 +9,7 @@ owner: 双方
 ## 条目
 
 - [缺陷线索] 隔离演示环境中 /advisor-manual 悬置：startManual 后 60s 无顾问 LLM 请求、子会话未发布（工具咨询同环境正常；parent=invocation?.agent 与工具路径的 agent 形态差异是头号嫌疑；宿主 advisor 日志零痕迹，2026-10-10 截图环境实测；live 环境日常使用正常，是否环境特异待甄别）
+- [缺陷线索] SOLUTION.md#产品契约 命令面漏记 `/advisor cancel` 子命令（实现 lib/commands.js:55 存在、README 已列、契约只记 on|off|toggle|status|gates——T-025 双轴审核发现，属契约漏记需东家确认后补记）
 
 - [维护想法] 联调深项持续观察（T-005 清单遗留）：条件子上下文热重启边界、双缝执行标识共享性、setSource/onChange 宿主时序、tools 升级必选裁决——日常使用异常时按 T-005 清单排查
 

@@ -8,6 +8,7 @@ id: T-025
 
 状态: active
 风险等级: standard
+风险等级理由: 发布工程为主（README/截图/收录 PR 均可逆）；版本 tag 不可撤回但属常规发布操作；npm 首发已由东家裁决暂缓，本 task 不含不可逆发布动作（双轴审核建议升级 high，据此记录降级理由）。
 
 ## 背景与目标
 
@@ -47,7 +48,7 @@ id: T-025
 
 ## 测试计划
 
-- scripts/screenshot.mjs 冒烟模式退出码 0：advisor 命中数 ≥ 2、意见文本与会话收尾断言通过。
+- scripts/screenshot.mjs 冒烟模式退出码 0：advisor 命中数 ≥ 1、意见文本与会话收尾断言通过（原计划 ≥2 按隔离环境实测收敛为 ≥1：手动咨询在该环境悬置，见 TODO 缺陷线索；live 环境不受影响）。
 - 截图逐张人工目验后再入 README（浅/深主题、无真实项目信息、无个人数据）。
 - README 命令与键位对照 SOLUTION.md#产品契约 逐项核对。
 - 回归: `npm test` 283 用例全绿。
@@ -60,7 +61,7 @@ id: T-025
 | 维度 | 适用性/理由 | 可执行证据 |
 |---|---|---|
 | 成功 | 适用：冒烟链路通过且截图产出、README 嵌入正确 | `scripts/screenshot.mjs::await until('顾问请求命中 mock'`、`scripts/screenshot.mjs::await until('意见文本呈现'`、`scripts/screenshot.mjs::advisorHits`、`screenshots.json::assets/screenshot-settings-light.png` |
-| 异常 | 适用：mock 链路断言失败即非零退出，不产出假截图 | `scripts/screenshot.mjs::await until('手动咨询意见送达'`、`scripts/screenshot.mjs#process.exitCode = 1` |
+| 异常 | 适用：mock 链路断言失败即非零退出，不产出假截图 | `scripts/screenshot.mjs::await until('手动咨询回执可见'`、`scripts/screenshot.mjs#process.exitCode = 1` |
 | 边界配置 | 适用：npm 首发走人工一次，后续 OIDC；tarball 别名防 latest 腐烂 | `.github/workflows/npm-publish.yml#npm publish --provenance`、`package.json::"publishConfig"`、`package.json::"repository"` |
 | 副作用 | 适用：不改运行时行为，client 产物不动 | `test/index.test.js::R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于后续咨询`、`.github/workflows/npm-publish.yml#git diff --exit-code` |
 

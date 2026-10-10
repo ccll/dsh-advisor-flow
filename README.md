@@ -36,7 +36,7 @@ Observable behavior is aligned with pi-advisor-flow 0.8.2 (divergences are liste
 dsh plugin --profile web add dsh-advisor-flow
 ```
 
-The npm package ships prebuilt, so no local build step is needed. If the settings card does not appear after installing, restart `dsh web` once. The plugin is also listed in [dsh-market](https://github.com/dsh-market/dsh-market#readme) (`dsh plugin --profile web add dshmarket`), where it can be installed and updated with one click.
+The npm package ships prebuilt, so no local build step is needed. If the settings card does not appear after installing, restart `dsh web` once. A listing on [dsh-market](https://github.com/dsh-market/dsh-market#readme) (`dsh plugin --profile web add dshmarket`), the plugin market inside DSH, is in progress via the curated [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin) index.
 
 npm publication is in progress — until it lands, install straight from this repository:
 
@@ -44,7 +44,7 @@ npm publication is in progress — until it lands, install straight from this re
 dsh plugin --profile web add github:ccll/dsh-advisor-flow
 ```
 
-Zero host patches, zero postinstall scripts. Version assumptions about DSH's plugin seams are declared in `package.json` under `dsh.compat`.
+No host source patches and no postinstall scripts — plugin integration is declared entirely through the standard `dsh.bundle` manifest (`cordis.patch.yml` declares the plugin's own insertion, not a modification of DSH). Version assumptions about DSH's plugin seams are declared in `package.json` under `dsh.compat`.
 
 ## Requirements
 
