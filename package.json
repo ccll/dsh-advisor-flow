@@ -2,11 +2,23 @@
   "name": "dsh-advisor-flow",
   "version": "0.2.0",
   "type": "module",
-  "description": "dsh plugin bundle porting pi-advisor-flow: an on-demand executor/advisor workflow with consultation tool, review gates, usage ledger, privacy tiers and secret redaction.",
+  "description": "DeepSeek Harness plugin porting pi-advisor-flow: an on-demand executor/advisor workflow with consultation tool, review gates, usage ledger, privacy tiers and secret redaction.",
   "keywords": [
     "dsh",
-    "dsh-plugin"
+    "dsh-plugin",
+    "deepseek-harness",
+    "advisor",
+    "second-opinion",
+    "review-gates",
+    "consultation"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ccll/dsh-advisor-flow.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -68,5 +80,12 @@
   "engines": {
     "node": "^22.19 || >=24"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.5-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.62.1"
+  }
 }

@@ -1,0 +1,94 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to publish, for example v0.2.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Check release tag
+        shell: bash
+        run: |
+          node -e '
+            const tag = process.env.RELEASE_TAG;
+            if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+              console.error(`unsupported release tag: ${tag}`);
+              process.exit(1);
+            }
+          '
+
+      - name: Verify published GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          published_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq 'select(.draft == false and .published_at != null) | .tag_name')"
+          if [ "$published_tag" != "$RELEASE_TAG" ]; then
+            echo "release $RELEASE_TAG is not published"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify toolchain
+        run: |
+          node --version
+          npm --version
+
+      - name: Check package version
+        shell: bash
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="$(node --input-type=commonjs -e "process.stdout.write(require('./package.json').version)")"
+          if [ "$actual" != "$expected" ]; then
+            echo "package.json version $actual does not match release tag $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release checks
+        run: |
+          npm test
+          python3 tools/agentmap_lint.py --report
+          npm run build:client
+
+      # The client bundle freshness guard: the rebuilt artifact must equal the committed one.
+      - name: Ensure checks did not rewrite the release tree
+        run: git diff --exit-code
+
+      # npm Trusted Publishing uses the workflow OIDC identity; no NPM_TOKEN is needed.
+      # First publish of a brand-new package cannot use OIDC (the package must exist
+      # before the Trusted Publisher can be configured on npmjs.com): publish 0.2.1
+      # once manually, then all later releases go through this workflow.
+      - name: Publish package
+        run: npm publish --provenance
