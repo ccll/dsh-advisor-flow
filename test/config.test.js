@@ -205,7 +205,7 @@ test('R-02-001 门配置解析为结构化对象（三布尔 + 循环门阈值 +
     }
 });
 
-test('R-02-001/AC-04 默认值：failureMode=block-tool（偏离 pi 0.8.2 记 C-017）、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3', () => {
+test('R-02-001/AC-04 默认值：failureMode=block-tool（偏离 pi 0.8.2 记 C-017）、三门与循环门默认开启、脱敏默认关闭、repoContext 摘要档、阈值 3、豁免清单双语预置（C-023）', () => {
     const resolved = resolveAdvisorFlowConfig({});
     assert.equal(resolved.ok, true);
     assert.equal(resolved.config.failureMode, 'block-tool');
@@ -216,6 +216,7 @@ test('R-02-001/AC-04 默认值：failureMode=block-tool（偏离 pi 0.8.2 记 C-
     assert.equal(resolved.config.gates.loop.threshold, 3);
     assert.equal(resolved.config.privacy.redactSecrets, false);
     assert.equal(resolved.config.privacy.repoContext, 'summary');
+    assert.deepEqual(resolved.config.turnReviewExemptPatterns, DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS); // T-023：豁免清单缺省为双语预置
 });
 
 test('R-02-001/AC-05 循环门阈值下界：小于 2 的配置被拒绝', () => {
@@ -241,7 +242,7 @@ test('R-01-009/AC-02 mode 缺省 hard（开箱即获收口评审，C-022；废�
     assert.equal(result.config.mode, 'hard'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
 });
 
-test('T-023 turnReviewExemptPatterns 解析：默认双语预置、显式覆盖、空数组关闭、非法拒绝（R-02-001；C-023）', () => {
+test('R-02-001/AC-04 T-023 turnReviewExemptPatterns 解析：默认双语预置（C-023）、显式覆盖、空数组关闭、非法拒绝', () => {
     const base = { enabled: true, advisor: { provider: 'p', model: 'm' } };
     const def = resolveAdvisorFlowConfig(base);
     assert.equal(def.ok, true);

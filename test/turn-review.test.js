@@ -325,3 +325,45 @@ test('T-023 豁免清单为空时豁免关闭：零日志读取直接照常评�
     assert.equal(consultCalls.length, 1);
     assert.equal(reads, 0); // 空清单短路：不读日志
 });
+
+test('T-023 失败判定不缓存：首判读取失败照常评审，次轮成功读取后豁免（R-01-009/AC-12）', async () => {
+    // 缝缺失/读取失败形态（生产缝以 undefined 表达，不抛错）：不落缓存
+    let reads = 0;
+    const undefinedSeam = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => { reads += 1; return reads === 1 ? undefined : subsessionLog({}); },
+    });
+    await undefinedSeam.review.handleTurnStopping(payload('turn-1', 'sub-8'));
+    assert.equal(undefinedSeam.consultCalls.length, 1); // 首判失败：照常评审
+    await undefinedSeam.review.handleTurnStopping(payload('turn-2', 'sub-8'));
+    assert.equal(reads, 2); // 失败不缓存：次轮收口重判
+    assert.equal(undefinedSeam.consultCalls.length, 1); // 次轮命中豁免：不再评审
+    // 抛错形态同型：首判抛错不缓存，次轮成功读取后豁免
+    let throws = 0;
+    const throwingSeam = makeReview({
+        config: exemptConfig(),
+        getEvents: async () => {
+            throws += 1;
+            if (throws === 1) {
+                throw new Error('seam down');
+            }
+            return subsessionLog({});
+        },
+    });
+    await throwingSeam.review.handleTurnStopping(payload('turn-1', 'sub-10'));
+    assert.equal(throwingSeam.consultCalls.length, 1);
+    await throwingSeam.review.handleTurnStopping(payload('turn-2', 'sub-10'));
+    assert.equal(throws, 2);
+    assert.equal(throwingSeam.consultCalls.length, 1);
+});
+
+test('T-023 标签与提示词分离匹配：跨源拼接不构成命中（R-01-009/AC-11）', async () => {
+    // label 尾 're' + prompt 首 'view' 可在拼接 haystack 下拼出 'review'；
+    // 分离匹配下两源均不含完整清单词 → 照常评审
+    const boundary = makeReview({
+        config: exemptConfig({ turnReviewExemptPatterns: ['review'] }),
+        getEvents: async () => subsessionLog({ label: '粗 修 re', prompt: 'view the diff' }),
+    });
+    await boundary.review.handleTurnStopping(payload('turn-1', 'sub-7'));
+    assert.equal(boundary.consultCalls.length, 1);
+});

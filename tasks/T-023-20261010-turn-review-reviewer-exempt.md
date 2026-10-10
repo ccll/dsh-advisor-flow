@@ -58,9 +58,10 @@ id: T-023
     - 子会话自证：该会话日志 header `origin === 'subagent'`。
     - 关键词命中：descriptor `data.label` 或首条 `agent/inbox/spliced` 提示词文本命中豁免模式（大小写不敏感的子串匹配）。
   - fail-open：缝缺失、读取失败、解析失败一律不豁免（照常评审）。
-  - per-session 判定缓存：一次判定后复用，避免 continuable 子会话逐回合重复读取。
+  - per-session 判定缓存：一次判定后复用，避免 continuable 子会话逐回合重复读取；仅缓存成功读取的判定，失败不缓存、次轮收口重判（Spec 复审修复）。
   - 豁免命中即 skipped 留痕（计数 + 日志，与 T-022 同型）。
 - `lib/index.js`：接线注入读取缝（复用 `getSessionEvents`）与配置读点（读时求值同型）。
+- `lib/settings.js` / `lib/client/render.js`：Schema 补 `turnReviewExemptPatterns`（双清单纪律）与设置卡输入字段（逗号/换行分隔解析，空 = 豁免关闭）——兑现 R-02-001「web 设置卡可配置」承诺（Spec 复审补列）。
 - `PRD.md`（东家确认闸口，拟议）：
   - R-01-009 陈述句补「审核类子会话收口不评审」。
   - 新增 AC-11：子会话自证且关键词命中时，收口不评审且留痕。
@@ -84,6 +85,9 @@ id: T-023
   - 读取失败/缝缺失 → 照常评审（fail-open）。
   - 判定缓存：同会话第二次收口不再读取。
   - 主会话（origin 非 subagent）prompt 含关键词 → 照常评审（自证前置保护）。
+  - 失败判定不缓存：首判读取失败（undefined 或抛错）照常评审，次轮成功读取后豁免。
+  - 标签与提示词分离匹配：跨源拼接不构成命中。
+- `test/client/settings-card.test.js`：豁免关键词输入默认回显、逗号分隔解析进 patch、空输入 = 豁免关闭、随总开关禁用。
 - `test/index.test.js` 接线级回归：
   - 真实形状事件流夹具（header origin + descriptor + inbox splice）驱动豁免。
   - 执行者根会话收口照常评审（既有用例回归）。
@@ -96,7 +100,7 @@ id: T-023
 |---|---|---|
 | 成功 | 适用：豁免判定是本 task 主体行为 | `test/turn-review.test.js::T-023 审核类子会话豁免`；`test/index.test.js::T-023 接线级豁免` |
 | 异常 | 适用：读取失败与解析失败 fail-open | `test/turn-review.test.js::T-023 豁免判定 fail-open` |
-| 边界配置 | 适用：空清单、主会话保护、缓存行为 | `test/config.test.js::T-023 turnReviewExemptPatterns 解析`；`test/turn-review.test.js::T-023 主会话不豁免`；`test/turn-review.test.js::T-023 判定缓存` |
+| 边界配置 | 适用：空清单、主会话保护、缓存行为 | `test/config.test.js::R-02-001/AC-04 T-023 turnReviewExemptPatterns 解析`；`test/turn-review.test.js::T-023 主会话不豁免`；`test/turn-review.test.js::T-023 判定缓存` |
 | 副作用 | 适用：判定缓存随会话清理，不泄漏 | `test/index.test.js::T-023 接线级豁免：审核子会话（真实形状日志）收口不评审；缓存复用与 disposed 复位`（disposed 后判定复位断言） |
 
 ## 残余风险
@@ -118,6 +122,11 @@ id: T-023
   - 处置：判断项不阻断收口，合并提取留待后续维护，不顺手重构。
 - 复审登记（2026-10-10 Standards 轴复审）：C-023 上下文长句维持原文不改写。
   - 理由：风格检查显式豁免 RATIONALE 散文段（STYLE_PROSE_EXEMPT_FILES），拆句无 lint 收益，避免触碰 append-only 历史。
+- 复审登记（2026-10-10 Spec 轴复审，独立 reviewer）：四项发现，同轮全部修复。
+  - settings Schema 漏写 `turnReviewExemptPatterns`（双清单纪律违例 + R-02-001 web 设置卡承诺未兑现）→ lib/settings.js Schema 补键、lib/client/render.js 补设置卡字段、SOLUTION.md#配置与状态服务新键清单同步。
+  - 失败判定被缓存（注释声明不缓存，实现无条件缓存 false；生产缝以 undefined 表达读取失败，失败走成功路径被缓存，暂态故障致同会话持续漏豁免）→ lib/turn-review.js 仅缓存成功读取（events 为数组）所得判定，失败一律不缓存、次轮收口重判；SOLUTION.md 缓存语义行同步。
+  - R-02-001/AC-04 锚点缺（豁免清单缺省断言未并入 AC-04 默认值用例）→ test/config.test.js 默认值用例补断言，解析用例锚改 R-02-001/AC-04。
+  - label 与 prompt 拼接 haystack 可跨界拼出清单词（误豁免方向）→ 分离匹配（等价 OR，不跨源拼接）。
 
 ## 终态与证据
 

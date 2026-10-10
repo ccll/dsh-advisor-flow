@@ -505,7 +505,7 @@ flowchart TD
 - 职责: `advisor-flow` 命名空间注册与 live re-apply；settings section 注册；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
-  - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging；旧键警告保留。
+  - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging、turnReviewExemptPatterns；旧键警告保留。
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）
@@ -568,7 +568,7 @@ flowchart TD
   - 判定源为会话自身日志（`sessionQuery.observeSession`）：`subagent/descriptor` 事件承载创建标签（实测 `data.label`）；首条提示词实测经 `agent/inbox/spliced` 承载（子会话日志无 `user/message` 事件）。
   - fork 会话 header 无 `origin` 字段，不判为子会话（`origin === 'subagent'` 严格相等判定绕开 seed 回放边界）。
   - 判定失败 fail-open（R-01-009/AC-12）：缝缺失、读取失败、解析失败一律不豁免（照常评审）；只凭阳性判定豁免。
-  - 豁免判定按会话缓存；缓存随 `session/disposed` 摘除。
+  - 豁免判定按会话缓存（仅缓存成功读取的判定，失败不缓存、次轮收口重判）；缓存随 `session/disposed` 摘除。
   - 豁免清单为配置键 `turnReviewExemptPatterns`（非空字符串数组；空数组 = 豁免关闭；默认双语预置 review/审核/审查/评审/审计，C-023）。
   - 动机：豁免面按内容关键词收窄——执行类子会话（搜索、计划、判断）照常评审，仅审核类跳过；全量豁免由东家裁定过宽（C-023 被否方案）。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。

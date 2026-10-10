@@ -813,3 +813,27 @@ test('R-02-001/AC-01 展开态跨 setField/emit 重绘存续：改字段不塌�
     controller.setExpanded(true);
     assert.ok(findById(container, 'advisor-gate-plan-enabled'));
 });
+
+test('R-02-001 T-023 收口评审豁免关键词输入：默认清单回显、逗号分隔解析进 patch、空输入 = 豁免关闭', async () => {
+    const { controller, container } = await renderedCard();
+    expandCard(container);
+    // gateway get 返回 resolved 配置：未配置 raw 时回显缺省双语预置（C-023）
+    const input = findById(container, 'advisor-turn-review-exempt-patterns');
+    assert.ok(input, '豁免关键词输入存在');
+    assert.equal(input.attrs.value, 'review, 审核, 审查, 评审, 审计');
+    // 逗号/中文逗号/换行分隔 → 非空字符串数组进 patch
+    input.listeners.change[0]({ target: { value: 'review, 审计' } });
+    assert.deepEqual(controller.getState().patch.turnReviewExemptPatterns, ['review', '审计']);
+    const reinput = findById(container, 'advisor-turn-review-exempt-patterns');
+    reinput.listeners.change[0]({ target: { value: '审计，\nreview' } });
+    assert.deepEqual(controller.getState().patch.turnReviewExemptPatterns, ['审计', 'review']);
+    // 清空 → 空数组 = 豁免关闭（合法，可保存）
+    const clear = findById(container, 'advisor-turn-review-exempt-patterns');
+    clear.listeners.change[0]({ target: { value: ', ， \n ' } });
+    assert.deepEqual(controller.getState().patch.turnReviewExemptPatterns, []);
+    // 启用关闭态输入禁用（随总开关）
+    const { container: offContainer } = await renderedCard({ raw: { enabled: false } });
+    expandCard(offContainer);
+    const offInput = findById(offContainer, 'advisor-turn-review-exempt-patterns');
+    assert.equal(offInput.attrs.disabled, 'disabled');
+});
