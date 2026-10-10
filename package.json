@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisor-flow",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "DeepSeek Harness plugin porting pi-advisor-flow: an on-demand executor/advisor workflow with consultation tool, review gates, usage ledger, privacy tiers and secret redaction.",
   "keywords": [
