@@ -3,3 +3,5 @@ node_modules/
 *.log
 .tmp-audit/
 test/.tmp-*
+node_modules/
+.staging/
