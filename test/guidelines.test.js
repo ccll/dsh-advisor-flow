@@ -109,6 +109,20 @@ test('R-01-004/AC-02 与 R-01-006/AC-02 禁用锚定：逐门禁用时该门守�
     void [1];
 });
 
+test('R-01-009/AC-13 硬模式守则停用：mode=hard 时守则族求值为空串，soft 照常（C-025）', () => {
+    const hard = { ...config({ plan: true, failure: true, completion: true }), mode: 'hard' };
+    assert.equal(guidelineTextFactory(() => hard)({ agent: { id: 's1' } }), '');
+    const soft = { ...config({ plan: true, failure: true, completion: true }), mode: 'soft' };
+    const text = guidelineTextFactory(() => soft)({ agent: { id: 's1' } });
+    assert.ok(text.includes(GUIDELINE_TEXTS.plan)); // soft 模式守则照常注入
+    // 在线切换即时生效（活配置读时求值）。
+    let live = soft;
+    const render = guidelineTextFactory(() => live);
+    assert.ok(render({ agent: {} }).includes(GUIDELINE_TEXTS.plan));
+    live = hard;
+    assert.equal(render({ agent: {} }), '');
+});
+
 test('installAdvisorGuidelines：注册 advisor-flow:guidelines section（text 函数实时求值，disposer 撤除）', () => {
     const specs = [];
     const systemPrompt = {

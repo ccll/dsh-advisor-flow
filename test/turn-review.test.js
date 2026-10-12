@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTurnReview, TURN_REVIEW_QUESTION } from '../lib/turn-review.js';
+import { createReviewerClassifier } from '../lib/reviewer-classifier.js';
 import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.js';
 import { DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS } from '../lib/config.js';
+import { reviewerSubsessionEvents } from './helpers.js';
 
 /**
  * 收口评审（R-01-009；C-021）行为面：
@@ -39,6 +41,12 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
         return next ?? { ok: true, adviceId: `adv-${index}`, decision: 'proceed', markdown: '本轮行为可收口。' };
     };
     const delivered = [];
+    // T-026：豁免判定由共享分类器承载（生产接线同型——分类器与守卫共用）。
+    const classifier = createReviewerClassifier({
+        getConfig: () => (config ?? { enabled, mode }),
+        getEvents,
+        logger,
+    });
     const review = createTurnReview({
         consult,
         delivery: (sessionId, text) => delivered.push({ sessionId, text }),
@@ -46,10 +54,10 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
         budgetExhausted,
         sessionEnabled,
         isAdvisorSubsession,
-        getEvents,
+        classifier,
         logger,
     });
-    return { review, consultCalls, delivered, logs };
+    return { review, consultCalls, delivered, logs, classifier };
 }
 
 test('R-01-009/AC-05 硬模式收口触发同步评审：entry turn-review、问句聚焦本轮行为（英文模型面）', async () => {
@@ -224,20 +232,8 @@ test('R-01-009/AC-04 提醒送达失败 contained：无 agent 时返回 false �
     assert.equal(delivery.steerReminder('missing'), false);
 });
 
-/** T-023 子会话事件流夹具（实测形状：header origin 顶层、inbox splice、descriptor）。 */
-function subsessionLog({ header = { type: 'session', seq: 0, id: 'sub-1', origin: 'subagent' }, label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
-    const events = [];
-    if (header) {
-        events.push(header);
-    }
-    if (prompt !== undefined) {
-        events.push({ type: 'agent/inbox/spliced', seq: 3, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } });
-    }
-    if (label !== undefined) {
-        events.push({ type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } });
-    }
-    return events;
-}
+/** T-023 子会话事件流夹具（共享单点：test/helpers.js::reviewerSubsessionEvents）。 */
+const subsessionLog = reviewerSubsessionEvents;
 
 /** T-023 豁免判定夹具：config 携带默认豁免清单。 */
 const exemptConfig = (extra = {}) => ({ enabled: true, mode: 'hard', turnReviewExemptPatterns: DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS, ...extra });
@@ -288,7 +284,7 @@ test('T-023 豁免判定 fail-open：读取抛错/缝缺失/空流一律照常�
     const throwing = makeReview({ config: exemptConfig(), getEvents: async () => { throw new Error('seam down'); } });
     await throwing.review.handleTurnStopping(payload('turn-1'));
     assert.equal(throwing.consultCalls.length, 1);
-    assert.ok(throwing.logs.info.some((row) => row.message.includes('exempt check failed'))); // 判定失败留痕（丢弃可见性同口径）
+    assert.ok(throwing.logs.info.some((row) => row.message.includes('check failed'))); // 判定失败留痕（丢弃可见性同口径）
     const noSeam = makeReview({ config: exemptConfig() }); // getEvents 未注入
     await noSeam.review.handleTurnStopping(payload('turn-1'));
     assert.equal(noSeam.consultCalls.length, 1);

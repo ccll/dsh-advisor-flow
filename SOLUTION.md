@@ -357,7 +357,7 @@ flowchart TD
   - 返回：文本 = `Advisor ({model})
 
 {markdown}` + adviceId（UUID 形态）回查行；空意见按失败处置（诊断码）。
-  - 失败诊断码：`NO_ADVISOR_MODEL` / `ADVISOR_TIMEOUT` / `ADVISOR_FAILED` / `ADVISOR_GATE_INVALID` / `ADVISOR_BUDGET_EXHAUSTED`。
+  - 失败诊断码：`NO_ADVISOR_MODEL` / `ADVISOR_TIMEOUT` / `ADVISOR_FAILED` / `ADVISOR_GATE_INVALID` / `ADVISOR_BUDGET_EXHAUSTED` / `SESSION_EXEMPT` / `TOOL_FACE_CLOSED`（工具面守卫拒绝码，C-025；reason 明示属预期、勿重试与替代路径）。
 - **回写工具** `record_advisor_outcome`：
   - 入参：`adviceId`、`adoption`（followed/not-followed/unknown）、`validationStatus`（passed/failed/not-run/unknown）。
   - 一次性语义：reserve→commit 成功；release 失败可重试；未知/已回写/未决 adviceId 报错。
@@ -400,7 +400,7 @@ flowchart TD
 
 | 需求 | 主责子系统 | 方案落点 | 实现位置 |
 |---|---|---|---|
-| R-01-001 | 咨询服务 | SOLUTION.md#咨询服务 | lib/consultation.js；lib/tools/ask-advisor.js |
+| R-01-001 | 咨询服务 | SOLUTION.md#咨询服务 | lib/consultation.js；lib/tools/ask-advisor.js；lib/tool-guard.js |
 | R-01-002 | 咨询服务 | SOLUTION.md#命令面 | lib/commands.js |
 | R-01-003 | 执行者守则 | SOLUTION.md#执行者守则 | lib/guidelines.js |
 | R-01-004 | 执行者守则 | SOLUTION.md#执行者守则 | lib/guidelines.js |
@@ -415,7 +415,7 @@ flowchart TD
 | R-02-005 | 咨询服务 | SOLUTION.md#运行时、并发与失败语义 | lib/consultation.js；lib/gates/index.js |
 | R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js |
 | R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js |
-| R-01-009 | 门控服务 | SOLUTION.md#门控服务 | lib/turn-review.js；lib/consultation.js；lib/delivery.js |
+| R-01-009 | 门控服务 | SOLUTION.md#门控服务 | lib/turn-review.js；lib/reviewer-classifier.js；lib/consultation.js；lib/delivery.js |
 
 ## 子系统与模块
 
@@ -468,8 +468,8 @@ flowchart TD
   - 门组件异常 fail-open（放行 + 记录）。
   - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；评审对象是执行者回合与执行类子会话收口；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`（T-008 实测）。
     - 顾问子会话豁免（T-022）：命中呈现登记即跳过并留痕。
-    - 审核类子会话豁免（T-023）：子会话自证且关键词命中即跳过并留痕；判定失败 fail-open。
-- 代码位置: lib/gates/index.js；lib/turn-review.js
+    - 审核类子会话豁免（T-023）：子会话自证且关键词命中即跳过并留痕；判定失败 fail-open；判定由共享审核类子会话分类器承载（T-026，与咨询工具面守卫共用同一实例与清单）。
+- 代码位置: lib/gates/index.js；lib/turn-review.js；lib/reviewer-classifier.js
 - 实现: 单端（宿主）
 
 ### 执行者守则
@@ -478,6 +478,7 @@ flowchart TD
   - 单 section 注册（text 为函数；全关时返回空串）。
   - 文案来源：程序化提取自冻结制品（C-009），等值断言入测试。
   - 注入前置：咨询工具缝激活且模型访问允许，否则不注入（R-01-007/AC-04）。
+  - 硬模式守则停用（R-01-009/AC-13；C-025）：`mode=hard` 时守则族求值为空串——守则是主动调用的指示面，硬模式工具面关闭且收口评审自动覆盖；状态呈现共用同一判定谓词。
   - 自定义触发行与剩余次数预告行按配置展开（pi 模板）。
 - 代码位置: lib/guidelines.js
 - 实现: 单端（宿主）
@@ -506,14 +507,16 @@ flowchart TD
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
   - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging、turnReviewExemptPatterns；旧键警告保留。
-  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计。
+  - turnReviewExemptPatterns 兼作咨询工具面守卫的判定清单（C-025）：审核类子会话豁免与工具面守卫共用同一关键词语义，不新增键。
+  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）
 
 ### 咨询工具
-- 职责: 注册 `ask_advisor` 工具面（六参数英文 schema），参数校验与错误转译（承接 R-01-001）
+- 职责: 注册 `ask_advisor` 工具面（六参数英文 schema），参数校验、错误转译与执行面守卫判定（承接 R-01-001）
 - 关键内部结构: 工具体仅转发咨询服务；`output {schema, render}` 强制；value 契约 `{ok:true,adviceId,text}|{ok:false,code,reason}`；render 前缀 `Advisor (model)`。
-- 代码位置: lib/tools/ask-advisor.js
+  - 工具面守卫（R-01-001/AC-09、AC-10；C-025）：execute 前判定调用方会话——hard 模式拒绝一切调用（`TOOL_FACE_CLOSED`）；soft 模式拒绝审核类子会话与已登记顾问子会话（`SESSION_EXEMPT`）；守卫失败 fail-open 放行（沿用引擎禁用与预算路径）；拒绝计数入状态快照。
+- 代码位置: lib/tools/ask-advisor.js；lib/tool-guard.js
 - 实现: 单端（宿主）
 
 ### 回写工具
@@ -576,10 +579,16 @@ flowchart TD
   - 豁免判定按会话缓存（仅缓存成功读取的判定，失败不缓存、次轮收口重判）；缓存随 `session/disposed` 摘除。
   - 豁免清单为配置键 `turnReviewExemptPatterns`（非空字符串数组；空数组 = 豁免关闭；默认双语预置 review/审核/审查/评审/审计，C-023）。
   - 动机：豁免面按内容关键词收窄——执行类子会话（搜索、计划、判断）照常评审，仅审核类跳过；全量豁免由东家裁定过宽（C-023 被否方案）。
+- **咨询工具面守卫**（T-026；C-025）：
+  - `ask_advisor` execute 前判定调用方会话：hard 模式拒绝一切会话（`TOOL_FACE_CLOSED`）；soft 模式拒绝审核类子会话与已登记顾问子会话（`SESSION_EXEMPT`）。
+  - 判定复用收口评审豁免的共享分类器（同清单 `turnReviewExemptPatterns`、同 fail-open 语义——守卫失败或缝缺失放行，沿用引擎禁用与预算路径）。
+  - 判定前先应用文件配置（与包装引擎同一读时求值原语）——盘上 mode 切换后的首次调用按新档位判定。
+  - 拒绝 reason 明示属预期、勿重试与替代路径；拒绝计数 info 留痕并入 `/advisor status`。
+  - 动机：硬模式下收口评审是唯一自动 advisor，主动咨询形成多重评审；审核类子会话自咨询是元评审冗余与第二递归向量。
 - **abort 极性（待核）**：门咨询遇 caller 中止时的放行/拦截方向，pi 为拦截、port 现为按阻断模式处置（warn-and-continue 下放行）——staging 实弹复现后定极性（审计 G-13）。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。
-- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）。
+- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）；工具面守卫对顾问子会话与审核类子会话拒绝工具咨询（第二递归向量不依赖 toolFilter 单点）。
 - **会话封锁**：block-session 模式下 blocked 决策使会话进入封锁态——`blockOnBlocked`（默认 true）时宿主 `agents.cancel` 尽力停止当前执行，且后续所有工具调用一律拦截（拒绝原因 = 封锁原因），直至会话重建。
 - **恢复**：无独立暂停/停机态；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
 

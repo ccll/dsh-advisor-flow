@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { apply, name, inject } from '../lib/index.js';
-import { createFakeLlm, answer, failure, createFakeSubagents } from './helpers.js';
+import { createFakeLlm, answer, failure, createFakeSubagents, reviewerSubsessionEvents } from './helpers.js';
 
 const endpoints = [];
 
@@ -137,6 +137,7 @@ async function settle(turns = 8) {
 const entryConfig = {
     enabled: true,
     advisor: { provider: 'test', model: 'm' },
+    mode: 'soft', // T-026：按需咨询工具面属软模式能力（hard 模式守卫全拒）
 };
 
 test('tools 条件子上下文：服务在场即注册；注册抛错向上传播（不锚定 AC）', () => {
@@ -227,6 +228,7 @@ test('R-01-003/004/006 守则注入 wiring：systemPrompt 子上下文激活即�
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
         gates: { plan: { enabled: true }, failure: { enabled: true }, completion: { enabled: true } },
+        mode: 'soft', // T-026：守则注入属软模式（hard 模式守则族停用）
     });
     assert.equal(services.status.snapshot().degradations.guidelines, undefined); // 激活即清除
     const spec = sectionSpecs[0];
@@ -532,6 +534,7 @@ test('R-02-001/AC-01 gateway 缝可得时：卡片 set 经 RPC 即时生效于�
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm1' },
+        mode: 'soft',
     });
     await settle();
     assert.equal(services.status.snapshot().degradations.settingsCard, undefined); // 动态装配完成后清除
@@ -614,13 +617,14 @@ test('R-02-001/AC-01 onChange → applyConfig：settings 段变更即时生效�
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'test', model: 'm1' },
+        mode: 'soft',
     });
     await settle();
     const before = await services.askAdvisor.execute({});
     assert.equal(llm.calls[0].options.model, 'm1');
 
     // settings 文件段变更：source-thunk 更新（宿主契约传 thunk）+ onChange 触发 → live re-apply
-    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'test', model: 'm2' } }));
+    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'test', model: 'm2' }, mode: 'soft' }));
     hooks.onChange();
     const after = await services.askAdvisor.execute({});
     assert.match(after.adviceId, /^[0-9a-f-]{36}$/);
@@ -672,6 +676,7 @@ test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之�
         enabled: true,
         advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
         privacy: { history: 'delta' },
+        mode: 'soft',
     };
     const sourceHolder = { value: {} };
     const { ctx, providedService } = makeCtx({
@@ -845,7 +850,7 @@ test('T-014 Scout 接线计量：scout.enabled 时二次调用 usage 以 scout �
     const llm = createFakeLlm(programs);
     const { ctx } = makeCtx({ llm });
     ctx.sessionQuery = { observeSession: async () => ({ events: [{ type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '内容' }] } } }] }) }; // 经 proxy set 登记（inject 先于 apply 激活）
-    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true } });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true }, mode: 'soft' });
     await services.askAdvisor.execute({ question: 'q' });
     await settle();
     const totals = services.usage.totals();
@@ -863,7 +868,7 @@ test('R-02-001/AC-07 Scout 二次调用与主咨询同语义跟随宿主模型 m
     llm.setModelInfo({ reasoning: { efforts: [{ id: 'high' }] }, defaultMaxTokens: 131072 });
     const { ctx } = makeCtx({ llm });
     ctx.sessionQuery = { observeSession: async () => ({ events: [{ type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '内容' }] } } }] }) };
-    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true } });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'test-model' }, scout: { enabled: true }, mode: 'soft' });
     await services.askAdvisor.execute({ question: 'q' });
     await settle();
     // 程序序：scout 二次调用先于主咨询（T-014 实证）——两笔都跟随模型声明值
@@ -912,13 +917,9 @@ test('T-022 接线级递归守卫：收口评审生成的顾问子会话，其�
     assert.equal(subagents.startCalls, 2);
 });
 
-/** T-023 子会话日志夹具（实测形状：header origin 顶层、inbox splice 承载首条提示词、descriptor 承载标签）。 */
+/** T-023 子会话日志夹具（共享单点：test/helpers.js::reviewerSubsessionEvents；实测形状）。 */
 function reviewSubsessionLog({ label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
-    return [
-        { type: 'session', seq: 0, id: 'review-child', origin: 'subagent' },
-        { type: 'agent/inbox/spliced', seq: 3, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } },
-        { type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } },
-    ];
+    return reviewerSubsessionEvents({ label, prompt });
 }
 
 test('T-023 接线级豁免：审核子会话（真实形状日志）收口不评审；缓存复用与 disposed 复位', async () => {
@@ -962,4 +963,44 @@ test('T-023 接线级豁免 fail-open：sessionQuery 缝缺失时审核子会话
     await settle();
     // 缝缺失 → 判定失败 fail-open → 评审照常（经子会话呈现或直调，llm 至少一笔）
     assert.ok(llm.calls.length >= 1);
+});
+
+test('T-026 接线级守卫：软模式审核子会话工具调用被拒（零咨询、计数入快照），主会话照常', async () => {
+    const llm = createFakeLlm([answer('不应被调用的意见。'), answer('主会话意见。')]);
+    const { ctx } = makeCtx({ llm });
+    ctx.sessionQuery = {
+        observeSession: async (sessionId) => {
+            if (sessionId !== 'review-child') {
+                return undefined; // 缝对其余会话不可得 → 分类器 fail-open 放行
+            }
+            return { events: reviewerSubsessionEvents(), [Symbol.dispose]() {} };
+        },
+    };
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'soft' });
+    // 审核子会话：自证 + label 'review' 命中默认清单 → 工具面拒绝，零咨询。
+    const refused = await services.askAdvisor.execute({}, { agent: { id: 'review-child' } });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, 'SESSION_EXEMPT');
+    assert.ok(refused.reason.includes('do not retry ask_advisor'));
+    assert.equal(llm.calls.length, 0);
+    assert.equal(services.status.snapshot().toolFaceStats.refused, 1);
+    // 主会话（缝不可得 → fail-open）：照常咨询。
+    const allowed = await services.askAdvisor.execute({}, { agent: { id: 'main-1' } });
+    assert.equal(allowed.ok, true);
+    assert.equal(llm.calls.length, 1);
+    assert.equal(services.status.snapshot().toolFaceStats.refused, 1); // 放行不计数
+});
+
+test('T-026 接线级守卫：硬模式工具面对一切会话关闭（含主会话），零咨询且按 code 计数', async () => {
+    const llm = createFakeLlm([answer('不应被调用的意见。')]);
+    const { ctx } = makeCtx({ llm });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
+    for (const sessionId of ['main-1', 'review-child']) {
+        const refused = await services.askAdvisor.execute({}, { agent: { id: sessionId } });
+        assert.equal(refused.ok, false);
+        assert.equal(refused.code, 'TOOL_FACE_CLOSED');
+        assert.ok(refused.reason.includes('This refusal is expected'));
+    }
+    assert.equal(llm.calls.length, 0); // 守卫拒绝：不发起咨询
+    assert.deepEqual(services.status.snapshot().toolFaceStats, { refused: 2, byCode: { TOOL_FACE_CLOSED: 2 } });
 });

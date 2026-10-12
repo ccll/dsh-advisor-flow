@@ -195,3 +195,22 @@ export function createFakeSubagents({ providers = [eligibleSpawnProvider()], run
         list: () => [...registry.keys()],
     };
 }
+
+/**
+ * 审核类子会话事件流夹具（T-023/T-026 共用单点；实测形状：header origin
+ * 顶层承载子会话自证、`agent/inbox/spliced` 承载首条提示词、
+ * `subagent/descriptor` 承载创建标签）。
+ */
+export function reviewerSubsessionEvents({ header = { type: 'session', seq: 0, id: 'sub-1', origin: 'subagent' }, label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
+    const events = [];
+    if (header) {
+        events.push(header);
+    }
+    if (prompt !== undefined) {
+        events.push({ type: 'agent/inbox/spliced', seq: 3, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } });
+    }
+    if (label !== undefined) {
+        events.push({ type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } });
+    }
+    return events;
+}

@@ -118,4 +118,9 @@ test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（缺�
     const hardSnapshot = hardProvider.snapshot();
     assert.equal(hardProvider.snapshot().mode, 'hard');
     assert.deepEqual(hardSnapshot.turnReviewStats, { triggers: 2, proceed: 1, revise: 1, blocked: 0, failed: 0, skipped: 0 });
+    // R-01-001/AC-09、AC-10（C-025）：工具面守卫拒绝计数随快照；访问器缺失时不可得。
+    assert.equal(provider.snapshot().toolFaceStats, undefined);
+    const guarded = { ...review, toolFaceStats: () => ({ refused: 3, byCode: { SESSION_EXEMPT: 2, TOOL_FACE_CLOSED: 1 } }) };
+    const guardedSnapshot = createStatusProvider({ config: { ...soft, mode: 'hard' }, engine: guarded }).snapshot();
+    assert.deepEqual(guardedSnapshot.toolFaceStats, { refused: 3, byCode: { SESSION_EXEMPT: 2, TOOL_FACE_CLOSED: 1 } });
 });

@@ -226,3 +226,20 @@ test('R-01-009/AC-10 status 与 gates 呈现介入强度与收口评审计数', 
     assert.match(softText, /介入强度: soft/);
     assert.doesNotMatch(softText, /收口评审/); // 无计数访问器时不呈现（非零值虚构禁令）
 });
+
+test('R-01-001/AC-09、R-01-009/AC-13 status 呈现工具面拒绝计数与 hard 模式守则停用注记（C-025）', () => {
+    const { controller } = makeController({ raw: { enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
+    const snapshot = controller.snapshotFor('s1');
+    // 拒绝计数：有访问器时呈现，无访问器时不呈现（非零值虚构禁令同口径）。
+    const refusedText = advisorStatusText({ ...snapshot, toolFaceStats: { refused: 3, byCode: { SESSION_EXEMPT: 3 } } });
+    assert.match(refusedText, /工具面拒绝: 3 次/);
+    assert.doesNotMatch(advisorStatusText(snapshot), /工具面拒绝/);
+    // hard 模式注记：status 与 gates 回读均如实反映守则停用。
+    assert.match(refusedText, /守则: 停用/);
+    const hardGates = advisorGatesText(snapshot.gates, snapshot.failureMode, 'hard');
+    assert.match(hardGates, /三类守则停用/);
+    const softGates = advisorGatesText(snapshot.gates, snapshot.failureMode, 'soft');
+    assert.doesNotMatch(softGates, /三类守则停用/);
+    const softStatus = advisorStatusText({ ...snapshot, mode: 'soft', toolFaceStats: { refused: 1, byCode: { SESSION_EXEMPT: 1 } } });
+    assert.doesNotMatch(softStatus, /守则: 停用/);
+});

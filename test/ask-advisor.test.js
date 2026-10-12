@@ -64,8 +64,7 @@ test('R-01-001/AC-03 失败后执行者可重试：下一次工具调用单次�
     assert.ok(retried.text.includes('重试成功'));
 });
 
-test('R-01-001 工具参数校验：非法参数返回错误结果而不进入咨询', async () => {
-    const llm = createFakeLlm([answer('ok')]);
+test('R-01-001 工具参数校验：非法参数返回错误结果而不进入咨询', async () => {    const llm = createFakeLlm([answer('ok')]);
     const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger });
     const tool = createAskAdvisorTool({ engine });
 
@@ -97,6 +96,38 @@ test('R-01-001/AC-01 工具定义携带 output {schema, render}——宿主 tool
     assert.ok(failureBlocks[0].text.includes('NO_ADVISOR_MODEL'));
     const emptyBlocks = tool.output.render({}, undefined);
     assert.equal(emptyBlocks[0].text, '(Advisor returned no advice.)'); // pi renderAdvisorResult 兜底文案
+});
+
+test('R-01-001/AC-09 工具面守卫拒绝短路：拒绝结果返回且不进入咨询（guard 接线）', async () => {
+    const llm = createFakeLlm([answer('不应被调用的意见。')]);
+    const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger });
+    const tool = createAskAdvisorTool({
+        engine,
+        guard: async () => ({ code: 'SESSION_EXEMPT', reason: 'refused by guard' }),
+    });
+    const result = await tool.execute({}, { agent: { id: 'review-child' } });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SESSION_EXEMPT');
+    assert.equal(result.reason, 'refused by guard');
+    assert.equal(llm.calls.length, 0); // 守卫命中：不发起咨询
+    // 守卫放行（undefined）→ 照常咨询。
+    const openTool = createAskAdvisorTool({
+        engine,
+        guard: async () => undefined,
+    });
+    const allowed = await openTool.execute({ question: 'q' });
+    assert.equal(allowed.ok, true);
+    assert.equal(llm.calls.length, 1);
+});
+
+test('R-01-001/AC-09、AC-10 拒绝码渲染：SESSION_EXEMPT 与 TOOL_FACE_CLOSED 经既有失败面呈现', () => {
+    const tool = createAskAdvisorTool({ engine: { consult: async () => ({ ok: true, adviceId: 'a', text: 't' }) } });
+    for (const code of ['SESSION_EXEMPT', 'TOOL_FACE_CLOSED']) {
+        const blocks = tool.output.render({}, { ok: false, code, reason: 'This refusal is expected; do not retry ask_advisor.' });
+        assert.equal(blocks[0].type, 'text');
+        assert.ok(blocks[0].text.includes(code));
+        assert.ok(blocks[0].text.includes('do not retry ask_advisor'));
+    }
 });
 
 /**
