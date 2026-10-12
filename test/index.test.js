@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, name, inject } from '../lib/index.js';
+import pluginModule, { apply, name, inject, Config } from '../lib/index.js';
 import { ADVICE_SOURCE_KIND } from '../lib/delivery.js';
 import { createFakeLlm, answer, failure, createFakeSubagents, reviewerSubsessionEvents } from './helpers.js';
 
@@ -582,56 +582,39 @@ test('tools 缝缺失显性化：degradations.askAdvisorTool 标注，激活即�
     assert.equal(present.registered.length, 1);
 });
 
-test('R-02-001/AC-01 settings section 注册：installSection 以 advisor-flow 命名空间调用，describe 可服务', async () => {
-    const installed = [];
-    const { ctx } = makeCtx({
-        llm: createFakeLlm([answer('ok')]),
-        settings: {
-            update: async () => {},
-            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                installed.push({ namespace, schema, entry, hooks });
-            },
-        },
-        typert: { register: () => {} },
-    });
-    apply(ctx, entryConfig);
-    await settle();
-    assert.equal(installed.length, 1);
-    assert.equal(installed[0].namespace, 'advisor-flow'); // describe 服务本命名空间 → 卡片交集成立
-    assert.ok(installed[0].schema, 'schema 随注册声明');
-    assert.equal(installed[0].entry.enabled, true);
-    assert.equal(typeof installed[0].hooks.onChange, 'function');
-    assert.equal(typeof installed[0].hooks.setSource, 'function');
+test('R-02-001/AC-01 SettingsForms 契约：default 导出承载 Config，每顶层声明键 volatile（T-028）', () => {
+    // 宿主发现点：runtime.Config = default.Config（cordis unwrapExports 取 default）
+    assert.equal(pluginModule.Config, Config);
+    const dict = Config.dict ?? {};
+    for (const key of ['enabled', 'advisor', 'gates', 'failureMode', 'presentation', 'mode', 'privacy', 'budget', 'scout', 'contextMaxChars', 'gitContextMaxChars', 'customInvocation', 'modelWhitelist', 'turnReviewExemptPatterns', 'blockOnBlocked', 'toolPolicies', 'outcomeLogging']) {
+        assert.ok(key in dict, `Config 声明顶层键 ${key}`);
+        assert.equal(dict[key]?.meta?.volatile, true, `${key} 必须 volatile（0.2.0 编辑面判定）`);
+    }
 });
 
-test('R-02-001/AC-01 onChange → applyConfig：settings 段变更即时生效于后续咨询', async () => {
+test('R-02-001/AC-01 宿主热更新（loader/volatile-update）→ live re-apply：entry 变更即时生效于后续咨询', async () => {
     const llm = createFakeLlm([answer('一。'), answer('二。')]);
-    let hooks;
-    const { ctx } = makeCtx({
-        llm,
-        settings: {
-            update: async () => {},
-            installSection: (sectionCtx, namespace, schema, entry, sectionHooks) => {
-                hooks = sectionHooks;
-            },
-        },
-    });
-    const services = apply(ctx, {
+    const { ctx, subscriptions } = makeCtx({ llm });
+    const entry = {
         enabled: true,
         advisor: { provider: 'test', model: 'm1' },
         mode: 'soft',
-    });
+    };
+    const services = apply(ctx, entry);
+    const updateEvent = subscriptions.find((s) => s.event === 'loader/volatile-update');
+    assert.ok(updateEvent, '桥必须监听宿主 volatile 热更新事件（T-028 事件缝）');
     await settle();
     const before = await services.askAdvisor.execute({});
     assert.equal(llm.calls[0].options.model, 'm1');
 
-    // settings 文件段变更：source-thunk 更新（宿主契约传 thunk）+ onChange 触发 → live re-apply
-    hooks.setSource(() => ({ enabled: true, advisor: { provider: 'test', model: 'm2' }, mode: 'soft' }));
-    hooks.onChange();
+    // 宿主热更新：entry 变更（模拟 loader 热提交 cell）+ 事件触发 → live re-apply
+    entry.advisor = { provider: 'test', model: 'm2' };
+    updateEvent.handler();
     const after = await services.askAdvisor.execute({});
     assert.match(after.adviceId, /^[0-9a-f-]{36}$/);
     assert.notEqual(after.adviceId, before.adviceId);
     assert.equal(llm.calls[1].options.model, 'm2');
+    services.dispose();
 });
 
 test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 advisor-flow 命名空间', async () => {
@@ -641,13 +624,13 @@ test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 ad
         typert: { register: () => {} },
         settings: {
             update: async (namespace, raw) => writes.push({ namespace, raw }),
-            installSection: () => {},
         },
     });
     const services = apply(ctx, {
         enabled: true,
         advisor: { provider: 'p', model: 'm1', maxTokens: 4096 },
         privacy: { history: 'off' },
+        customKey: { keep: true }, // 文档层未知键（宿主 strip+mergeLayers 保留）
     });
     await settle();
     const gateway = providedService('advisor-flow');
@@ -660,6 +643,10 @@ test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 ad
     assert.equal(writes[0].namespace, 'advisor-flow');
     assert.equal(writes[0].raw.advisor.model, 'm2');
     assert.equal(writes[0].raw.advisor.maxTokens, 4096); // 兄弟键保留
+    // 写缝投影（T-028）：宿主 validatePaths 拒绝 schema 外顶层键——补丁只含
+    // 声明键，未知键留在文档层（T-005 junk 保留语义不破坏）
+    assert.equal('customKey' in writes[0].raw, false);
+    assert.equal('enabled' in writes[0].raw, true);
     assert.equal(services.status.snapshot().degradations.persistence, undefined);
 });
 
@@ -671,41 +658,37 @@ test('R-02-001/AC-01 持久写缝缺失：degradations.persistence 标注且不�
     assert.equal(logs.error.filter((message) => message.includes('持久化不可用')).length, 0);
 });
 
-test('R-02-001/AC-01 启动种子时序无关：attach 时 source 为空、之后就绪——读时求值使 engine/get 读到就绪值', async () => {
+test('R-02-001/AC-01 entry 就绪时序无关：装载时 entry 为空、宿主后写入——读时求值使 engine/get 读到就绪值', async () => {
     const llm = createFakeLlm([answer('种子配置意见。')]);
     const writes = [];
-    const persistedRaw = {
+    const readyRaw = {
         enabled: true,
         advisor: { provider: 'persisted-p', model: 'persisted-m', maxTokens: 8192 },
         privacy: { history: 'delta' },
         mode: 'soft',
     };
-    const sourceHolder = { value: {} };
-    const { ctx, providedService } = makeCtx({
+    const entry = {}; // 装载时 entry config 为空（文档尚未产出 advisor-flow 行配置）
+    const { ctx, providedService, subscriptions } = makeCtx({
         llm,
-        settings: {
-            update: async (namespace, raw) => writes.push({ namespace, raw }),
-            installSection: (sectionCtx, namespace, schema, entry, hooks) => {
-                hooks.setSource(() => structuredClone(sourceHolder.value));
-            },
-        },
+        settings: { update: async (namespace, raw) => writes.push({ namespace, raw }) },
         typert: { register: () => {} },
     });
-    const services = apply(ctx, entryConfig);
+    const services = apply(ctx, entry);
     await settle();
 
-    // attach 种子读到空值 → 空值跳过（raw 不被清空、引擎保持 entry 态）
+    // attach 种子读到空值 → 空值跳过（raw 不被清空、引擎保持默认态）
     assert.equal(services.status.snapshot().degradations.persistence, undefined); // 写缝已接入
-    assert.equal(services.status.snapshot().enabled, true); // entry 态
+    assert.equal(services.status.snapshot().enabled, false); // entry 空 → 默认禁用
 
-    // source 就绪后（无 onChange、无 set）——读时求值：gateway get 读到持久化值
-    sourceHolder.value = structuredClone(persistedRaw);
+    // 宿主写入就绪后（模拟 reconcile/热提交）——读时求值：gateway get 读到就绪值
+    Object.assign(entry, structuredClone(readyRaw));
+    subscriptions.find((s) => s.event === 'loader/volatile-update')?.handler?.();
     const gateway = providedService('advisor-flow');
     const got = await gateway.get();
     assert.equal(got.config.advisor.model, 'persisted-m');
     assert.equal(got.config.privacy.history, 'delta');
 
-    // 咨询入口同样读时求值：真实使用持久化配置（无任何 set 触发）
+    // 咨询入口同样读时求值：真实使用就绪配置（无任何 set 触发）
     const consulted = await services.askAdvisor.execute({});
     assert.match(consulted.adviceId, /^[0-9a-f-]{36}$/);
     assert.equal(llm.calls[0].options.model, 'persisted-m');
@@ -780,28 +763,34 @@ test('commands 条件子上下文激活：命令经注册表缝挂载并可执�
     assert.match(result.text, /手动咨询已发起/);
 });
 
-test('R-02-003/AC-02 重复注册守卫：already registered 降级为 entry-source 兜底，状态可查询不崩装载', async () => {
-    const { ctx } = makeCtx({
-        llm: createFakeLlm([]),
-        settings: {
-            update: async () => {},
-            installSection: () => {
-                throw new Error('settings namespace "advisor-flow" is already registered');
-            },
-        },
+test('R-02-001/AC-01 entry volatile cell：装载后 cell 值经 .get() 解包为普通配置（T-028）', async () => {
+    const llm = createFakeLlm([answer('ok')]);
+    const cell = Object.freeze({
+        get: () => structuredClone({ provider: 'test', model: 'cell-m' }),
+        [Symbol.for('cosmokit.volatile.write')]: (value) => {},
     });
-    const services = apply(ctx, { enabled: false });
-    await settle();
-    assert.equal(services.status.snapshot().degradations.settingsSection, undefined);
-    assert.equal(services.status.snapshot().enabled, false); // 状态照常可查询
+    const { ctx, providedService } = makeCtx({
+        llm,
+        typert: { register: () => {} },
+    });
+    apply(ctx, {
+        enabled: true,
+        advisor: cell, // 0.2.0 声明 Config 后 cordis 对 volatile 节点包 cell——非透传 proxy
+        mode: 'soft',
+    });
+    await settle(); // gateway 经动态 import 异步注册
+    const got = await providedService('advisor-flow').get();
+    assert.deepEqual(got.config.advisor, { provider: 'test', model: 'cell-m' });
 });
 
-test('settings 服务缺 installSection 能力：section 缺失显性化（联调验证项，不锚定 AC）', async () => {
-    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]), settings: { update: async () => {} } });
+test('settings 服务缺失时桥仍装配：source 即 entry，写缝降级标注（0.2.0 无需注册动作，T-028）', async () => {
+    const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     await settle();
-    assert.equal(services.status.snapshot().degradations.settingsSection, 'install-section-missing');
-    assert.ok(logs.error.some((message) => message.includes('settings section 未注册')));
+    const degradations = services.status.snapshot().degradations;
+    assert.equal(degradations.persistence, 'settings-writer-seam-missing');
+    assert.equal(degradations.settingsSection, undefined); // 桥不依赖 settings 服务——正常态无 section 标注
+    assert.ok(!logs.error.some((message) => message.includes('settings section 未注册')));
 });
 
 
@@ -816,7 +805,6 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败：degradations 随恢�
                     throw new Error('yaml write failed');
                 }
             },
-            installSection: () => {},
         },
     });
     const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm' } });
