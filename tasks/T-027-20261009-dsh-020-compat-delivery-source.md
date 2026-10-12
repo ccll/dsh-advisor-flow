@@ -1,12 +1,12 @@
 ---
 doc-type: task
 mutation: lifecycle
-id: T-019
+id: T-027
 ---
-# T-019 dsh 0.2.0-rc.2 兼容性修复（第一阶段：投递源形态与 peer 口径）
+# T-027 dsh 0.2.0-rc.2 兼容性修复（第一阶段：投递源形态与 peer 口径）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-01-006（投递链）；东家 2026-10-09 会话直接指令（对 dsh-simplify 与本插件做 0.2.0 兼容实测并适配）
 
 ## 背景与目标
@@ -59,4 +59,4 @@ id: T-019
   - 执行方式: code-review skill（Standards 轴：CONVENTIONS + 全局工程原则 + Fowler 基线；Spec 轴以本 task 为 spec 逐条对照 diff）；评审基线 HEAD=6ff0454 未提交 diff 5 文件
   - 问题与修复: Spec 轴——①集成/兼容性证据未落 task（本终态补齐）；②compat.dsh 与 cordis 两处伴随改动超出收敛方案口径（已在收敛方案补记理由）；③test 头注释编辑残留重复行（已删）；④lib/delivery.js 模块头仍写旧口径 source.plugin（已同步直接来源表述）。Standards 轴——同两处注释缺陷（已修）；`plugin:advisor-flow` 字面量三处（已导出 ADVICE_SOURCE_KIND 单一事实源，测试与实现共用）；settings.js 注释与 warn 事实重复（warn 缩短为事实+落点，理由留注释一处）；cordis 补记（同②）
   - 复审结论: 两轴全部发现处置完毕，无阻断缺陷；单元 230/230 + 审计环境集成实测通过，复审通过
-- 残余风险: 设置卡缺失（T-019 边界显式延后，降级显性化）；审计环境发现 loop gate 在非反应执行者 + 空预算下可干预循环（1029 次），非本 task 范围亦非 0.2.0 特有，登记 TODO 由后继承载
+- 残余风险: 设置卡缺失（T-027 边界显式延后，降级显性化）；审计环境发现 loop gate 在非反应执行者 + 空预算下可干预循环（1029 次），非本 task 范围亦非 0.2.0 特有，登记 TODO 由后继承载
