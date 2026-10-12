@@ -616,6 +616,8 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     assert.equal(byTag(container, 'fieldset').length, 0);
     const retry = byTag(container, 'button').find((node) => node.textContent === '重试');
     assert.ok(retry, 'error 态渲染重试按钮');
+    assert.ok((retry.attrs.class ?? '').includes('advisorflow_retry'), '重试按钮用独立角色类（样式与放弃按钮同款）');
+    assert.ok(!(retry.attrs.class ?? '').includes('advisorflow_discard'), '重试按钮不占放弃角色命名空间——按下-抬起/键盘委托不把重试误判为放弃');
     getShouldFail = false;
     retry.listeners.click[0](); // void controller.load()——异步
     await pump();
@@ -965,6 +967,8 @@ test('R-02-001/AC-12 键盘激活保存（合成 click detail=0）与鼠标 clic
     assert.ok(setCall, '键盘路径提交了保存');
     assert.equal(setCall.payload.args.patch.advisor.model, 'm2');
     assert.equal(controller.getState().dirty, false, '键盘保存后 dirty 清除');
+    const kbBadges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
+    assert.equal(kbBadges().length, 0, '键盘保存完成后未保存徽标消失（AC-12）');
     // 鼠标 click（detail≥1）不在此重入：按下-抬起委托已处理，二次执行必须被拒
     const before = rpc.calls.length;
     await root.listeners.click[0]({ target: save, detail: 1 });
