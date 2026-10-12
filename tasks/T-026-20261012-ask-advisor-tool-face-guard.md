@@ -6,7 +6,7 @@ id: T-026
 # T-026 咨询工具面守卫（R-01-001、R-01-009）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-01-001（工具面收窄）、R-01-009（介入强度语义延伸）、T-022/T-023（豁免机制先例与判定复用）、C-025
 
 ## 背景与目标
@@ -96,7 +96,16 @@ id: T-026
 
 ## 终态与证据
 
-（关闭时填写）
+- 实现: ① `lib/tool-guard.js`（新）：execute 前守卫——hard 拒绝一切（`TOOL_FACE_CLOSED`）、soft 拒绝审核类子会话（共享分类器阳性）与已登记顾问子会话（呈现登记表，防线纵深）；fail-open 仅阳性拒绝；判定前先 `applyConfig()`（时序缝修正）；mode 未定义归一 DEFAULT_INTERVENTION_MODE；拒绝 reason 三点（属预期/勿重试/替代路径）；拒绝计数按 code。② `lib/reviewer-classifier.js`（新）：T-023 判定（`subsessionExemptFrom` + 缓存）逐行等价抽取为共享分类器。③ `lib/turn-review.js` 改注入共享分类器（getEvents 缝移交、forgetSession 委托）。④ `lib/guidelines.js` hard 停用，判定谓词 `guidelinesActive`（`lib/config.js` 新增）单点承载；`lib/commands.js` status 注记与 gates 回读收编同谓词；`lib/status.js` 快照 `toolFaceStats`。⑤ `lib/index.js` 接线：分类器 + 守卫注入工具与收口评审，`session/disposed` 摘缓存。⑥ 测试基建：`reviewerSubsessionEvents` 夹具收编 `test/helpers.js` 单点（turn-review 与 index 两测试文件既有同形夹具去重——T-023 复审确立的夹具单点纪律延续，超出测试计划文本的补充项）。⑦ map 同步：PRD R-01-001 增 AC-09/AC-10、R-01-009 增 AC-13；SOLUTION 契约（两拒绝码）/收口评审语义/工具面守卫语义块/三模块条目；DOMAIN「工具面守卫」词条 + 两条不变量（fail-open 与空清单放宽已补注）；RATIONALE C-025；TODO 第二递归向量缺陷线索关闭。
+- 测试: 全套件 `npm test` 307/307 通过（基线 283→306 实现、306→307 复审锚点）。新增锚点：`test/tool-guard.test.js`（soft 拒绝/硬模式全拒/登记表防线纵深/fail-open/时序缝/未启用放行/mode 未定义归一/reason 三点/计数）与 `test/reviewer-classifier.test.js`（判定/缓存/失败重判/空清单/多会话隔离）；`test/ask-advisor.test.js` 守卫短路接线与拒绝码渲染；`test/guidelines.test.js` hard 停用与 mode 归一；`test/index.test.js` 接线级守卫回归（软模式审核子会话被拒且主会话照常、硬模式全拒零咨询）。`agentmap_lint` / `anchor_coverage`（prd-ac=93 全锚定）/ `expected_fail_check`（executed=307）三道门禁通过。
+- SOLUTION 对照: R-01-001/AC-09（审核类与顾问子会话工具拒绝）与 AC-10（hard 全拒）由 lib/tool-guard.js 兑现；R-01-009/AC-13（hard 守则停用且状态呈现如实）由 guidelinesActive 谓词单点兑现——工厂与 status/gates 呈现共用判定；评审对象语义（顾问/审核类子会话不评审）与 DOMAIN 不变量一致。SOLUTION 与实现对照无差异。
+- commit: 344feba —— 实现提交（map 演进 + 守卫 + 分类器 + 测试）；7765365 —— 双轴审核收口提交（共享谓词、reason 替代路径、文档损伤修复）；1a81aa5 —— 复审 polish 提交（mode 归一锚点用例、排版）。
+- review:
+  - 审核方: code-review skill 双轴并行子代理（Standards 轴、Spec 轴，各自独立会话）；复审由同一双方执行。
+  - 目的理解: 收口评审豁免只覆盖 turn-stopping 缝，工具入口无判定——审核类子会话自咨询构成元评审（homelab 实测取证），硬模式主动咨询与收口评审结构性重叠成双重评审（C-021 仅去重同一收口事件）；修复须守住非阻断不变量（守卫失败放行、拒绝仅为当次失败值）与素材出境唯一通道（拒绝路径不发起咨询、无新数据流）。
+  - 执行方式: code-review skill——两轴并行（ Standards：AGENTS.md 工程原则 + CONVENTIONS + SOLUTION 横切约束 + DOMAIN 不变量 + Fowler 基线；Spec：T-026 task + PRD AC + C-025 决策），基线 95dc666。
+  - 问题与修复: Standards①commands.js 字面量 `'hard'` 违反 canonical term → guidelinesActive 谓词单点收编三处（7765365）；Standards②test 行损坏（执行方自查发现）→ 分行修复（7765365）；Spec①SESSION_EXEMPT reason 第三点为停止指令非替代路径 → 改为可执行替代路径并收紧断言（7765365）；Spec②「共用谓词」表述未字面落地 → guidelinesActive 落地消除三处副本与 undefined-mode 语义分叉（7765365）；Spec③turn-review.js JSDoc 重复块 → 删除（7765365）；复审 n2 mode 归一分支缺锚点 → 两侧各补用例（1a81aa5）。判断项裁量保留：Middle Man（forgetSession 单行委托——维持 dispose 接线缝）、Speculative Generality（guard 可选注入——钉住工具级单测契约）、n1 归一式双份不合并（守则生效与工具面关闭概念不同）——复审双方均认可。
+  - 复审结论: 两轴复审通过——Standards 轴「四项闭环、保留处置同意、无阻断新发现」；Spec 轴「四项技术发现闭环、无阻塞可关闭」。唯一行为变化（mode 未定义归一 hard）方向与 R-01-009/AC-02 一致且记残余风险。
 
 ## 残余风险
 
