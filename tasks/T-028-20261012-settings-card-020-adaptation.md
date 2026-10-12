@@ -6,7 +6,7 @@ id: T-028
 # T-028 dsh 0.2.0 设置卡适配（Config 导出 + plugins.row.config 挂点）
 
 风险等级: standard
-状态: active
+状态: completed
 关联: R-02-001（配置与状态服务）、T-027（边界后继）、TODO.md 0.2.0 设置卡适配条目；东家 2026-10-12 会话直接指令（查证 dsh 0.2.0 新插件配置机制并适配 advisor-flow；m00002）
 
 ## 背景与目标
@@ -71,4 +71,42 @@ id: T-028
 
 ## 终态与证据
 
-（待填）
+- 实现: Config 导出、17 键 volatile schema、cell 解包、loader/volatile-update 桥、settings.update 投影写缝、plugins.row.config 挂点、root 级保存委托与键盘激活路径。
+- 测试: node --test 317 例全绿（门禁计口径 316，baselineExecuted=316）；staging 五判据全过：卡片出现、表单回显、保存落盘、live 双向、会话正常。
+- SOLUTION 对照: SOLUTION 六处目标态已同步（架构与部署视图、命名空间头、配置与状态服务模块、web 设置卡模块、接缝清单），实现与 :505-517、:534-543 一致，决策见 C-026。
+- review:
+  - 审核方: code-review skill 双轴独立子代理，Standards 与 Spec 各一
+  - 目的理解: 0.2.0 SettingsForms 下恢复设置卡挂载、Config 导出驱动的 describe/update 写缝与 live re-apply；传输通道不变；零宿主补丁；校验单点在 config.js
+  - 执行方式: 双轴并行四轮——主范围 d59b878..a937171；delta 9c90d63..378da24、378da24..17056e5、17056e5..4d7d25c
+  - 问题与修复: F1-F5 与 S1-S7 修复见 9c90d63；键盘回归、换树序列失真、锚点误指、账本失实见 17056e5；重试角色串扰见 4d7d25c
+  - 复审结论: 末轮 Standards 硬违例零、Spec 通过；残余判断题两项记账
+- commit: a937171
+  - 9c90d63 双轴修复
+  - 378da24 保存按钮按下-抬起委托
+  - 17056e5 键盘激活与换树收口
+  - 4d7d25c 重试角色类分离
+
+### 实现要点
+
+- `lib/settings.js`：AdvisorFlowConfigSchema 17 顶层键全 `z.any().volatile()`；`unwrapVolatileConfig` 解包 cosmokit volatile cell；`projectSchemaKeys` 顶层声明键投影；`installAdvisorFlowSettings` 挂 `loader/volatile-update` 触发 notify。
+- `lib/index.js`：named 导出 `Config` 并挂 default export；entry config 读取统一经解包；settings 桥同步装配，写缝经 `whenServiceAvailable('settings')` 走 `settings.update(ns, projectSchemaKeys(...))`；`degradations.settingsSection` 仅承载桥装配意外失败。
+- `lib/client/index.js`：挂点改 keyed 槽 `plugins.row.config`，key `dsh-advisor-flow#advisor-flow`；`view:'summary'` 渲染一行摘要、`view:'page'` 渲染全卡。
+- `lib/client/render.js`：footer 保存/放弃改 root 级按下-抬起委托，blur 重绘换树不吞首次保存点击；键盘激活经合成 click detail=0 路径；重试按钮独立角色类 `advisorflow_retry`。
+- `package.json`：`dsh.compat.seams` 换 settings.update volatile 写缝、plugins.row.config 槽、loader/volatile-update；client inject 与 peer 对齐 dsh-client-ui-plugin-manager。
+
+### staging 实测
+
+环境：dsh-activity-pane/.staging 的 dsh 0.2.0-rc.2，端口 3086，浏览器逐项。
+- 判据① 插件管理页 dsh-advisor-flow 行出现 Configure 控件；卡片打开且完整渲染。
+- 判据② 表单回显 profile 行配置真实值：soft、豁免关键词、gpu/glm-5.3-flash、阈值 3、block-tool。
+- 判据③ 编辑循环门阈值 → 保存 → `cordis.patch.yml` 落盘新值、徽标清零、advisor-flow/set 返回 200。
+- 判据④ live 双向：`settings/update` 42000 → gateway get 返回 42000 → 恢复 15000。
+- 判据⑤ 会话正常回合 Completed，插件 enabled 无回归。
+- 途中发现并修复缺陷：blur 重绘换树吞首次保存点击（378da24 + 17056e5）。
+
+### 残余风险与后续
+
+- P1 建议后续补：error 态重试按钮的 root 委托 detail=0 行为例；现以角色类分离断言承载。
+- P2 既有：错误卡用例锚 R-02-003/AC-02 系 T-005 时期搭挂，非本 task 引入。
+- 宿主导入竞态：0.2.0 settings.yaml 一次性导入与插件 fiber 装载存在时序缺口，属宿主侧事项；恢复路径 `settings/update` 重放 `.imported` 节已实证。
+- 生产 profile 迁移由东家经新设置卡手填，本 task 不写 `~/.dsh/profiles/web/`。
