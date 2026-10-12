@@ -32,3 +32,5 @@ owner: 双方
 - [维护想法] 清理 map 存量风格 warning（68 条，agentmap lint 全量扫描常驻打印；涉及 PRD/SOLUTION/DOMAIN/TODO，逐条拆分列表或改写收敛；2026-10-08 bootstrap 升级后登记）
 - [维护想法] skill 单元测试未在 Python 3.7.9 兼容下限实跑（本机仅 3.12；agentmap hook 工具声称 3.7.9+ 标准库兼容，静态核查无 3.8+ 语法，动态验证缺口待补；2026-10-08 bootstrap 升级时登记）
 - [维护想法] 证据指针修复的语义后继校验增强：替换后的提交正文应引用对应 task 的 T-ID（git cat-file 可机械判定，成本低）——收窄「悬空哈希可被替换为任意可达提交」的反查链降级面（C-019 复审建议登记）
+- [维护想法] 0.2.0 设置卡适配（T-019 边界后继）：0.2.0 SettingsForms 需插件模块导出 schemastery `Config` schema（设置卡由 profile entry config 经 describe/update 驱动，installSection 已移除）；需新建 Config 导出 + 同步 SOLUTION/RATIONALE（dsh-advisor 同病可共享模式）
+- [缺陷线索] loop gate 干预循环：非反应执行者（重复同一工具调用且不响应建议）+ 空预算时，门「检测→咨询→steer→放行重计数」可无限循环（0.2.0 审计环境实测 1029 次干预/单会话；0.1.5 逻辑相同、从未共测）——候选处置：每会话干预数上限/冷却/预算默认值；生产建议先配 budget 非空（T-019 残余风险登记）
