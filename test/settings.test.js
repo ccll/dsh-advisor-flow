@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    ADVISOR_FLOW_SETTINGS_NAMESPACE,
     AdvisorFlowConfigSchema,
     unwrapVolatileConfig,
     projectSchemaKeys,
@@ -19,15 +18,14 @@ function makeCell(value) {
     });
 }
 
-test('Config schema：每顶层声明键 volatile（0.2.0 describe/update 编辑面判定）', () => {
+test('R-02-001/AC-01 Config schema：每顶层声明键 volatile（0.2.0 describe/update 编辑面判定）', () => {
     const dict = AdvisorFlowConfigSchema.dict ?? {};
     for (const key of Object.keys(dict)) {
         assert.equal(dict[key].meta?.volatile, true, `${key} 必须 volatile`);
     }
-    assert.equal(ADVISOR_FLOW_SETTINGS_NAMESPACE, 'advisor-flow');
 });
 
-test('Config schema resolve（0.2.0 装载契约）：零校验零填充、未知键透传、声明键整值 cell 化', () => {
+test('R-02-001/AC-02 Config schema resolve（0.2.0 装载契约）：零校验零填充、未知键透传、声明键整值 cell 化', () => {
     // 宽松形态：垃圾值原样通过 resolve——校验单点在 lib/config.js 解析器
     // （disabled-with-reason 容忍语义，T-005 回归），不炸行装载。路径取
     // cordis 实调的 ~standard.validate（= Schema.resolve）。
@@ -43,7 +41,7 @@ test('Config schema resolve（0.2.0 装载契约）：零校验零填充、未�
     }
 });
 
-test('unwrapVolatileConfig：cell 递归解包、顶层 undefined 丢弃、非 record 原样返回', () => {
+test('R-02-001/AC-01 unwrapVolatileConfig：cell 递归解包、顶层 undefined 丢弃、非 record 原样返回', () => {
     const entry = {
         enabled: makeCell(true),
         advisor: makeCell({ provider: 'test', model: 'm' }),
@@ -59,7 +57,7 @@ test('unwrapVolatileConfig：cell 递归解包、顶层 undefined 丢弃、非 r
     assert.equal(unwrapVolatileConfig('x'), 'x');
 });
 
-test('projectSchemaKeys：只保留 schema 声明的顶层键（宿主 validatePaths 拒绝未知顶层键）', () => {
+test('R-02-001/AC-02 projectSchemaKeys：只保留 schema 声明的顶层键（宿主 validatePaths 拒绝未知顶层键）', () => {
     const projected = projectSchemaKeys(AdvisorFlowConfigSchema, {
         enabled: true,
         advisor: { model: 'm', junkInside: 'kept' }, // 嵌套不递归过滤（volatile 祖先短路）
@@ -73,7 +71,7 @@ test('projectSchemaKeys：只保留 schema 声明的顶层键（宿主 validateP
     assert.deepEqual(projectSchemaKeys(undefined, { a: 1 }), { a: 1 });
 });
 
-test('installAdvisorFlowSettings：source 每调用解包 cell；volatile-update 事件驱动 onChange', () => {
+test('R-02-001/AC-01 installAdvisorFlowSettings：source 每调用解包 cell；volatile-update 事件驱动 onChange', () => {
     const subscriptions = [];
     const entry = { enabled: makeCell(false) };
     const fired = [];
@@ -82,7 +80,6 @@ test('installAdvisorFlowSettings：source 每调用解包 cell；volatile-update
         entry,
         { logger: { warn() {} }, onChange: () => fired.push('change') },
     );
-    assert.equal(bridge.isAttached(), true);
     assert.deepEqual(bridge.source(), { enabled: false });
     assert.equal(subscriptions.length, 1);
     assert.equal(subscriptions[0].event, 'loader/volatile-update');

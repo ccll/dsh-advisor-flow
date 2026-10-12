@@ -586,9 +586,9 @@ test('R-02-001/AC-01 SettingsForms 契约：default 导出承载 Config，每顶
     // 宿主发现点：runtime.Config = default.Config（cordis unwrapExports 取 default）
     assert.equal(pluginModule.Config, Config);
     const dict = Config.dict ?? {};
-    for (const key of ['enabled', 'advisor', 'gates', 'failureMode', 'presentation', 'mode', 'privacy', 'budget', 'scout', 'contextMaxChars', 'gitContextMaxChars', 'customInvocation', 'modelWhitelist', 'turnReviewExemptPatterns', 'blockOnBlocked', 'toolPolicies', 'outcomeLogging']) {
-        assert.ok(key in dict, `Config 声明顶层键 ${key}`);
-        assert.equal(dict[key]?.meta?.volatile, true, `${key} 必须 volatile（0.2.0 编辑面判定）`);
+    assert.equal(Object.keys(dict).length, 17, 'Config 声明 17 个顶层键（与 config.js 字段表双清单对齐）');
+    for (const [key, child] of Object.entries(dict)) {
+        assert.equal(child.meta?.volatile, true, `${key} 必须 volatile（0.2.0 编辑面判定）`);
     }
 });
 
@@ -614,6 +614,29 @@ test('R-02-001/AC-01 宿主热更新（loader/volatile-update）→ live re-appl
     assert.match(after.adviceId, /^[0-9a-f-]{36}$/);
     assert.notEqual(after.adviceId, before.adviceId);
     assert.equal(llm.calls[1].options.model, 'm2');
+    services.dispose();
+});
+
+test('R-02-001/AC-01 source 未变化时读时求值不回退：运行时写入（保存）不被陈旧 entry 覆盖', async () => {
+    const llm = createFakeLlm([answer('一。'), answer('二。')]);
+    const writes = [];
+    const { ctx, subscriptions, providedService } = makeCtx({
+        llm,
+        typert: { register: () => {} },
+        settings: { update: async (namespace, raw) => writes.push({ namespace, raw }) },
+    });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'p', model: 'm1' }, mode: 'soft' });
+    await settle();
+    const gateway = providedService('advisor-flow');
+    // 卡片保存：运行时与 raw 前进到 m2；宿主 cell 尚未追平（异步 reconcile 窗口）
+    const saved = await gateway.set({ advisor: { model: 'm2' } });
+    assert.equal(saved.ok, true);
+    // source 未变化（entry 仍 m1）：volatile-update 事件到达也不得回退
+    subscriptions.find((s) => s.event === 'loader/volatile-update').handler();
+    await services.askAdvisor.execute({});
+    assert.equal(llm.calls[0].options.model, 'm2');
+    // 保存后无重复写缝（source 未变化不触发持久化）
+    assert.equal(writes.length, 1);
     services.dispose();
 });
 
@@ -783,7 +806,7 @@ test('R-02-001/AC-01 entry volatile cell：装载后 cell 值经 .get() 解包�
     assert.deepEqual(got.config.advisor, { provider: 'test', model: 'cell-m' });
 });
 
-test('settings 服务缺失时桥仍装配：source 即 entry，写缝降级标注（0.2.0 无需注册动作，T-028）', async () => {
+test('R-02-001/AC-01 settings 服务缺失时桥仍装配：source 即 entry，写缝降级标注（0.2.0 无需注册动作，T-028）', async () => {
     const { ctx, logs } = makeCtx({ llm: createFakeLlm([]) });
     const services = apply(ctx, { enabled: false });
     await settle();

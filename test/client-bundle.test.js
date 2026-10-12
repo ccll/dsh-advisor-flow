@@ -18,7 +18,7 @@ test('client bundle 是经典脚本（closure-factory CJS），无裸 ESM', () =
     assert.doesNotThrow(() => new Function(text));
 });
 
-test('T-028 挂载：工厂执行后 apply 在 plugins.row.config keyed 槽注册行配置卡', () => {
+test('R-02-001/AC-01 T-028 挂载：工厂执行后 apply 在 plugins.row.config keyed 槽注册行配置卡', () => {
     const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
     assert.ok(!text.includes('settings.plugin.item'), '旧挂点已退役（0.2.0 全宿主零引用）');
     let loaded;
