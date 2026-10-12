@@ -264,7 +264,12 @@ test('R-02-001/AC-01 卡片编辑经 set 保存成功：patch 提交、raw 吸�
     controller.setField('enabled', true);
     const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
     assert.equal(save.attrs.disabled, undefined); // 校验通过 → 可保存
-    await save.listeners.click[0]();
+    // 保存动作经 root 级按下-抬起委托（真实宿主上 blur 重绘换树仍可靠）
+    const root = container.children[0];
+    assert.ok(root, '卡片 root 存在');
+    root.listeners.mousedown[0]({ target: save });
+    await root.listeners.mouseup[0]({ target: save });
+    await pump(); // 委托内 IIFE 异步落库
     const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
     assert.ok(setCall);
     assert.equal(setCall.payload.args.patch.advisor.model, 'm2');
@@ -909,7 +914,34 @@ test('R-02-001/AC-12 未保存徽标：放弃修改与保存成功后消失', as
     controller.setField('advisor.model', 'm2');
     assert.equal(badges().length, 1);
     const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisor-flow-save'));
-    await save.listeners.click[0]();
+    const root2 = container.children[0];
+    root2.listeners.mousedown[0]({ target: save });
+    await root2.listeners.mouseup[0]({ target: save });
+    await pump();
     assert.equal(controller.getState().dirty, false);
     assert.equal(badges().length, 0, '保存成功后徽标消失');
+});
+
+test('R-02-001/AC-09 blur 重绘发生在按下-抬起之间时保存仍生效（root 级委托兜底）', async () => {
+    const { controller, container, rpc } = await renderedCard();
+    expandCard(container);
+    const root = container.children[0];
+    assert.ok(root, '卡片 root 存在');
+    // 编辑 loop 阈值（change → setField → emit → 重绘，等同 blur 链）
+    const loopInput = findById(container, 'advisor-gate-loop-threshold');
+    assert.ok(loopInput, 'loop 阈值输入存在');
+    loopInput.listeners.change[0]({ target: { value: '7' } });
+    assert.equal(controller.getState().patch.gates.loop.threshold, 7, '编辑已入 patch');
+    // 按下（旧按钮）→ 重绘换树 → 抬起落在重建后的同位新按钮：仍须保存
+    const oldSave = byTag(root, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
+    assert.ok(oldSave, '保存按钮存在');
+    root.listeners.mousedown[0]({ target: oldSave });
+    const newSave = byTag(root, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
+    assert.ok(newSave, '重绘后保存按钮存在');
+    root.listeners.mouseup[0]({ target: newSave });
+    await pump();
+    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
+    assert.ok(setCall, '委托路径提交了保存');
+    assert.equal(setCall.payload.args.patch.gates.loop.threshold, 7, 'blur 期间暂存的编辑随保存提交');
+    assert.equal(controller.getState().dirty, false, '保存后 dirty 清除');
 });
