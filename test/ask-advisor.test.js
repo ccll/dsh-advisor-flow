@@ -64,7 +64,8 @@ test('R-01-001/AC-03 失败后执行者可重试：下一次工具调用单次�
     assert.ok(retried.text.includes('重试成功'));
 });
 
-test('R-01-001 工具参数校验：非法参数返回错误结果而不进入咨询', async () => {    const llm = createFakeLlm([answer('ok')]);
+test('R-01-001 工具参数校验：非法参数返回错误结果而不进入咨询', async () => {
+    const llm = createFakeLlm([answer('ok')]);
     const engine = createConsultationEngine({ llm, config: config(), logger: quietLogger });
     const tool = createAskAdvisorTool({ engine });
 

@@ -51,7 +51,7 @@ test('R-01-001/AC-09 软模式拒绝审核类子会话：共享分类器阳性�
     // reason 三点：属预期 / 勿重试 / 替代路径（模型面英文）。
     assert.ok(refusal.reason.includes('This refusal is expected'));
     assert.ok(refusal.reason.includes('do not retry ask_advisor'));
-    assert.ok(refusal.reason.includes('without advisor consultation'));
+    assert.ok(refusal.reason.includes('advisor consultation remains available to the main session'));
     assert.ok(logs.info.some((row) => row.message.includes('ask_advisor refused — SESSION_EXEMPT')));
 });
 

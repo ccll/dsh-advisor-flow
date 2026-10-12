@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GUIDELINE_TEXTS, GUIDELINE_CLOSING, GUIDELINE_HEADER, guidelineTextFactory, installAdvisorGuidelines } from '../lib/guidelines.js';
 
-/** 活配置构造器：三类守则开关独立可切。 */
+/** 活配置构造器：三类守则开关独立可切（mode 缺省 soft——守则注入属软模式能力，C-025）。 */
 function config(overrides = {}) {
     return {
         enabled: overrides.enabled === undefined ? true : overrides.enabled,
+        mode: overrides.mode ?? 'soft',
         advisor: { provider: 'test', model: 'test-model' },
         modelWhitelist: [],
         customInvocation: overrides.customInvocation,
@@ -89,10 +90,10 @@ test('R-01-003/AC-02 守则全关、功能未启用或 agentless 组装时求值
     assert.equal(render(undefined), '');
     assert.equal(render({ agent: {} }), '');
     assert.equal(guidelineTextFactory(() => ({ enabled: false, gates: { plan: { enabled: true } } }))({ agent: {} }), '');
-    const allOff = { enabled: true, gates: { plan: { enabled: false }, failure: { enabled: false }, completion: { enabled: false } } };
+    const allOff = { enabled: true, mode: 'soft', gates: { plan: { enabled: false }, failure: { enabled: false }, completion: { enabled: false } } };
     assert.equal(guidelineTextFactory(() => allOff)({ agent: {} }), '');
     // R-01-004/AC-02 / R-01-006/AC-02：单门禁用时该行缺席（其余守则仍在）
-    const onlyPlan = { enabled: true, gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
+    const onlyPlan = { enabled: true, mode: 'soft', gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
     const onlyPlanText = guidelineTextFactory(() => onlyPlan)({ agent: {} });
     assert.ok(!onlyPlanText.includes('materially equivalent failed attempts'), '失败守则禁用→不含失败守则行');
     assert.ok(onlyPlanText.includes(GUIDELINE_TEXTS.plan), '其余守则不受影响');
@@ -101,7 +102,7 @@ test('R-01-003/AC-02 守则全关、功能未启用或 agentless 组装时求值
 });
 
 test('R-01-004/AC-02 与 R-01-006/AC-02 禁用锚定：逐门禁用时该门守则行不出现，其余守则照常', () => {
-    const onlyPlan = { enabled: true, gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
+    const onlyPlan = { enabled: true, mode: 'soft', gates: { plan: { enabled: true }, failure: { enabled: false }, completion: { enabled: false } } };
     const text = guidelineTextFactory(() => onlyPlan)({ agent: {} });
     assert.ok(text.includes(GUIDELINE_TEXTS.plan));
     assert.ok(!text.includes(GUIDELINE_TEXTS.failure));

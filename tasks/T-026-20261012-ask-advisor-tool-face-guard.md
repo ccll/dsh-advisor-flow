@@ -51,7 +51,8 @@ id: T-026
   - guard 未注入时行为不变（向后兼容既有单测）。
 - `lib/turn-review.js`：改注入共享 `classifier`（替换内嵌豁免缓存）。
   - `getEvents` 缝移交分类器；`forgetSession` 委托分类器。
-- `lib/guidelines.js`：`mode === 'hard'` 时守则族求值为空串（R-01-009/AC-13）。
+- `lib/guidelines.js`：hard 模式守则族求值为空串（R-01-009/AC-13）。
+  - 判定谓词 `guidelinesActive`（lib/config.js）单点承载，status/gates 呈现共用——mode 缺省随 DEFAULT_INTERVENTION_MODE 归一。
 - `lib/status.js`：快照新增 `toolFaceStats`（访问器不可得时 undefined，同 turnReviewStats 口径）。
 - `lib/commands.js`：`/advisor status` 增工具面拒绝行；`/advisor gates` 回读在 hard 模式注明三类守则停用。
 - `lib/index.js` 接线：创建共享分类器（getSessionEvents + config getter）。
@@ -96,3 +97,12 @@ id: T-026
 ## 终态与证据
 
 （关闭时填写）
+
+## 残余风险
+
+- 豁免清单为空（`turnReviewExemptPatterns: []`）时工具面对审核类子会话的拒绝随之关闭——AC-09 在该合法配置下不成立。
+  - DOMAIN 不变量已记「判定失败放行（fail-open）与豁免清单为空是仅有的两处放宽」。
+  - 清空清单即显式关闭豁免判定面，属会话主裁量（与收口评审豁免同键同语义）。
+- 守卫对 mode 未定义的配置按 DEFAULT_INTERVENTION_MODE（hard）归一。
+  - 生产配置经解析器恒有 mode（config.js:310 缺省填充），该路径仅测试直接构造时可达。
+  - 与守则停用谓词、状态呈现同一缺省语义；未定义 mode 不构成 fail-open 旁路。

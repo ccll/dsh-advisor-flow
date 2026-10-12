@@ -258,6 +258,7 @@ test('R-01-003/004/006 守则文本随活配置求值：守则全关时整段不
         enabled: true,
         advisor: { provider: 'test', model: 'm' },
         gates: { plan: { enabled: false }, failure: { enabled: false }, completion: { enabled: false } },
+        mode: 'soft', // 隔离守则停用变量：本用例只验证全关路径（hard 停用另有 AC-13 用例）
     });
     const spec = sectionSpecs[0];
     assert.equal(spec.text({ agent: {} }), ''); // 全关 → 空串（守则整段不注入）
