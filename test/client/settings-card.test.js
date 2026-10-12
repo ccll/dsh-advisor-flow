@@ -922,7 +922,7 @@ test('R-02-001/AC-12 未保存徽标：放弃修改与保存成功后消失', as
     assert.equal(badges().length, 0, '保存成功后徽标消失');
 });
 
-test('R-02-001/AC-09 blur 重绘发生在按下-抬起之间时保存仍生效（root 级委托兜底）', async () => {
+test('R-02-001/AC-12 按下-抬起之间重绘换树时保存仍生效（root 级委托兜底）', async () => {
     const { controller, container, rpc } = await renderedCard();
     expandCard(container);
     const root = container.children[0];
@@ -932,16 +932,42 @@ test('R-02-001/AC-09 blur 重绘发生在按下-抬起之间时保存仍生效�
     assert.ok(loopInput, 'loop 阈值输入存在');
     loopInput.listeners.change[0]({ target: { value: '7' } });
     assert.equal(controller.getState().patch.gates.loop.threshold, 7, '编辑已入 patch');
-    // 按下（旧按钮）→ 重绘换树 → 抬起落在重建后的同位新按钮：仍须保存
+    // 按下（旧按钮）→ 换树 → 抬起落在重建后的同位新按钮：仍须保存
     const oldSave = byTag(root, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
     assert.ok(oldSave, '保存按钮存在');
     root.listeners.mousedown[0]({ target: oldSave });
+    // 按住期间再次 change：真实浏览器中 blur 重绘正好落在按下-抬起之间
+    loopInput.listeners.change[0]({ target: { value: '8' } });
     const newSave = byTag(root, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
     assert.ok(newSave, '重绘后保存按钮存在');
+    assert.notEqual(newSave, oldSave, '换树后按钮为重建节点（复现换树序列）');
     root.listeners.mouseup[0]({ target: newSave });
     await pump();
     const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
     assert.ok(setCall, '委托路径提交了保存');
-    assert.equal(setCall.payload.args.patch.gates.loop.threshold, 7, 'blur 期间暂存的编辑随保存提交');
+    assert.equal(setCall.payload.args.patch.gates.loop.threshold, 8, '换树期间暂存的编辑随保存提交');
     assert.equal(controller.getState().dirty, false, '保存后 dirty 清除');
+    const badges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
+    assert.equal(badges().length, 0, '保存完成后未保存徽标消失（AC-12）');
+});
+
+test('R-02-001/AC-12 键盘激活保存（合成 click detail=0）与鼠标 click 不重入', async () => {
+    const { controller, container, rpc } = await renderedCard();
+    expandCard(container);
+    const root = container.children[0];
+    controller.setField('advisor.model', 'm2');
+    assert.equal(controller.getState().dirty, true);
+    const save = byTag(root, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
+    // 键盘激活：Enter/Space 派发 detail=0 的合成 click，无按下-抬起序列
+    await root.listeners.click[0]({ target: save, detail: 0 });
+    await pump();
+    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
+    assert.ok(setCall, '键盘路径提交了保存');
+    assert.equal(setCall.payload.args.patch.advisor.model, 'm2');
+    assert.equal(controller.getState().dirty, false, '键盘保存后 dirty 清除');
+    // 鼠标 click（detail≥1）不在此重入：按下-抬起委托已处理，二次执行必须被拒
+    const before = rpc.calls.length;
+    await root.listeners.click[0]({ target: save, detail: 1 });
+    await pump();
+    assert.equal(rpc.calls.length, before, '鼠标 click 不经键盘路径重入');
 });
