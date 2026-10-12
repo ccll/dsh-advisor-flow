@@ -101,6 +101,13 @@ test('R-01-001/AC-10 未启用（enabled=false）放行：沿用引擎禁用路�
     assert.equal(await guard('main-1'), undefined);
 });
 
+test('R-01-001/AC-10 mode 未定义归一缺省（hard）：不构成 fail-open 旁路（C-025）', async () => {
+    const cfg = { enabled: true, turnReviewExemptPatterns: ['review'] }; // 无 mode 键
+    const { guard } = makeGuard({ config: cfg, classifier: { isReviewerSubsession: async () => false } });
+    const refusal = await guard('main-1');
+    assert.equal(refusal.code, TOOL_FACE_CLOSED_CODE); // 归一 hard：拒绝而非放行
+});
+
 test('R-01-001/AC-10 时序缝：盘上 mode 切换后首次调用按新档位判定（applyConfig 先于判定）', async () => {
     // 复刻接线时序：config getter 读活变量；applyConfig 模拟 applyFromSource
     // 从盘上刷新该变量。守卫若未先刷新，首次调用将按旧 mode 放行。
