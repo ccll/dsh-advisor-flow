@@ -113,3 +113,41 @@ test('R-02-001/AC-01 槽未声明时注册重试且不阻塞激活（手机端�
     assert.equal(typeof applied.refresh, 'function');
 });
 
+test('R-02-001/AC-01 非时序注册错误降级告警且不重试不阻塞激活', async () => {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    let loaded;
+    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
+    new Function('window', text)(windowStub);
+
+    const React = {
+        Fragment: 'Fragment',
+        createElement: (type, props) => ({ type, props }),
+        useRef: (initial) => ({ current: initial }),
+        useEffect: () => {},
+    };
+    const warnings = [];
+    const scheduled = [];
+    const slots = {
+        register: () => {
+            throw new Error('boom: unexpected slot failure');
+        },
+    };
+    const ctx = {
+        logger: () => ({ warn: (message) => warnings.push(String(message)), info() {}, debug() {}, error() {} }),
+        connection: { rpc: {} },
+        slots,
+        setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+    };
+    const mod = loaded.factory((id) => {
+        if (id === 'react') {
+            return React;
+        }
+        throw new Error(`unexpected require: ${id}`);
+    });
+    const applied = mod.apply(ctx);
+    assert.equal(scheduled.length, 0, '非时序错误不安排重试');
+    assert.equal(warnings.length, 1, '降级告警恰好一条');
+    assert.match(warnings[0], /boom/, '告警携带原始错误文本');
+    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回——boot 不受累');
+});
+
