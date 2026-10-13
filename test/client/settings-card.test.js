@@ -934,3 +934,14 @@ test('R-02-001/AC-12 键盘激活保存（合成 click detail=0）与鼠标 clic
     await pump();
     assert.equal(form.mutations.length, before, '鼠标 click 不经键盘路径重入');
 });
+
+test('R-02-001/AC-01 控制器 dispose 后订阅终止：publish 与宿主旧引用 load 均不复活已弃控制器', async () => {
+    const { card, controller, form } = await renderedCard();
+    const before = controller.getState().config;
+    controller.dispose();
+    form.publish('ready', structuredClone(RAW), { writable: true }); // 外部快照变更
+    assert.deepEqual(controller.getState().config, before, 'dispose 后外部快照不再渗入状态');
+    card.refresh(); // 宿主持旧引用 refresh→load（renderSettingsCard 返回 {refresh}）
+    assert.deepEqual(controller.getState().config, before, 'dispose 后 load 不复活订阅');
+    assert.equal(controller.getState().dirty, false);
+});

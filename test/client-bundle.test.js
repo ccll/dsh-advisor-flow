@@ -85,7 +85,7 @@ test('R-02-001/AC-01 T-030 挂载：configForms 管线 + whileServed 门控注�
     assert.equal(injected.length, 1, 'whileServed served 后注册 keyed 槽');
     assert.equal(injected[0].name, 'plugins.bundle.config', '挂点=bundle 配置页（dsh-context 同构）');
     assert.equal(registered[0].options.key, 'dsh-advisor-flow', 'key=包名（宿主契约 entryKey=包名）');
-    assert.equal(registered[0].options.locale, undefined, 'locale 未声明即不注册（F3：卡片零 locale 消费）');
+    assert.equal(registered[0].options.locale, undefined, 'locale 未声明即不注册（F2：卡片零 locale 消费）');
     assert.equal(registered[0].options.name, 'plugins.bundle.config');
     assert.equal(typeof registered[0].component, 'function');
     assert.equal(typeof applied.refresh, 'function');

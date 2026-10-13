@@ -322,7 +322,7 @@ test('R-02-001/AC-01 回执三态：persisted / 写失败专属文案 / 缺失�
     );
 });
 
-test('R-02-001/AC-01 persistError 字段随失败回执透出（卡片原因摘要的载体）', async () => {
+test('R-02-001/AC-01 persistError 字段随失败回执透出（服务端 API face 语义，卡侧已不消费信封）', async () => {
     const { gateway } = createGatewayFixture({
         persist: async () => {
             throw new Error('yaml write failed');
