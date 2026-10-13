@@ -32,12 +32,8 @@ test('R-02-001/AC-01 T-028 挂载：工厂执行后 apply 在 plugins.row.config
         useRef: (initial) => ({ current: initial }),
         useEffect: () => {},
     };
-    const slotCalls = [];
     const registrations = [];
     const slots = {
-        inject: (name, thunk) => {
-            slotCalls.push({ name, thunk });
-        },
         register: (options, component) => {
             registrations.push({ options, component });
             return Promise.resolve(() => {});
@@ -56,11 +52,8 @@ test('R-02-001/AC-01 T-028 挂载：工厂执行后 apply 在 plugins.row.config
     });
     assert.equal(typeof mod.apply, 'function');
     const applied = mod.apply(ctx);
-    assert.equal(slotCalls.length, 1, '同步注册 keyed 槽');
-    assert.equal(slotCalls[0].name, 'plugins.row.config');
-    // 宿主契约模板：thunk → register(options, component)
-    slotCalls[0].thunk();
-    assert.equal(registrations.length, 1);
+    // 直接同步注册（不等槽声明——等声明会 park 激活，慢设备输给 boot 门审计竞态）
+    assert.equal(registrations.length, 1, 'apply 内直接注册 keyed 槽');
     assert.equal(registrations[0].options.name, 'plugins.row.config');
     assert.equal(registrations[0].options.key, 'dsh-advisor-flow#advisor-flow');
     assert.equal(typeof registrations[0].component, 'function');
@@ -73,3 +66,50 @@ test('R-02-001/AC-01 T-028 挂载：工厂执行后 apply 在 plugins.row.config
     assert.equal(page.type, 'div');
     assert.equal(typeof page.props.ref, 'object');
 });
+
+test('R-02-001/AC-01 槽未声明时注册重试且不阻塞激活（手机端竞态回归）', async () => {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    let loaded;
+    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
+    new Function('window', text)(windowStub);
+
+    const React = {
+        Fragment: 'Fragment',
+        createElement: (type, props) => ({ type, props }),
+        useRef: (initial) => ({ current: initial }),
+        useEffect: () => {},
+    };
+    const registrations = [];
+    const scheduled = [];
+    let calls = 0;
+    const slots = {
+        register: (options, component) => {
+            calls += 1;
+            if (calls === 1) {
+                throw new Error('slot "plugins.row.config" is not declared (a parent entry\'s children table must declare it)');
+            }
+            registrations.push({ options, component });
+            return Promise.resolve(() => {});
+        },
+    };
+    const ctx = {
+        logger: () => ({ warn() {}, info() {}, debug() {}, error() {} }),
+        connection: { rpc: {} },
+        slots,
+        setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+    };
+    const mod = loaded.factory((id) => {
+        if (id === 'react') {
+            return React;
+        }
+        throw new Error(`unexpected require: ${id}`);
+    });
+    const applied = mod.apply(ctx);
+    assert.equal(registrations.length, 0, '未声明时不注册');
+    assert.equal(scheduled.length, 1, '安排了 timer 重试');
+    assert.equal(scheduled[0].ms, 200);
+    await scheduled[0].fn();
+    assert.equal(registrations.length, 1, '声明就绪后重试注册成功');
+    assert.equal(typeof applied.refresh, 'function');
+});
+
