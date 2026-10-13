@@ -14,7 +14,7 @@ import { createStatusProvider } from '../lib/status.js';
 import { createFakeLlm, answer, failure } from './helpers.js';
 
 /** Build a controller wired to a real engine + fake llm + recorder delivery. */
-function makeController({ raw = { enabled: true, advisor: { provider: 'test', model: 'm' } }, programs } = {}) {
+function makeController({ raw = { advisor: { provider: 'test', model: 'm' } }, programs } = {}) {
     const llm = createFakeLlm(programs ?? [answer('手动评审意见。', { usage: { inputTokens: 7, outputTokens: 3 } })]);
     const config = resolveAdvisorFlowConfig(raw).config;
     const logs = { info: [], error: [] };
@@ -88,7 +88,6 @@ test('R-01-002/AC-02 手动咨询进行中状态可见且可取消，取消无�
 
 test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待处理、最近活动、用量摘要与降级项', async () => {
     const raw = {
-        enabled: true,
         advisor: { provider: 'gpu', model: 'glm-5.3-flash' },
         gates: { plan: { enabled: true }, failure: { enabled: true }, completion: { enabled: false }, loop: { enabled: true, threshold: 5 } },
         failureMode: 'block-tool',
@@ -119,8 +118,8 @@ test('R-02-003/AC-02 /advisor status 展示启用态、路由、门状态、待�
     assert.match(gates.text, /failureMode=block-tool/);
 });
 
-test('R-02-001/AC-03 enabled 但缺 provider/model 时命令面给出明确原因且状态可查询', async () => {
-    const { controller } = makeController({ raw: { enabled: true, advisor: { provider: 'p' } } });
+test('R-02-001/AC-03 顾问路由不完整（缺 model）时命令面给出明确原因且状态可查询（T-031/C-030 派生禁用）', async () => {
+    const { controller } = makeController({ raw: { advisor: { provider: 'p' } } });
     const registryCalls = [];
     registerAdvisorFlowCommands({ register: (spec) => registryCalls.push(spec) || (() => {}) }, controller);
     const manual = registryCalls.find((spec) => spec.name === 'advisor-manual');
@@ -214,7 +213,7 @@ test('R-01-002/AC-03 手动咨询失败：会话经唤醒式消息看到含原�
 });
 
 test('R-01-009/AC-10 status 与 gates 呈现介入强度与收口评审计数', () => {
-    const { controller } = makeController({ raw: { enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
+    const { controller } = makeController({ raw: { advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
     const snapshot = controller.snapshotFor('s1');
     const text = advisorStatusText({ ...snapshot, turnReviewStats: { triggers: 2, proceed: 1, revise: 1, blocked: 0, failed: 0, skipped: 0 } });
     assert.match(text, /介入强度: hard/);
@@ -228,7 +227,7 @@ test('R-01-009/AC-10 status 与 gates 呈现介入强度与收口评审计数', 
 });
 
 test('R-01-001/AC-09、R-01-009/AC-13 status 呈现工具面拒绝计数与 hard 模式守则停用注记（C-025）', () => {
-    const { controller } = makeController({ raw: { enabled: true, advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
+    const { controller } = makeController({ raw: { advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
     const snapshot = controller.snapshotFor('s1');
     // 拒绝计数：有访问器时呈现，无访问器时不呈现（非零值虚构禁令同口径）。
     const refusedText = advisorStatusText({ ...snapshot, toolFaceStats: { refused: 3, byCode: { SESSION_EXEMPT: 3 } } });

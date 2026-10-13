@@ -586,7 +586,7 @@ test('R-02-001/AC-01 SettingsForms 契约：default 导出承载 Config，每顶
     // 宿主发现点：runtime.Config = default.Config（cordis unwrapExports 取 default）
     assert.equal(pluginModule.Config, Config);
     const dict = Config.dict ?? {};
-    assert.equal(Object.keys(dict).length, 17, 'Config 声明 17 个顶层键（与 config.js 字段表双清单对齐）');
+    assert.equal(Object.keys(dict).length, 16, 'Config 声明 16 个顶层键（与 config.js 字段表双清单对齐；enabled 已退役，T-031）');
     for (const [key, child] of Object.entries(dict)) {
         assert.equal(child.meta?.volatile, true, `${key} 必须 volatile（0.2.0 编辑面判定）`);
     }
@@ -667,9 +667,10 @@ test('R-02-001/AC-01 持久写缝可得时：保存经 settings.update 写回 ad
     assert.equal(writes[0].raw.advisor.model, 'm2');
     assert.equal(writes[0].raw.advisor.maxTokens, 4096); // 兄弟键保留
     // 写缝投影（T-028）：宿主 validatePaths 拒绝 schema 外顶层键——补丁只含
-    // 声明键，未知键留在文档层（T-005 junk 保留语义不破坏）
+    // 声明键，未知键留在文档层（T-005 junk 保留语义不破坏）。enabled 已退役
+    // （T-031/C-030）：不再声明 → 与 customKey 同为未知键，被投影剥除。
     assert.equal('customKey' in writes[0].raw, false);
-    assert.equal('enabled' in writes[0].raw, true);
+    assert.equal('enabled' in writes[0].raw, false);
     assert.equal(services.status.snapshot().degradations.persistence, undefined);
 });
 

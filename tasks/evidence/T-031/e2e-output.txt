@@ -1,0 +1,18 @@
+① fieldset=6 aria-expanded 节点=3
+  header=Advisor Flow | 每次关键动作前由独立顾问模型评审并注入建议
+② banner=(no banner)
+③ provider=select(3 项)
+③ model=select(2 项)
+  保存回执=已保存并持久化。
+  reload 后 model=deepseek-v4-pro banner 数=0（路由齐备横幅应消失）
+④ footer position=sticky
+pageerror=0 
+console 警告/错误=0
+
+# 附注（同探针两次运行的差异记录）：
+# 首轮运行（af-home 尚未保存任何 advisor 路由时）② 行为：
+#   ② banner=advisor 未启用：缺少顾问提供方或模型——在下方补齐后保存即可启用
+#   保存链执行后（provider=DeepSeek, model=DeepSeek-V4-Pro 持久化），
+#   后续轮次 reload 回显 model=deepseek-v4-pro、横幅消失（AC-13 派生启用）。
+# 首启弹窗截图见 first-run-dialog.png（Configure later 关闭）；配置后详情页
+# 截图见 detail-configured.png（字段平铺常开、footer sticky）。

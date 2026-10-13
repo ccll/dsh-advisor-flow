@@ -4,7 +4,6 @@ import { advisorFlowTypertContribution, createConfigGateway, mergeAdvisorFlowCon
 import { SAVE_NOTICE_EPHEMERAL, SAVE_NOTICE_PERSISTED, SAVE_NOTICE_WRITE_FAILED } from '../lib/config.js';
 
 const BASE = {
-    enabled: true,
     advisor: { provider: 'p', model: 'm', maxTokens: 4096 },
     gates: { plan: { enabled: true }, loop: { enabled: true, threshold: 5 } },
     failureMode: 'warn-and-continue',
@@ -27,8 +26,8 @@ function makeGateway(raw = structuredClone(BASE)) {
 test('R-02-001/AC-01 gateway get/set 往返：合法 patch 即时生效于运行时配置', async () => {
     const { gateway, applied, getRaw } = makeGateway();
     const got = await gateway['advisor-flow/get']();
-    assert.equal(got.config.enabled, true);
-    assert.equal(got.resolved.enabled, true);
+    assert.equal('enabled' in got.config, false, 'raw 不再携带 enabled（派生语义，T-031）');
+    assert.equal(got.resolved.enabled, true); // provider/model 齐备 → 派生启用
 
     const result = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
     assert.equal(result.ok, true);
@@ -62,19 +61,21 @@ test('R-02-001/AC-02 gateway set 非法值被拒绝并返回解析器错误消�
     assert.equal(getRaw().advisor.maxTokens, 4096); // raw 不变
 });
 
-test('R-02-001/AC-03 enabled 但缺 provider/model 的保存被阻断并给出原因', async () => {
+test('R-02-001/AC-03 路由不完整不阻断保存：set 成功且配置派生为禁用（T-031/C-030），非法值仍拒绝', async () => {
     const { gateway, applied } = makeGateway();
     // 非法值路径：model: '' 未通过非空字符串校验
     const invalid = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: '' } } } });
     assert.equal(invalid.ok, false);
     assert.match(invalid.error, /advisor\.model/);
 
-    // 阻断路径：raw 已是 enabled+缺 model 的形态，set 尝试只改无关键也被阻断
-    const bare = makeGateway({ enabled: true, advisor: { provider: 'p' } });
-    const blocked = await bare.gateway['advisor-flow/set']({ args: { patch: { budget: { maxPerSession: 3 } } } });
-    assert.equal(blocked.ok, false);
-    assert.match(blocked.error, /缺少 advisor\.model/);
-    assert.equal(bare.applied.length, 0); // 阻断即不应用
+    // 派生路径：raw 缺 model 不再阻断保存——set 成功，解析出的配置派生为
+    // 禁用（enabled=false + reason），启用提示由卡片横幅承担（AC-13）。
+    const bare = makeGateway({ advisor: { provider: 'p' } });
+    const saved = await bare.gateway['advisor-flow/set']({ args: { patch: { budget: { maxPerSession: 3 } } } });
+    assert.equal(saved.ok, true);
+    assert.equal(saved.config.enabled, false);
+    assert.equal(saved.config.reason, 'missing-advisor-model');
+    assert.equal(bare.applied.length, 1); // 合法保存照常应用
 });
 
 test('R-02-001/AC-02 mergeAdvisorFlowConfig：section 按键合并、gates 按门合并，不抹兄弟键', () => {

@@ -368,13 +368,13 @@ flowchart TD
   - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 扩展项）。
 - **设置命名空间** `advisor-flow`（profile 行配置 entry config，宿主 SettingsForms 经模块 `Config` 导出驱动 describe/update（C-026）；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017；mode 默认 hard，C-022）：
-  - `enabled`（默认 false）、`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
+  - 咨询功能启用状态由配置派生：`advisor.provider` 与 `advisor.model` 齐备即启用，任一缺失即整体禁用且状态可查询（R-02-001/AC-03/AC-13；无独立启用开关）；settings.yaml 遗留 `enabled` 键按弃用处理——告警并忽略，停用走宿主插件级开关（C-030）。`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
   - `failureMode`：`block-tool`（默认；偏离 pi 0.8.2 的 block-session，记 C-017）/ `warn-and-continue` / `block-session`
   - `mode`：介入强度——`hard`（默认，回合收口前强制收口评审；偏离 pi 行为，C-022）/ `soft`（守则建议，pi 行为）。
-    - 设置卡中介入强度控件置于总开关紧下、高于其余选项（C-022）。
+    - 设置卡中介入强度控件置于表单首位、高于其余选项（C-022）。
     - 非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查。
   - `blockOnBlocked`（默认 true：blocked 决策时是否尽力停止当前执行）
   - `customInvocation`（可选字符串：自定义触发条件）
@@ -386,7 +386,7 @@ flowchart TD
 - `presentation`：`subagent`（默认；咨询经 `ctx.subagents.start` one-shot 顾问子会话发起，会话界面出现顾问子会话条目，R-02-007）/ `direct`（保持 llm.stream 直调，无子会话条目）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查；子会话缝缺失或发布前发起失败时自动降级 direct 并显性化（R-02-007/AC-03，运行时语义）
   - `budget.maxPerSession`（未配置 = 不限）
   - `outcomeLogging`（默认 false）
-  - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；缺 provider/model 时整体禁用且状态可查询。
+  - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；`enabled` 弃用键告警并忽略（启用派生，C-030）；缺 provider/model 时整体禁用且状态可查询。
 - **注入消息格式**：
   - 门命中预通告：`Automatic Advisor loop review`（含阈值说明，steer）。
   - 门结果：`**Decision: {proceed|revise|blocked}**
@@ -532,12 +532,13 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### web 设置卡
-- 职责: 插件管理页 Advisor Flow 配置卡（开关、模型、门矩阵、新配置键、隐私档位、风险提示），值流走宿主 configForms 管线（承接 R-02-001 的 GUI 面）
+- 职责: 插件管理页 Advisor Flow 配置卡（模型路由、门矩阵、新配置键、隐私档位、风险提示），值流走宿主 configForms 管线（承接 R-02-001 的 GUI 面）
 - 关键内部结构: 挂点为插件管理页 keyed 槽 `plugins.bundle.config`（key = 包名 = `dsh-advisor-flow`；与 dsh-context 同构，C-029），组件渲染于 bundle 详情页 `detailSections`；注册整体活在 `ctx.effect` 内且仅当宿主 `configForms.whileServed(['advisor-flow'])` 判定本命名空间被服务（apply 同步帧绝不触碰 slots，C-029）。值流：读经 `configForms.get(ns)` 控制器快照订阅（宿主 describe 镜像，revision 栅栏与自愈由宿主承载）；写经保存时一次 `form.mutate(全量脏字段 set ops)`（宿主正规写缝 `settings.mutate` → volatile write → profile patch → volatile-update live re-apply）；自有 gateway RPC 只保留模型目录（`llm/listProviders`、`session/modelCatalog`）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省。
+  - 卡片平铺常开: 0.2.0 插件详情页为每插件独享配置面，无折叠交互；保留静态标题行（标题/描述/未保存徽标，不可点），表单常开（C-030）。
+  - 未配置提示横幅（唯一表面）: `advisor.provider`/`advisor.model` 任一缺失（含暂存补丁后的生效值）时，整卡置顶呈现 `advisorflow_banner` 提示横幅——不出手的原因可查询、字段照常可编辑，补齐后即时消失；表单内不再叠加第二段近似告警（R-02-001/AC-03/AC-13，C-030）。provider/model 下拉在「目录不可用、provider 目录外或该 provider 无模型声明」时回退自由文本输入，保证路由始终可补齐。
   - 保存控件常驻: footer 按钮组以 sticky 定位常驻滚动视口底部（R-02-001/AC-09；C-024）。
   - 长表单滚动到任意位置时，保存与放弃修改控件保持可见。
   - 未保存徽标: 存在暂存修改时，卡片头部呈现「未保存」标识（R-02-001/AC-10）。
-  - 徽标在折叠态保留（R-02-001/AC-11）。
   - 保存或放弃修改后，徽标消失（R-02-001/AC-12）。
   - 只读降级: 宿主把表单置只读（describe 镜像 writable=false）时，保存钮禁用并提示只读；宿主恢复可写后快照订阅自动解除。
 - 代码位置: lib/client/
