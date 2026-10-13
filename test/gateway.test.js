@@ -273,7 +273,7 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败全链：降级标注�
     // 第一次保存：写失败 → 失败专属回执 + 降级
     const failed = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
     assert.equal(failed.persisted, false);
-    assert.equal(failed.notice, '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。');
+    assert.equal(failed.notice, SAVE_NOTICE_WRITE_FAILED);
     assert.deepEqual(failures, ['persist-write-failed']);
     assert.equal(recoveries.length, 0);
 
@@ -309,7 +309,7 @@ test('R-02-001/AC-01 回执三态：persisted / 写失败专属文案 / 缺失�
     shouldThrow = true;
     const failed = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm3' } } } });
     notices.push(failed.notice);
-    assert.equal(failed.notice, '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。');
+    assert.equal(failed.notice, SAVE_NOTICE_WRITE_FAILED);
     // 三态之三：缝缺失 → 运行时态
     const missingSeam = createConfigGateway({
         getRawConfig: () => structuredClone(BASE),

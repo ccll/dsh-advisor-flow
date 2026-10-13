@@ -118,12 +118,13 @@ async function makeCard({ raw = structuredClone(RAW), persist, catalog, mutateBe
             return true;
         },
         /** 测试辅助：外部值变化 → 通知派生（宿主 live 同步的替身）。 */
-        publish(nextStatus, nextValue) {
-            if (nextStatus !== undefined) {
+        publish(nextStatus, nextValue, nextProps) {
+            if (nextStatus !== undefined || nextProps !== undefined) {
                 snapshot = {
                     ...snapshot,
-                    status: nextStatus,
-                    value: nextStatus === 'ready' ? (nextValue ?? snapshot.value) : null,
+                    ...(nextStatus !== undefined ? { status: nextStatus } : {}),
+                    ...(nextStatus === 'ready' ? { value: nextValue ?? snapshot.value } : { value: null }),
+                    ...nextProps,
                 };
             }
             for (const listener of [...listeners]) {
@@ -636,6 +637,25 @@ test('R-02-003/AC-02 宿主快照不可用 → 错误显性化；恢复 ready �
     await pump();
     assert.equal(controller.getState().status, 'ready');
     assert.ok(findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_form')).length > 0, '恢复后表单回归');
+});
+
+test('R-02-001/AC-01 宿主只读快照：保存钮禁用、提示文案、按下-抬起委托拒发 mutate', async () => {
+    const { controller, container, form } = await renderedCard();
+    expandCard(container);
+    controller.setField('advisor.model', 'm2'); // 先制造 dirty，排除空 patch 短路干扰
+    form.publish('ready', undefined, { writable: false }); // 宿主把表单置只读
+    await pump();
+    const save = byTag(container, 'button').find((node) => (node.attrs.class ?? '').includes('advisorflow_save'));
+    assert.equal(save.attrs.disabled, 'disabled', '只读快照 → 保存钮禁用');
+    const html = JSON.stringify(container);
+    assert.ok(html.includes('当前配置为只读'), '只读提示文案可见');
+    // 委托执行门控与 disabled 语义一致：只读时保存动作被拒
+    const root = container.children[0];
+    root.listeners.mousedown[0]({ target: save });
+    await root.listeners.mouseup[0]({ target: save });
+    await pump();
+    assert.equal(form.mutations.length, 0, '只读时保存动作不发起 mutate');
+    assert.equal(controller.getState().dirty, true, '误点不丢草稿（patch 保留）');
 });
 
 const CATALOG_PROVIDERS = [

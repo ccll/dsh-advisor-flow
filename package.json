@@ -47,17 +47,18 @@
         "agent.steer",
         "tools.register(output)",
         "settings.update (SettingsForms volatile write)",
-        "plugins.row.config slot",
+        "plugins.bundle.config slot",
         "loader/volatile-update",
         "GatewayService RPC",
-        "commands.register"
+        "commands.register",
+        "client configForms (get/whileServed/mutate)"
       ]
     },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-store",
         "@deepseek-ai/dsh-client-ui-plugin-manager",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     }
