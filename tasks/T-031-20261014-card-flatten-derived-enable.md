@@ -7,7 +7,7 @@ mutation: lifecycle
 # T-031 配置卡平铺常开 + 删除用户级启用开关（启用状态改配置派生）
 
 风险等级: standard
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -69,4 +69,4 @@ mutation: lifecycle
 - SOLUTION 对照: PRD AC-03 改写（横幅可见、编辑保存不拦截）/AC-11 删除/AC-13 递补（齐备即启用）；SOLUTION.md:538 单一横幅表面 + 死路回退措辞、web 设置卡模块同步；C-030 四段式。
 - review: 独立子代理 bfbe4104（独立上下文），结论 blocking=0 / non-blocking=5；finding 1（双提示并存+文档漂移）已收敛为单一横幅并同步 SOLUTION/任务书措辞；finding 2（config/gateway 测试夹具残留退役键）已清理（遗留键专测 :80 保留）；finding 3（gateway 弃用告警误套「未知键」前缀）已改按告警内容分流；finding 4（commands.js 兜底分支不可达，防御性死代码）记录保留；finding 5（evidence PNG/探针入库）供东家定夺。残余风险已记录：宿主 merge 语义不可本仓实测、gateway 收含 enabled patch 无直接用例、暂存联动横幅用例已补。
 - 风险自评: —（standard 档）
-- commit: （提交后回填）
+- commit: 7f72120（实现）；本关闭提交为独立提交

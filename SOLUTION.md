@@ -1,6 +1,7 @@
 ---
 doc-type: solution
 mutation: living
+核对日期: 2026-10-15
 owner: agent 主笔，项目属主审批
 ---
 
