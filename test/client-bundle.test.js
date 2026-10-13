@@ -155,6 +155,44 @@ test('R-02-001/AC-01 whileServed 未服务不挂卡、恢复服务后注册（�
     assert.deepEqual(watched, ['advisor-flow']);
     assert.equal(slotInjects, 0, '未服务时不注册');
     // 宿主判定本命名空间被服务 → 注册回调执行 → 注册发生
-    registerCallback();
+    const unmount = registerCallback();
     assert.equal(slotInjects, 1, '恢复服务后注册');
+    assert.equal(typeof unmount, 'function', '注册回调返回卸载句柄（失去服务时卸卡）');
+});
+
+test('R-02-001/AC-01 configForms.get 无控制器：告警一条、不注册、不炸 apply（窄窗兜底不绕门控）', async () => {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    let loaded;
+    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
+    new Function('window', text)(windowStub);
+    const warnings = [];
+    const registered = [];
+    let slotInjects = 0;
+    let registerCallback;
+    const slots = {
+        register: (options, component) => { registered.push({ options, component }); return () => {}; },
+        inject: (slotName, factory) => { slotInjects += 1; return factory(); },
+    };
+    const configForms = {
+        get: () => undefined, // apply 时刻 describe 镜像尚未服务本命名空间
+        whileServed: (namespaces, callback) => {
+            registerCallback = callback;
+            return () => {};
+        },
+    };
+    const ctx = {
+        logger: () => ({ warn: (message) => warnings.push(String(message)), info() {}, error() {}, debug() {} }),
+        connection: { rpc: {} },
+        slots,
+        inject: (names, fn) => fn({ configForms }),
+        effect: (fn) => fn(),
+    };
+    const applied = runFactory(loaded, ctx);
+    await Promise.resolve();
+    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回');
+    registerCallback();
+    assert.equal(slotInjects, 0, '无控制器不注册槽');
+    assert.equal(registered.length, 0);
+    assert.equal(warnings.length, 1, '降级告警恰好一条');
+    assert.match(warnings[0], /advisor-flow 控制器/, '告警指明控制器缺失');
 });

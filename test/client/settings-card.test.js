@@ -253,13 +253,15 @@ test('切换开关不引起滚动重锚：原子替换整棵新树并还原焦�
     assert.equal(rebuilt.__focused, true, '重建后焦点还原，浏览器无需重锚滚动');
 });
 
-test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（默认折叠 → 展开可见）', async () => {
+test('R-02-001/AC-01 卡值全走宿主 configForms、自有 RPC 仅目录查询（默认折叠 → 展开可见）', async () => {
     const { container, rpc } = await renderedCard();
-    // 渲染首帧与显式 load 各触发一次读回；自有通道 = advisor-flow/get|set +
-    // 模型目录（llm/listProviders、session/modelCatalog——目录失败回退为手
-    // 动输入，见目录用例）。
+    // 卡值读=快照订阅（不走 RPC）；自有通道只剩模型目录两查询（llm/
+    // listProviders、session/modelCatalog——目录失败回退为手动输入，见目
+    // 录用例）。负向契约：advisor-flow/get|set 不得出现在 RPC 面上（回归
+    // 者重新接回自有 gateway 读写即此例红）。
     assert.ok(rpc.calls.length >= 1);
-    assert.ok(rpc.calls.every((call) => /^(advisor-flow\/(get|set)|llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
+    assert.ok(rpc.calls.every((call) => /^(llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
+    assert.ok(rpc.calls.every((call) => !call.method.startsWith('advisor-flow/')), '卡值不再走自有 gateway RPC');
     // 默认折叠（T-006 ①）：header 存在、aria-expanded=false、无表单体
     const html = JSON.stringify(container);
     assert.ok(html.includes('Advisor Flow'));
