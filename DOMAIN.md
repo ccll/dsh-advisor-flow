@@ -42,9 +42,7 @@ owner: 双方
 - **偏好区（User Preferences）**: 会话主经 settings 命名空间映射提供给顾问的低优先级偏好内容，受脱敏与字节上限约束。
 - **非阻断性（Non-stall）**: advisor 或门组件的任何失败只影响 advisor 自身，主循环继续。
 - **子会话呈现（Subagent Presentation）**: 咨询发起的会话可见形态——经宿主 subagents 缝以 one-shot 顾问子会话承载单次咨询，会话界面出现顾问子会话条目；子会话缝缺失或发布前发起失败时降级为进程内直调。
-- **呈现登记表（Presentation Registry）**: 本插件已发布顾问子会话的会话 id 登记表。
-  - 收口评审豁免的判定源。
-  - 条目随会话清理摘除。
+- **呈现登记表（Presentation Registry）**: 本插件已发布顾问子会话的会话 id 登记表；收口评审豁免的判定源；条目随会话清理摘除。
 - **子会话自证（Subsession Self-Identification）**: 以会话自身日志 header 的 `origin` 字段判定子会话身份。
   - `origin` 为 `subagent` 即子会话。
   - fork 会话无该字段，不判为子会话。
