@@ -26,7 +26,10 @@ SUBJECT = re.compile(
 )
 EXCEPTIONS = ("Merge ", "Revert ", "fixup! ", "squash! ")
 REQUIRED_HEADINGS = {"原因", "影响", "取舍"}
-TASK_REF_RE = re.compile(r"\bT-\d{3}\b")
+# CJK calibration: Python \b is CJK-blind ("修复任务T-001" has no boundary
+# before T), so the boundary is an explicit ASCII-alnum lookaround; CJK may
+# touch the id directly, ASCII letters/digits may not (calibration 2026-11).
+TASK_REF_RE = re.compile(r"(?<![0-9A-Za-z])T-\d{3}(?![0-9A-Za-z])")
 
 
 def fail(message: str) -> int:

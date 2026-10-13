@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 root="$(git rev-parse --show-toplevel)"
 if command -v mise >/dev/null 2>&1; then
   mise x -- python "$root/tools/agentmap_validate_commit_msg.py" "$1"

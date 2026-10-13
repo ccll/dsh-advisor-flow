@@ -15,11 +15,16 @@ owner: agent 主笔，项目属主审批
 - emoji/type 固定配对：⭐ 功能、✨ 改进、🐛 修复、📝 文档、🧪 测试、📌 计划、🧹 维护、⚙️ 配置、♻️ 重构、🚀 发布。
 - `scope` 使用小写字母、数字和连字符，不使用 subscope。
 - 普通提交正文必须包含 `## 原因`、`## 影响`、`## 取舍`；Merge、Revert、fixup 与 squash 使用 Git 生成标题。
-- 实现、修正或关闭 task 的提交，正文须引用对应 `T-nnn`（使 `git blame` → commit → task 可反查）；不涉及 task 的提交不要求。引用的 task 必须真实存在，commit-msg 校验。
+- 实现、修正或关闭 task 的提交：正文须引用对应 `T-nnn`。
+  - 目的：`git blame` → commit → task 可反查。
+  - 不涉及 task 的提交：不要求引用。
+  - 被引用的 task 必须真实存在，commit-msg 校验。
 - `.githooks/commit-msg` 校验当前提交，`.githooks/pre-push` 重检 outgoing commits；项目附加规则放入 `.githooks/commit-msg.d/NN-name.sh`。
 <!-- END AGENTMAP COMMIT CONVENTION -->
 
 ## AgentMap 本地参数
+
+- agentmap 规范版本: 2
 
 - 需求组按 `需求组 gg: 角色` 登记；确认角色后从 `01` 连续分配，登记项永久保留。
 - 需求组 01: 执行 agent（Executor）

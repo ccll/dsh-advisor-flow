@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 # Windows defaults subprocess text mode to the locale encoding (GBK), which
@@ -47,8 +48,14 @@ LEGACY_MAP_FILES = {
 APPEND_ONLY_FILES = ("RATIONALE.md", "DECISIONS.md")
 LEGACY_DETAIL_TITLES = ("方案细化清单", "设计细化清单")
 LEGACY_READINESS_NAMES = {"重大设计选择已收敛": "重大方案选择已收敛"}
+# Commit hashes mix digits and hex letters a-f. Requiring at least one of
+# each rejects the prose tokens \b[0-9a-f]{7,40} swallowed: pure-letter
+# English words (defaced) and pure-digit numbers (20260801). Explicit
+# evidence lines (- commit:) stay in the lenient form and are verified
+# against git history, so no recall is lost where it matters.
+HEXISH_TOKEN = r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"
 IMPLEMENTATION_EVIDENCE_RE = re.compile(
-    r"(?:\b(?:src|tests?|tasks)/|\b[0-9a-f]{7,40}\b|`[^`]+\.(?:py|rs|go|js|ts|java|kt|rb|sh)`)",
+    rf"(?:\b(?:src|tests?|tasks)/|{HEXISH_TOKEN}|`[^`]+\.(?:py|rs|go|js|ts|java|kt|rb|sh)`)",
     re.IGNORECASE,
 )
 # Decision entries may reference tasks via T-ID and may name tasks/ as workflow
@@ -56,7 +63,7 @@ IMPLEMENTATION_EVIDENCE_RE = re.compile(
 # references count as implementation evidence there. Checked against newly
 # appended entries only; historical entries are immutable and grandfathered.
 DECISION_EVIDENCE_RE = re.compile(
-    r"(?:\b(?:src|tests?)/|\b[0-9a-f]{7,40}\b|`[^`]+\.(?:py|rs|go|js|ts|java|kt|rb|sh)`)",
+    rf"(?:\b(?:src|tests?)/|{HEXISH_TOKEN}|`[^`]+\.(?:py|rs|go|js|ts|java|kt|rb|sh)`)",
     re.IGNORECASE,
 )
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
@@ -64,17 +71,59 @@ TERMINAL_STATES = {"completed", "abandoned", "superseded"}
 COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
 TASK_NAME_RE = re.compile(r"^(T-\d{3})-\d{8}-.+\.md$")
 LEGACY_TASK_NAME_RE = re.compile(r"^\d{8}-.+\.md$")
-T_ID_RE = re.compile(r"\bT-\d{3}\b")
-GOAL_RE = re.compile(r"\*\*(G-\d+)\b")
-NON_GOAL_RE = re.compile(r"\*\*(NG-\d+)\b")
-R_HEADING_RE = re.compile(r"^####\s+(R-\d{2}-\d{3})\b.*$", re.MULTILINE)
-LEGACY_R_HEADING_RE = re.compile(r"^####\s+(R-\d{3})\b.*$", re.MULTILINE)
-LEGACY_R_ID_RE = re.compile(r"\bR-\d{3}\b")
-C_HEADING_RE = re.compile(r"^###\s+(C-\d{3}[A-Z]?)\b", re.MULTILINE)
-R_ID_RE = re.compile(r"\bR-\d{2}-\d{3}\b")
-AC_ID_RE = re.compile(r"\bR-\d{2}-\d{3}/AC-\d{2}\b")
-C_ID_RE = re.compile(r"\bC-\d{3}[A-Z]?\b")
+# Optional CONVENTIONS local parameter: once the registered date has passed,
+# legacy task names and legacy map file names stop being grandfathered and
+# lint reports them as errors instead of warnings.
+LEGACY_CUTOFF_RE = re.compile(r"^-\s*legacy 迁移截止:\s*(\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
+# Loose detector: any value on a 迁移截止 line that the strict pattern cannot
+# parse must still produce an error, never silent tolerance.
+LEGACY_CUTOFF_LOOSE_RE = re.compile(r"^-\s*legacy 迁移截止:\s*(\S+)\s*$", re.MULTILINE)
+# CJK calibration: Python \b is CJK-blind ("任务T-001" has no boundary before
+# T because 务 and T are both \w), so every id regex below uses explicit
+# [0-9A-Za-z] lookarounds. CJK text may touch an id directly; ASCII
+# letters/digits may not. A trailing "-" stays legal so file names like
+# T-001-20260801-search.md keep matching (calibration 2026-11).
+T_ID_RE = re.compile(r"(?<![0-9A-Za-z])T-\d{3}(?![0-9A-Za-z])")
+GOAL_RE = re.compile(r"\*\*(G-\d+)(?![0-9A-Za-z])")
+NON_GOAL_RE = re.compile(r"\*\*(NG-\d+)(?![0-9A-Za-z])")
+R_HEADING_RE = re.compile(r"^####\s+(R-\d{2}-\d{3})(?![0-9A-Za-z]).*$", re.MULTILINE)
+LEGACY_R_HEADING_RE = re.compile(r"^####\s+(R-\d{3})(?![0-9A-Za-z]).*$", re.MULTILINE)
+LEGACY_R_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{3}(?![0-9A-Za-z])")
+C_HEADING_RE = re.compile(r"^###\s+(C-\d{3}[A-Z]?)(?![0-9A-Za-z])", re.MULTILINE)
+R_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{2}-\d{3}(?![0-9A-Za-z])")
+AC_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{2}-\d{3}/AC-\d{2}(?![0-9A-Za-z])")
+C_ID_RE = re.compile(r"(?<![0-9A-Za-z])C-\d{3}[A-Z]?(?![0-9A-Za-z])")
 R_RANGE_RE = re.compile(r"R-(\d{2})-(\d{3})\s*[～~-]\s*(?:R-(\d{2})-)?(\d{3})")
+
+# Near-miss tripwire: malformed ids (R-100-001, C-001AB, T-0001) match none of
+# the reference regexes above, so every traceability check silently ignores
+# them. The loose patterns over-match each id family on purpose; each hit is
+# re-validated with fullmatch against the canonical shape, and violations
+# become lint errors instead of invisible noise.
+ID_NEAR_MISS_RULES = (
+    ("task", re.compile(r"(?<![0-9A-Za-z])T-\d{2,}[0-9A-Za-z]*(?![0-9A-Za-z])"), "T-NNN"),
+    (
+        "requirement",
+        re.compile(r"(?<![0-9A-Za-z])R-\d{2,4}(?:-\d{2,4})?(?![0-9A-Za-z])"),
+        "R-NNN (legacy) or R-GG-NNN",
+    ),
+    (
+        "acceptance",
+        re.compile(r"(?<![0-9A-Za-z])R-\d{2,4}(?:-\d{2,4})?/AC-\d{2,4}(?![0-9A-Za-z])"),
+        "R-GG-NNN/AC-NN",
+    ),
+    (
+        "decision",
+        re.compile(r"(?<![0-9A-Za-z])C-\d{2,}[A-Za-z]*(?![0-9A-Za-z])"),
+        "C-NNN or C-NNN + uppercase letter",
+    ),
+)
+ID_STRICT_VALIDATORS = {
+    "task": re.compile(r"T-\d{3}").fullmatch,
+    "requirement": re.compile(r"R-(?:\d{3}|\d{2}-\d{3})").fullmatch,
+    "acceptance": re.compile(r"R-\d{2}-\d{3}/AC-\d{2}").fullmatch,
+    "decision": re.compile(r"C-\d{3}[A-Z]?").fullmatch,
+}
 REQUIREMENT_GROUP_RE = re.compile(r"^-\s*需求组\s+(\d{2})\s*[:：]\s*(\S.*?)\s*$", re.MULTILINE)
 SOLUTION_VIEW_RULES = {
     "系统上下文": ("系统上下文图", r"(?:flowchart|graph|C4Context)\b", "context diagram", True),
@@ -122,14 +171,17 @@ READINESS_RULES = {
 # global (?=.*应当) lookahead was satisfied by coincidental condition-internal
 # substrings (对应当协议, 响应当超过) and masked non-canonical outcome
 # modalities such as 系统应不/系统应限制 (postfix calibration, 2026-10).
+# 若-patterns accept both full-width and half-width commas (half-width
+# commas are common in mixed-locale editors; the separator is not the
+# discipline being enforced).
 EARS_RE = re.compile(
     r"^-\s*(?:AC-\d{2}\s+)?(?:系统(?=.*应当)|当.+时(?=.*应当)"
-    r"|若.+，(?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
+    r"|若.+[，,](?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
     re.MULTILINE,
 )
 AC_LINE_RE = re.compile(
     r"^-\s*(AC-\d{2})\s+(?:系统(?=.*应当)|当.+时(?=.*应当)"
-    r"|若.+，(?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
+    r"|若.+[，,](?=.*应当)|在.+期间(?=.*应当)|具备.+时(?=.*应当))",
     re.MULTILINE,
 )
 REQUIRED_VERIFICATION_DIMENSIONS = {"成功", "异常", "边界配置", "副作用"}
@@ -173,15 +225,24 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "f147014436b5f7548e70dd176e1ce4bb7ea02b8d80a80b5c3d998e13850b13c4",
-    ".githooks/commit-msg": "8e2d1dd49ab9fd71e8bb3b87fe5786c0ea0314327e58558b518499541e75a51d",
+    "AGENTS.md": "bc2a13b66c1a6c641fd19bee3a036350f50d1f806c0a96a50642e3c12190f96f",
+    ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "c85da06d5f5423959656195835bb570912839e9e65483d3cc20bf096aea9cd4c",
     ".githooks/pre-commit.d/20-agentmap-lint.sh": "95c7df8021cceb8b357c7ea4edafbb2559ddd4179527327f5197ae851d9aa9c4",
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
-    "tools/agentmap_validate_commit_msg.py": "c82459264158781832739346af9a89fbc825b5b1cc8d7d77236ceba7bf11b9cc",
+    "tools/agentmap_validate_commit_msg.py": "3fa7abf08602abfa479eb4d8e196bc9d37342421c55535d69b04b6527b522eeb",
 }
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
+PLACEHOLDER_RE = re.compile(r"\b(?:TBD|TODO|N/A)\b|待评估|待定|待补", re.IGNORECASE)
+CORE_BUDGET_FILES = ("PRD.md", "SOLUTION.md", "DOMAIN.md", "CONVENTIONS.md", "AGENTS.md")
+# Token counts are not reproducible; the registered token budget converts
+# through a deterministic 3 bytes/token proxy (CJK UTF-8 averages 3 bytes
+# per character, roughly one token per character).
+CORE_BUDGET_BYTES_PER_TOKEN = 3
+CORE_BUDGET_RE = re.compile(r"^- 核心文档上限:\s*(\d+)\s*token\s*$", re.MULTILINE)
+CORE_SPLIT_PLAN_RE = re.compile(r"^- 核心文档分片方案:\s*\S", re.MULTILINE)
+SUPERSEDED_DECLARATION_RE = re.compile(r"^\s*-\s*废弃[:：]\s*(C-\d{3}[A-Z]?)\s*$", re.MULTILINE)
 
 
 @dataclass
@@ -192,15 +253,36 @@ class Result:
     acceptance_criteria: set[str] = field(default_factory=set)
     solution_covered: set[str] = field(default_factory=set)
     decision_ids: set[str] = field(default_factory=set)
+    superseded_decisions: dict[str, str] = field(default_factory=dict)
     test_anchored: set[str] = field(default_factory=set)
     test_anchored_acceptance_criteria: set[str] = field(default_factory=set)
     goals: set[str] = field(default_factory=set)
     tasks: dict[str, int] = field(default_factory=dict)
     task_states: dict[str, str] = field(default_factory=dict)
+    task_line_counts: dict[str, int] = field(default_factory=dict)
+    legacy_cutoff: date | None = None
+    task_line_counts: dict[str, int] = field(default_factory=dict)
 
 
-def parse_frontmatter(path: Path) -> dict[str, str] | None:
-    text = path.read_text(encoding="utf-8")
+def read_text_checked(path: Path, result: Result, label: str) -> str | None:
+    """Read a repository file as UTF-8, reporting unreadable files as errors.
+
+    A file that is not valid UTF-8 (or vanished mid-run) is repository state
+    the agent must fix; a traceback would abort the whole lint run and hide
+    every other finding, so the failure is recorded per file and the caller
+    skips that file while the remaining checks keep running.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        result.errors.append(
+            f"{label}: cannot read file ({error.__class__.__name__}: {error});"
+            " fix the file encoding or permissions, then rerun"
+        )
+        return None
+
+
+def parse_frontmatter(text: str) -> dict[str, str] | None:
     match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not match:
         return None
@@ -243,14 +325,33 @@ def sections(text: str, heading_re: re.Pattern[str]) -> dict[str, str]:
     }
 
 
-def expand_requirement_ids(text: str) -> set[str]:
+def expand_requirement_ids(text: str, result: Result | None = None) -> set[str]:
+    """Expand explicit ids plus R-GG-NNN～NNN ranges; degraded ranges fail loudly."""
     ids = set(R_ID_RE.findall(text))
     for group, start, end_group, end in R_RANGE_RE.findall(text):
         if end_group and end_group != group:
+            if result is not None:
+                result.errors.append(
+                    f"SOLUTION.md: requirement range R-{group}-{start}～R-{end_group}-{end} "
+                    "spans requirement groups; write explicit ids per group"
+                )
             continue
         first, last = int(start), int(end)
-        if first <= last and last - first <= 100:
-            ids.update(f"R-{group}-{number:03d}" for number in range(first, last + 1))
+        if first > last:
+            if result is not None:
+                result.errors.append(
+                    f"SOLUTION.md: requirement range R-{group}-{start}～R-{group}-{end} "
+                    "is reversed"
+                )
+            continue
+        if last - first > 100:
+            if result is not None:
+                result.errors.append(
+                    f"SOLUTION.md: requirement range R-{group}-{start}～R-{group}-{end} "
+                    "spans over 100 ids; list the ids explicitly or split the range"
+                )
+            continue
+        ids.update(f"R-{group}-{number:03d}" for number in range(first, last + 1))
     return ids
 
 
@@ -423,7 +524,9 @@ def check_markdown_locator(root: Path, result: Result, owner: str, locator: str)
     if not target.is_file():
         result.errors.append(f"{owner}: missing solution locator file {relative.as_posix()}")
         return
-    text = target.read_text(encoding="utf-8")
+    text = read_text_checked(target, result, f"{owner} -> {locator}")
+    if text is None:
+        return
     if not re.search(rf"^#{{1,6}}\s+{re.escape(heading)}\s*$", text, re.MULTILINE):
         result.errors.append(f"{owner}: missing solution locator heading {locator}")
 
@@ -457,7 +560,7 @@ def check_solution_views(solution: str, result: Result) -> None:
             result.errors.append(f"SOLUTION.md: missing architecture view assessment {name}")
             continue
         applicability, location = row
-        if re.search(r"\b(?:TBD|TODO|N/A)\b|待评估|待定|待补", applicability, re.IGNORECASE):
+        if PLACEHOLDER_RE.search(applicability):
             result.errors.append(f"SOLUTION.md: architecture view {name} needs a concrete applicability reason")
             continue
         applicable = re.fullmatch(r"适用[:：](.+)", applicability)
@@ -505,7 +608,7 @@ def check_solution_details(root: Path, solution: str, result: Result) -> None:
             result.errors.append(f"SOLUTION.md: missing solution detail assessment {name}")
             continue
         applicability, location = row
-        if re.search(r"\b(?:TBD|TODO|N/A)\b|待评估|待定|待补", applicability, re.IGNORECASE):
+        if PLACEHOLDER_RE.search(applicability):
             result.errors.append(f"SOLUTION.md: solution detail {name} needs a concrete applicability reason")
             continue
         applicable = re.fullmatch(r"适用[:：](.+)", applicability)
@@ -550,7 +653,7 @@ def check_implementation_readiness(root: Path, solution: str, result: Result) ->
         conclusion, evidence = row
         if conclusion != "通过":
             result.errors.append(f"SOLUTION.md: implementation readiness condition {name} must be 通过")
-        if evidence == "—" or re.search(r"\b(?:TBD|TODO|N/A)\b|待评估|待定|待补", evidence, re.IGNORECASE):
+        if evidence == "—" or PLACEHOLDER_RE.search(evidence):
             result.errors.append(f"SOLUTION.md: implementation readiness condition {name} needs concrete evidence")
             continue
         has_locators = check_locator_list(root, result, f"SOLUTION.md: readiness {name}", evidence)
@@ -627,6 +730,36 @@ def staged_checkout(root: Path):
         yield snapshot
 
 
+def legacy_cutoff(root: Path, result: Result) -> date | None:
+    """Optional CONVENTIONS deadline after which legacy naming is an error.
+
+    Unregistered (the default) keeps the transitional warnings forever;
+    a registered past date turns every legacy-name tolerance into errors.
+    """
+    path = root / "CONVENTIONS.md"
+    if not path.is_file():
+        return None
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return None
+    loose = LEGACY_CUTOFF_LOOSE_RE.search(text)
+    if not loose:
+        return None
+    match = LEGACY_CUTOFF_RE.search(text)
+    if not match:
+        result.errors.append("CONVENTIONS.md: legacy 迁移截止 must be YYYY-MM-DD")
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        result.errors.append("CONVENTIONS.md: legacy 迁移截止 must be YYYY-MM-DD")
+        return None
+
+
+def legacy_deadline_passed(result: Result) -> bool:
+    return result.legacy_cutoff is not None and date.today() >= result.legacy_cutoff
+
+
 def check_system_files(root: Path, result: Result, changed: set[str]) -> None:
     for canonical, expected_file in SYSTEM_FILES.items():
         legacy = LEGACY_MAP_FILES.get(canonical)
@@ -640,14 +773,23 @@ def check_system_files(root: Path, result: Result, changed: set[str]) -> None:
         if not path.exists() and legacy:
             name, doc_type = legacy
             path = root / name
-            result.warnings.append(
+            message = (
                 f"legacy map file {name} in use; migrate to {canonical} "
                 "via bootstrap --migrate-legacy-maps"
             )
+            if legacy_deadline_passed(result):
+                result.errors.append(
+                    f"legacy migration deadline passed ({result.legacy_cutoff.isoformat()}): {message}"
+                )
+            else:
+                result.warnings.append(message)
         if not path.exists():
             result.errors.append(f"missing: {name}")
             continue
-        fm = parse_frontmatter(path)
+        text = read_text_checked(path, result, name)
+        if text is None:
+            continue
+        fm = parse_frontmatter(text)
         if fm is None:
             result.errors.append(f"{name}: missing frontmatter")
             continue
@@ -661,8 +803,16 @@ def check_system_files(root: Path, result: Result, changed: set[str]) -> None:
             result.errors.append(f"{name}: invalid mutation {fm.get('mutation')}")
         if not fm.get("owner"):
             result.errors.append(f"{name}: missing owner")
+        if name == "SOLUTION.md":
+            verified = fm.get("核对日期")
+            if not verified:
+                result.warnings.append(
+                    "SOLUTION.md: frontmatter lacks 核对日期: YYYY-MM-DD; record the date "
+                    "of the last solution-vs-implementation verification"
+                )
+            elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", verified):
+                result.errors.append(f"SOLUTION.md: 核对日期 must be YYYY-MM-DD, got {verified}")
         if name in APPEND_ONLY_FILES:
-            text = path.read_text(encoding="utf-8")
             current_entries = decision_entries(text)
             appended = ""
             if name in changed:
@@ -690,11 +840,280 @@ def check_todo_entries(root: Path, result: Result) -> None:
     path = root / "TODO.md"
     if not path.is_file():
         return
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    text = read_text_checked(path, result, "TODO.md")
+    if text is None:
+        return
+    for line_number, line in enumerate(text.splitlines(), 1):
         if line.startswith("- ") and not TODO_ENTRY_RE.match(line):
             result.errors.append(
                 f"TODO.md:{line_number}: entry needs one valid intake type tag"
             )
+
+
+def check_core_document_budget(root: Path, result: Result) -> None:
+    """Enforce the registered size ceiling on the current-state document layer.
+
+    The ceiling constrains the living documents an agent must re-read per
+    session (PRD/SOLUTION/DOMAIN/CONVENTIONS/AGENTS.md); RATIONALE and
+    tasks/ are queryable archives and stay out of scope. A registered
+    核心文档分片方案 line downgrades the violation to a warning so an
+    in-progress reorganization stays visible without blocking work.
+    """
+    path = root / "CONVENTIONS.md"
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return
+    match = CORE_BUDGET_RE.search(text)
+    if not match:
+        result.warnings.append(
+            "CONVENTIONS.md: 核心文档上限 not registered under AgentMap 本地参数; "
+            "the core document size gate stays disabled until it is"
+        )
+        return
+    limit = int(match.group(1)) * CORE_BUDGET_BYTES_PER_TOKEN
+    total = 0
+    for name in CORE_BUDGET_FILES:
+        file_path = root / name
+        try:
+            if file_path.is_file():
+                total += file_path.stat().st_size
+        except OSError as error:
+            result.errors.append(f"{name}: cannot measure size ({error.__class__.__name__}: {error})")
+    if total <= limit:
+        return
+    detail = (
+        f"core documents total {total} bytes (PRD+SOLUTION+DOMAIN+CONVENTIONS+AGENTS.md) "
+        f"over the registered limit {match.group(1)} token × {CORE_BUDGET_BYTES_PER_TOKEN} "
+        f"bytes = {limit} bytes"
+    )
+    if CORE_SPLIT_PLAN_RE.search(text):
+        result.warnings.append(f"{detail}; the registered 核心文档分片方案 covers the transition")
+    else:
+        result.errors.append(
+            f"{detail}; reorganize the current-state layer or register a "
+            "核心文档分片方案 line in CONVENTIONS"
+        )
+
+
+def id_scan_files(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for canonical in SYSTEM_FILES:
+        if canonical == "CONVENTIONS.md":
+            # CONVENTIONS documents the id formats themselves; scanning it
+            # would flag the format examples as malformed ids.
+            continue
+        path = root / canonical
+        legacy = LEGACY_MAP_FILES.get(canonical)
+        if legacy and (root / legacy[0]).exists():
+            if path.exists():
+                continue  # conflict is already reported by check_system_files
+            path = root / legacy[0]
+        if path.is_file():
+            paths.append(path)
+    tasks_dir = root / "tasks"
+    if tasks_dir.is_dir():
+        paths.extend(sorted(tasks_dir.rglob("*.md")))
+    return paths
+
+
+def check_id_formats(root: Path, result: Result) -> None:
+    """Fail loudly on id-shaped tokens that violate the canonical formats.
+
+    Code blocks are stripped first: format examples inside ``` fences are
+    documentation, not references (calibration 2026-11).
+    """
+    for path in id_scan_files(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            text = strip_code_fences(path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            result.errors.append(
+                f"{relative}: file is not valid UTF-8; re-save it with UTF-8 encoding"
+            )
+            continue
+        for family, loose, expected in ID_NEAR_MISS_RULES:
+            for mid in sorted(set(loose.findall(text))):
+                if not ID_STRICT_VALIDATORS[family](mid):
+                    result.errors.append(
+                        f"{relative}: invalid {family} id {mid}: expected {expected}"
+                    )
+
+
+# Writing-style warnings enforce the AGENTS.md 写作风格 rule with heuristics:
+# one rule per list item, shallow parentheses. The framework canonical
+# AGENTS.md is excluded because bootstrap owns it, not project authors.
+# Terminal tasks are excluded because they are immutable history and the
+# style rule applies to living documents; their warnings could never be
+# remediated without violating task immutability.
+STYLE_FILES = ("PRD.md", "SOLUTION.md", "DOMAIN.md", "RATIONALE.md", "TODO.md", "CONVENTIONS.md")
+# RATIONALE narrative paragraphs are the designated home of prose reasoning.
+STYLE_PROSE_EXEMPT_FILES = {"RATIONALE.md", "DECISIONS.md"}
+STYLE_LIST_ITEM_MAX_STOPS = 3
+STYLE_LIST_ITEM_RE = re.compile(r"^(?:[-*]|\d+\.)\s+")
+STYLE_OPENERS = "([（［【"
+STYLE_CLOSERS = ")]）］】"
+# Closed set of vague hedges and quantities. Keep it a closed list. Some words
+# are productive substrings that can match across word boundaries (视情况 in
+# 忽视情况, 也许 in 也许诺); such hits stay warning-level review prompts, and
+# the known collision families are recorded here rather than promised away.
+STYLE_VAGUE_WORDS = (
+    "尽量", "酌情", "适当", "也许", "或许", "差不多", "原则上",
+    "必要时", "尽快", "视情况", "一些", "等等", "之类",
+)
+# Negation prefixes flip the meaning of a hedge (不适当 states a hard
+# requirement); a hit directly preceded by one of these characters is not
+# vague wording.
+STYLE_NEGATION_PREFIXES = set("不非无未")
+# A long run of CJK characters without particles, connectors, or prepositions
+# reads as stacked nouns whose referent cannot be parsed; the threshold is
+# deliberately high so normal four-character compounds never trigger it.
+# The breaker set stays closed; every addition must be backed by a real
+# false positive. 而且把被让使将向从到为以于给每该各中可都 come from the
+# postfix calibration (2026-10): predicate chains built on these particles
+# were flagged although they read fine. Accepted trade-off: 为/中/到 also
+# occur inside compound nouns (行为/中间件/到期), so a pile hinging on them
+# splits into shorter runs and stays unflagged.
+STYLE_NOUN_STACK_MAX_CHARS = 14
+STYLE_NOUN_BREAKERS = set(
+    "的了着过与和或之及是不等在并按地得"
+    "而且把被让使将向从到为以于给每该各中可都"
+)
+
+
+def style_prose_exempt(path: Path) -> bool:
+    return path.name in STYLE_PROSE_EXEMPT_FILES
+
+
+def strip_inline_noise(text: str) -> str:
+    text = re.sub(r"`[^`]*`", "", text)
+    return re.sub(r"\((?:https?://[^)]*)\)", "", text)
+
+
+def max_bracket_depth(text: str) -> int:
+    depth = 0
+    deepest = 0
+    for char in text:
+        if char in STYLE_OPENERS:
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        elif char in STYLE_CLOSERS:
+            depth = max(0, depth - 1)
+    return deepest
+
+
+def first_vague_word(text: str) -> str | None:
+    # 「不适当」「不明确」等否定前缀反转词义，不是模糊表述；命中紧邻否定
+    # 前缀时跳过该处继续找，无前缀命中仍照常报告。
+    for word in STYLE_VAGUE_WORDS:
+        index = text.find(word)
+        while index != -1:
+            if index == 0 or text[index - 1] not in STYLE_NEGATION_PREFIXES:
+                return word
+            index = text.find(word, index + 1)
+    return None
+
+
+def max_noun_stack(text: str) -> int:
+    longest = 0
+    current = 0
+    for char in text:
+        if "\u4e00" <= char <= "\u9fff" and char not in STYLE_NOUN_BREAKERS:
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    return longest
+
+
+def check_writing_style(root: Path, result: Result, changed: set[str]) -> None:
+    # Dirty tree (pre-commit / staged): only flag files inside the pending change
+    # (staged or unstaged edits, plus untracked new files) so historical warnings
+    # do not repeat on every commit. Clean tree (--report): scan everything as
+    # the standing inventory. In staged mode the snapshot worktree points at the
+    # real git dir, so git diff HEAD equals the staged change set.
+    paths = []
+    for name in STYLE_FILES:
+        path = root / name
+        if path.is_file():
+            paths.append(path)
+            continue
+        legacy = LEGACY_MAP_FILES.get(name)
+        if legacy and (root / legacy[0]).is_file():
+            paths.append(root / legacy[0])
+    tasks_dir = root / "tasks"
+    task_paths = set()
+    if tasks_dir.is_dir():
+        task_entries = sorted(tasks_dir.glob("*.md"))
+        paths.extend(task_entries)
+        task_paths.update(entry.relative_to(root).as_posix() for entry in task_entries)
+    scan = changed | git_untracked_paths(root)
+    scan_all = not scan
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if not scan_all and relative not in scan:
+            continue
+        text = read_text_checked(path, result, relative)
+        if text is None:
+            continue
+        if relative in task_paths:
+            state = task_state(text)
+            if state in TERMINAL_STATES:
+                continue
+        in_frontmatter = False
+        in_fence = False
+        for line_number, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            if line_number == 1 and line.strip() == "---":
+                in_frontmatter = True
+                continue
+            if in_frontmatter:
+                if line.strip() == "---":
+                    in_frontmatter = False
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "|")):
+                continue
+            if stripped.startswith(">"):
+                stripped = stripped.lstrip(">").strip()
+                if not stripped:
+                    continue
+            noisy = strip_inline_noise(stripped)
+            list_match = STYLE_LIST_ITEM_RE.match(noisy)
+            if list_match:
+                content = noisy[list_match.end():]
+                stops = len(re.findall(r"[。；]", content))
+                if stops >= STYLE_LIST_ITEM_MAX_STOPS:
+                    result.warnings.append(
+                        f"{relative}:{line_number}: list item may carry multiple rules; "
+                        "split so each line has one condition and one action"
+                    )
+                    continue
+            if not style_prose_exempt(path):
+                # One style warning per line: vague wording, then noun stacks,
+                # then bracket depth.
+                vague = first_vague_word(noisy)
+                if vague:
+                    result.warnings.append(
+                        f'{relative}:{line_number}: vague wording "{vague}"; '
+                        "state the exact condition, quantity, or modality"
+                    )
+                    continue
+                if max_noun_stack(noisy) >= STYLE_NOUN_STACK_MAX_CHARS:
+                    result.warnings.append(
+                        f"{relative}:{line_number}: long noun stack; "
+                        "connect the nouns or split the phrase into a sub-list"
+                    )
+                    continue
+            if max_bracket_depth(noisy) >= 2:
+                result.warnings.append(
+                    f"{relative}:{line_number}: nested parentheses; move long parenthetical content into a sub-list"
+                )
 
 
 def check_traceability(root: Path, result: Result) -> None:
@@ -705,12 +1124,16 @@ def check_traceability(root: Path, result: Result) -> None:
     if not all(path and path.exists() for path in (prd_path, solution_path, domain_path, decisions_path)):
         return
 
-    prd = prd_path.read_text(encoding="utf-8")
-    solution = solution_path.read_text(encoding="utf-8")
-    domain = domain_path.read_text(encoding="utf-8")
-    decisions = decisions_path.read_text(encoding="utf-8")
+    prd = read_text_checked(prd_path, result, "PRD.md")
+    solution = read_text_checked(solution_path, result, solution_path.name)
+    domain = read_text_checked(domain_path, result, "DOMAIN.md")
+    decisions = read_text_checked(decisions_path, result, decisions_path.name)
+    if None in (prd, solution, domain, decisions):
+        return
     conventions_path = root / "CONVENTIONS.md"
-    conventions = conventions_path.read_text(encoding="utf-8") if conventions_path.is_file() else ""
+    conventions = ""
+    if conventions_path.is_file():
+        conventions = read_text_checked(conventions_path, result, "CONVENTIONS.md") or ""
     prd_plain = strip_code_fences(prd)
     solution_plain = strip_code_fences(solution)
     decisions_plain = strip_code_fences(decisions)
@@ -744,6 +1167,23 @@ def check_traceability(root: Path, result: Result) -> None:
     result.decision_ids = set(decision_ids)
     old_decisions = head_decision_text(root)
     old_decision_ids = set(C_HEADING_RE.findall(old_decisions))
+
+    superseded: dict[str, str] = {}
+    entry_matches = list(C_HEADING_RE.finditer(decisions_plain))
+    for index, entry_match in enumerate(entry_matches):
+        block_end = entry_matches[index + 1].start() if index + 1 < len(entry_matches) else len(decisions_plain)
+        block = decisions_plain[entry_match.end():block_end]
+        for declaration in SUPERSEDED_DECLARATION_RE.findall(block):
+            if declaration == entry_match.group(1):
+                result.errors.append(f"RATIONALE.md: decision {declaration} cannot supersede itself")
+            elif declaration in superseded:
+                result.errors.append(f"RATIONALE.md: decision {declaration} is superseded more than once")
+            else:
+                superseded[declaration] = entry_match.group(1)
+    for cid, successor in sorted(superseded.items()):
+        if cid not in result.decision_ids:
+            result.errors.append(f"RATIONALE.md: superseded decision {cid} does not exist")
+    result.superseded_decisions = superseded
 
     for rid in sorted(duplicate_ids(requirement_ids)):
         result.errors.append(f"PRD.md: duplicate requirement id {rid}")
@@ -828,18 +1268,35 @@ def check_traceability(root: Path, result: Result) -> None:
         ):
             if cid not in decision_ids:
                 result.errors.append(f"PRD.md: {rid} references missing decision {cid}")
+            elif cid in superseded:
+                result.errors.append(
+                    f"PRD.md: {rid} references superseded decision {cid} superseded by {superseded[cid]}"
+                )
 
     for goal in sorted(result.goals - used_goals):
         result.errors.append(f"PRD.md: {goal} has no requirement")
-    for rid in sorted(expand_requirement_ids(solution_plain) - result.requirements):
+    for rid in sorted(expand_requirement_ids(solution_plain, result) - result.requirements):
         result.errors.append(f"SOLUTION.md: references missing requirement {rid}")
     for cid in sorted(set(C_ID_RE.findall(solution_plain)) - set(decision_ids)):
         result.errors.append(f"SOLUTION.md: references missing decision {cid}")
+    for cid in sorted(set(C_ID_RE.findall(solution_plain)) & set(superseded)):
+        result.errors.append(
+            f"SOLUTION.md: references superseded decision {cid} superseded by {superseded[cid]}"
+        )
 
 
 def task_state(text: str) -> str | None:
+    """Read the task lifecycle state from its header block only.
+
+    The canonical position is right after the H1 title and before the first
+    `## ` section (write_fixture emits exactly that shape). A full-text search
+    would let any prose line `状态: completed` inside a body section hijack
+    the machine state — for example a task quoting another task's lifecycle —
+    so everything from the first section heading on is ignored here.
+    """
+    header = re.split(r"^## ", text, maxsplit=1, flags=re.MULTILINE)[0]
     match = re.search(
-        r"^状态:\s*(active|completed|abandoned|superseded)\s*$", text, re.MULTILINE
+        r"^状态:\s*(active|completed|abandoned|superseded)\s*$", header, re.MULTILINE
     )
     return match.group(1) if match else None
 
@@ -944,59 +1401,6 @@ def task_paths_at_ref(root: Path, ref: str) -> list[Path]:
     return [Path(name) for name in names if TASK_NAME_RE.match(Path(name).name)]
 
 
-def merge_task_renumbering(root: Path, merge_head: str | None) -> list[tuple[Path, Path]]:
-    if merge_head is None:
-        return []
-    try:
-        merge_base = subprocess.run(
-            ["git", "merge-base", "HEAD", merge_head],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        names = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "--diff-filter=A",
-                merge_base,
-                merge_head,
-                "--",
-                "tasks",
-            ],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-    except (OSError, subprocess.CalledProcessError):
-        return []
-    incoming = sorted(
-        (Path(name) for name in names if TASK_NAME_RE.match(Path(name).name)),
-        key=lambda path: int(path.name[2:5]),
-    )
-    target_ids = {path.name[:5] for path in task_paths_at_ref(root, "HEAD")}
-    incoming_ids = [path.name[:5] for path in incoming]
-    if not target_ids.intersection(incoming_ids):
-        return []
-    next_number = max((int(task_id[2:]) for task_id in target_ids), default=0) + 1
-    return [
-        (
-            path,
-            path.with_name(
-                path.name.replace(task_id, f"T-{next_number + index:03d}", 1)
-            ),
-        )
-        for index, (path, task_id) in enumerate(zip(incoming, incoming_ids))
-    ]
-
-
-def replace_task_ids(text: str, mapping: dict[str, str]) -> str:
-    return T_ID_RE.sub(lambda match: mapping.get(match.group(), match.group()), text)
-
-
 def ref_task_texts(root: Path, ref: str) -> dict[Path, str]:
     texts = {}
     for path in task_paths_at_ref(root, ref):
@@ -1017,7 +1421,7 @@ def commit_parents(root: Path, commit: str) -> list[str]:
     return result[1:]
 
 
-def adoption_commit(root: Path, tip: str) -> str | None:
+def adoption_commit(root: Path, tips: list[str]) -> str | None:
     commits = subprocess.run(
         [
             "git",
@@ -1025,7 +1429,7 @@ def adoption_commit(root: Path, tip: str) -> str | None:
             "--reverse",
             "--diff-filter=A",
             "--format=%H",
-            tip,
+            *tips,
             "--",
             "tools/agentmap_lint.py",
         ],
@@ -1049,8 +1453,8 @@ def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     )
 
 
-def outgoing_commits(root: Path, input_text: str, result: Result) -> list[str]:
-    commits: list[str] = []
+def outgoing_push_lines(root: Path, input_text: str, result: Result) -> list[list[str]]:
+    lines: list[list[str]] = []
     seen: set[str] = set()
     for line in input_text.splitlines():
         fields = line.split()
@@ -1075,26 +1479,13 @@ def outgoing_commits(root: Path, input_text: str, result: Result) -> list[str]:
         if history.returncode != 0:
             result.errors.append(f"pre-push: cannot resolve outgoing range for {local_sha}")
             continue
+        line_commits: list[str] = []
         for commit in history.stdout.splitlines():
             if commit not in seen:
                 seen.add(commit)
-                commits.append(commit)
-    return commits
-
-
-def task_renumbering(old: dict[Path, str], new: dict[Path, str]) -> tuple[dict[Path, Path], dict[str, str]]:
-    paths: dict[Path, Path] = {}
-    ids: dict[str, str] = {}
-    for old_path in old:
-        matches = [
-            new_path
-            for new_path in new
-            if new_path.name[5:] == old_path.name[5:] and new_path.name[:5] != old_path.name[:5]
-        ]
-        if len(matches) == 1:
-            paths[old_path] = matches[0]
-            ids[old_path.name[:5]] = matches[0].name[:5]
-    return paths, ids
+                line_commits.append(commit)
+        lines.append(line_commits)
+    return lines
 
 
 def ref_decision_entry(root: Path, ref: str) -> tuple[str, str] | None:
@@ -1124,14 +1515,10 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
 
     old_tasks = ref_task_texts(root, parent)
     new_tasks = ref_task_texts(root, commit)
-    renamed_paths, renamed_ids = task_renumbering(old_tasks, new_tasks)
     for path, old_text in old_tasks.items():
         if task_state(old_text) not in TERMINAL_STATES:
             continue
         if new_tasks.get(path) == old_text:
-            continue
-        renamed = renamed_paths.get(path)
-        if renamed and new_tasks.get(renamed) == replace_task_ids(old_text, renamed_ids):
             continue
         if is_commit_evidence_repair(root, old_text, new_tasks.get(path, "")):
             continue
@@ -1139,42 +1526,44 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
 
     if not check_additions:
         return
-    reverse_renames = {new: old for old, new in renamed_paths.items()}
     for path, text in new_tasks.items():
         if task_state(text) not in TERMINAL_STATES or path in old_tasks:
             continue
-        source = reverse_renames.get(path)
-        if source is None:
-            result.errors.append(f"{commit[:12]}: {path} was created directly in a terminal state")
+        result.errors.append(f"{commit[:12]}: {path} was created directly in a terminal state")
 
 
 def check_outgoing_history(root: Path, result: Result, input_text: str) -> None:
-    for commit in outgoing_commits(root, input_text, result):
-        baseline = adoption_commit(root, commit)
-        if baseline is None or commit == baseline or not is_ancestor(root, baseline, commit):
-            continue
-        parents = commit_parents(root, commit)
-        for index, parent in enumerate(parents):
-            check_history_transition(root, result, parent, commit, check_additions=index == 0)
-
-
-def check_merge_task_renumbering(
-    root: Path, result: Result, merge_head: str, renumbering: list[tuple[Path, Path]]
-) -> set[str]:
-    mapping = {source.name[:5]: target.name[:5] for source, target in renumbering}
-    for source, target in renumbering:
-        old = git_ref_text(root, merge_head, source)
-        current = (
-            (root / target).read_text(encoding="utf-8")
-            if (root / target).is_file()
-            else None
+    # The adoption baseline is shared across the whole push: the earliest
+    # commit that added tools/agentmap_lint.py anywhere in the outgoing
+    # tips' union history. is_ancestor(baseline, commit) is true exactly
+    # when that add sits in the commit's own history, so one O(history)
+    # walk replaces the former per-commit history scans (O(commits ×
+    # history) on large pushes).
+    lines = outgoing_push_lines(root, input_text, result)
+    total = sum(len(commits) for commits in lines)
+    tips = [commits[-1] for commits in lines if commits]
+    baseline = adoption_commit(root, tips) if tips else None
+    baseline_seen = False
+    for commits in lines:
+        for commit in commits:
+            if baseline is None or not is_ancestor(root, baseline, commit):
+                # Commits predating the tool are outside the audit; skipping
+                # them is only legitimate when another outgoing commit
+                # establishes the adoption baseline, which the post-loop
+                # check enforces.
+                continue
+            baseline_seen = True
+            if commit == baseline:
+                continue
+            parents = commit_parents(root, commit)
+            for index, parent in enumerate(parents):
+                check_history_transition(root, result, parent, commit, check_additions=index == 0)
+    if total and not baseline_seen:
+        result.errors.append(
+            "pre-push: no outgoing commit has tools/agentmap_lint.py in its history; "
+            "the outgoing history audit cannot establish an adoption baseline — "
+            "commit the tool into the pushed history first"
         )
-        if old is None or current != replace_task_ids(old, mapping):
-            result.errors.append(
-                f"tasks/: incoming {source.name[:5]} should be renumbered to "
-                f"{target.name[:5]} without other changes"
-            )
-    return set(mapping.values())
 
 
 def historical_task_ids(root: Path, merge_head: str | None = None) -> set[str]:
@@ -1208,7 +1597,9 @@ def verification_matrix_start(root: Path, result: Result) -> int | None:
     path = root / "CONVENTIONS.md"
     if not path.is_file():
         return None
-    text = path.read_text(encoding="utf-8")
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return None
     match = re.search(r"^-\s*验证矩阵起始 task:\s*T-(\d{3})\s*$", text, re.MULTILINE)
     if not match:
         result.errors.append("CONVENTIONS.md: missing 验证矩阵起始 task: T-nnn")
@@ -1229,9 +1620,12 @@ def code_review_start(root: Path, result: Result) -> int | None:
     path = root / "CONVENTIONS.md"
     if not path.is_file():
         return None
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return None
     match = re.search(
         r"^-\s*代码审核起始 task:\s*T-(\d{3})\s*$",
-        path.read_text(encoding="utf-8"),
+        text,
         re.MULTILINE,
     )
     if not match:
@@ -1247,6 +1641,32 @@ def code_review_start(root: Path, result: Result) -> int | None:
     if old_match and start > int(old_match.group(1)):
         result.errors.append("CONVENTIONS.md: 代码审核起始 task cannot move forward")
     return start
+
+
+def agentmap_spec_version(root: Path, result: Result) -> int:
+    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级。"""
+    path = root / "CONVENTIONS.md"
+    if not path.is_file():
+        return 1
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return 1
+    match = re.search(
+        r"^-\s*agentmap 规范版本:\s*(\d+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if match is None:
+        result.warnings.append(
+            "CONVENTIONS.md: missing agentmap 规范版本, linting with v1 rules; "
+            "bootstrap upgrade registers 规范版本: 2"
+        )
+        return 1
+    version = int(match.group(1))
+    if version not in (1, 2):
+        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1 or 2")
+        return 1
+    return version
 
 
 REVIEW_EVIDENCE_LABELS = ("审核方", "目的理解", "执行方式", "问题与修复", "复审结论")
@@ -1291,10 +1711,18 @@ def verification_matrix_rows(text: str) -> tuple[str | None, list[tuple[str, str
 
 
 def check_task_sections(
-    root: Path, result: Result, path: Path, text: str, require_matrix: bool
+    root: Path, result: Result, path: Path, text: str, require_matrix: bool, risk_level: str
 ) -> None:
     relative = path.relative_to(root).as_posix()
-    for heading in ("背景与目标", "差距评估", "收敛方案", "测试计划"):
+    # micro 档只保留 背景与目标：差距评估/收敛方案/测试计划对行为不变的
+    # 变更是仪式性写作，强制非空只会诱导编造内容；micro 的判断点改为
+    # 终态证据中的 风险自评 行（见 completed 证据检查）。
+    required_sections = (
+        ("背景与目标",)
+        if risk_level == "micro"
+        else ("背景与目标", "差距评估", "收敛方案", "测试计划")
+    )
+    for heading in required_sections:
         match = re.search(rf"^## {heading}\s*$([\s\S]*?)(?=^##\s|\Z)", text, re.MULTILINE)
         if not match or not match.group(1).strip():
             result.errors.append(f"{relative}: missing non-empty {heading}")
@@ -1322,7 +1750,7 @@ def check_verification_matrix(root: Path, result: Result, path: Path, text: str)
         )
         return
     for dimension, applicability, evidence in rows:
-        if re.search(r"\b(?:TBD|TODO|N/A)\b|待补", f"{applicability} {evidence}", re.IGNORECASE):
+        if PLACEHOLDER_RE.search(f"{applicability} {evidence}"):
             result.errors.append(f"{relative}: 验证矩阵 {dimension} cannot use placeholder evidence")
         not_applicable = re.fullmatch(r"不适用[:：](.+)", applicability)
         if not_applicable:
@@ -1385,12 +1813,6 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
     except OSError:
         tracked_lifecycle = []
     merge_head = git_merge_head(root)
-    merge_renumbering = merge_task_renumbering(root, merge_head)
-    merge_task_ids = (
-        check_merge_task_renumbering(root, result, merge_head, merge_renumbering)
-        if merge_head and merge_renumbering
-        else set()
-    )
     for entry in tracked_lifecycle:
         relative = entry[5:] if entry.startswith("HEAD:") else entry
         old = git_head_text(root, Path(relative))
@@ -1403,6 +1825,7 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
     states: dict[str, str] = {}
     matrix_start = verification_matrix_start(root, result)
     review_start = code_review_start(root, result)
+    spec_version = agentmap_spec_version(root, result)
     for path in sorted(tasks_dir.glob("*.md")):
         name_match = TASK_NAME_RE.match(path.name)
         relative = path.relative_to(root)
@@ -1413,13 +1836,25 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
             result.errors.append(
                 f"tasks/{path.name}: bad name, expect T-nnn-YYYYMMDD-slug.md"
             )
-        text = path.read_text(encoding="utf-8")
+        elif (
+            not name_match
+            and legacy_deadline_passed(result)
+        ):
+            result.errors.append(
+                f"tasks/{path.name}: legacy task name outlived the legacy 迁移截止 "
+                f"({result.legacy_cutoff.isoformat()}); rename to T-nnn-YYYYMMDD-slug.md"
+            )
+        text = read_text_checked(path, result, f"tasks/{path.name}")
+        if text is None:
+            continue
         current_state = task_state(text)
-        fm = parse_frontmatter(path)
+        fm = parse_frontmatter(text)
         if fm is None or fm.get("doc-type") != "task":
             result.errors.append(f"tasks/{path.name}: doc-type should be task")
             continue
         require_review = False
+        require_review_labels = False
+        require_self_check = False
         risk: list[str] = []
         if name_match and fm.get("id") != name_match.group(1):
             result.errors.append(
@@ -1428,12 +1863,27 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
         if name_match:
             task_id = name_match.group(1)
             task_ids.append(task_id)
-            require_matrix = matrix_start is not None and int(task_id[2:]) >= matrix_start
+            result.task_line_counts[task_id] = len(text.splitlines())
+            within_scope = matrix_start is not None and int(task_id[2:]) >= matrix_start
+            allowed_risk = "micro|standard|high" if spec_version >= 2 else "standard|high"
+            risk = re.findall(rf"^风险等级:\s*({allowed_risk})\s*$", text, re.MULTILINE)
+            risk_level = risk[0] if len(risk) == 1 else "standard"
+            require_matrix = within_scope
             require_review = review_start is not None and int(task_id[2:]) >= review_start
-            check_task_sections(root, result, path, text, require_matrix)
-            risk = re.findall(r"^风险等级:\s*(standard|high)\s*$", text, re.MULTILINE)
-            if require_review and len(risk) != 1:
-                result.errors.append(f"tasks/{path.name}: needs exactly one 风险等级: standard or high")
+            if spec_version >= 2:
+                if within_scope and len(risk) != 1:
+                    result.errors.append(
+                        f"tasks/{path.name}: needs exactly one 风险等级: micro, standard or high"
+                    )
+                require_matrix = within_scope and risk_level != "micro"
+                require_review = require_review and risk_level in ("standard", "high")
+                require_review_labels = require_review and risk_level == "high"
+                require_self_check = within_scope and risk_level == "standard"
+            else:
+                require_review_labels = require_review
+                if require_review and len(risk) != 1:
+                    result.errors.append(f"tasks/{path.name}: needs exactly one 风险等级: standard or high")
+            check_task_sections(root, result, path, text, require_matrix, risk_level)
             if old is None:
                 new_task_ids.append(task_id)
             if require_matrix and current_state not in TERMINAL_STATES:
@@ -1464,28 +1914,54 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 labels = ["实现", "测试", "commit"]
                 if old is None or task_state(old) not in TERMINAL_STATES:
                     labels.append("SOLUTION 对照")
+                if risk_level == "micro":
+                    # micro 免矩阵/免审核/免自查清单，风险自评行是它唯一的
+                    # 判断点：一句话说明为何行为不变、为何 micro 足够
+                    labels.append("风险自评")
                 for label in labels:
                     if not re.search(rf"^-\s*{label}:\s*\S", evidence, re.MULTILINE):
                         result.errors.append(
                             f"tasks/{path.name}: completed task needs {label} evidence"
                         )
-                commits = re.findall(r"^-\s*commit:\s*(\S+)", evidence, re.MULTILINE)
-                if commits and not all(
-                    re.fullmatch(r"[0-9a-f]{7,40}", item)
-                    and resolves_to_reachable_commit(root, item)
-                    for item in commits
-                ):
-                    result.errors.append(
-                        f"tasks/{path.name}: commit evidence must resolve to a reachable commit"
-                    )
+                # hash 提取用 hex 字符类而非 \S+：全角括号紧跟 hash（「54f4309（说明）」）
+                # 会被 \S+ 整体吞掉再被 fullmatch 拒绝，误伤合法格式
+                # 证据值逐行验证而非 findall 后 all()：占位值（如「待补」）不产出
+                # hex，findall 结果为空列表、all() 空集为真，completed 任务即可
+                # 用占位证据蒙混过关；改成逐行后非 hash 开头的值直接报错
+                commit_lines = re.findall(r"^-\s*commit:\s*(\S.*)$", evidence, re.MULTILINE)
+                for evidence_line in commit_lines:
+                    hash_match = re.match(r"[0-9a-f]{7,40}\b", evidence_line)
+                    if hash_match is None:
+                        result.errors.append(
+                            f"tasks/{path.name}: commit evidence line is not a commit"
+                            f" hash: {evidence_line}"
+                        )
+                    elif not resolves_to_reachable_commit(root, hash_match.group(0)):
+                        result.errors.append(
+                            f"tasks/{path.name}: commit evidence must resolve to a reachable commit"
+                        )
                 if require_review and not re.search(
                     r"^-[ \t]*review:[ \t]*(?:\S.*)?$", evidence, re.MULTILINE
                 ):
                     result.errors.append(
                         f"tasks/{path.name}: completed task needs independent code review evidence"
                     )
-                elif require_review and (old is None or task_state(old) not in TERMINAL_STATES):
+                elif require_review_labels and (old is None or task_state(old) not in TERMINAL_STATES):
                     check_review_evidence(root, result, path, evidence)
+                elif require_self_check and (old is None or task_state(old) not in TERMINAL_STATES):
+                    checklist = re.search(
+                        r"^## 自查清单\s*$([\s\S]*?)(?=^##\s|\Z)", text, re.MULTILINE
+                    )
+                    items = (
+                        re.findall(r"^[ \t]*-[ \t]+\S", checklist.group(1), re.MULTILINE)
+                        if checklist
+                        else []
+                    )
+                    if len(items) < 3:
+                        result.errors.append(
+                            f"tasks/{path.name}: completed standard task needs 自查清单"
+                            " with at least three items"
+                        )
             elif state == "abandoned" and not re.search(
                 r"^-\s*原因:\s*\S", terminal.group(1), re.MULTILINE
             ):
@@ -1505,20 +1981,8 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 result.errors.append(f"tasks/{path.name}: terminal task is immutable")
     for task_id in sorted(duplicate_ids(task_ids)):
         result.errors.append(f"tasks/: duplicate task id {task_id}")
-    for task_id in sorted((set(new_task_ids) & historical_ids) - merge_task_ids):
+    for task_id in sorted(set(new_task_ids) & historical_ids):
         result.errors.append(f"tasks/: reused task id {task_id}")
-    if merge_task_ids:
-        for task_id in sorted(set(new_task_ids) - merge_task_ids):
-            result.errors.append(f"tasks/: unexpected new task id during reconciliation: {task_id}")
-    elif new_task_ids:
-        next_number = max((int(task_id[2:]) for task_id in historical_ids), default=0) + 1
-        actual = sorted({int(task_id[2:]) for task_id in new_task_ids})
-        expected = list(range(next_number, next_number + len(actual)))
-        if actual != expected:
-            got = ", ".join(f"T-{number:03d}" for number in actual)
-            result.errors.append(
-                f"tasks/: new task ids must continue from T-{next_number:03d}, got {got}"
-            )
     result.tasks = counts
     result.task_states = states
 
@@ -1535,12 +1999,15 @@ def parse_frontmatter_text(text: str) -> dict[str, str]:
     return fields
 
 
-def test_anchor_patterns(root: Path) -> list[str]:
+def test_anchor_patterns(root: Path, result: Result) -> list[str]:
     path = root / "CONVENTIONS.md"
     if not path.is_file():
         return []
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return []
     values = re.findall(
-        r"^-\s*测试锚点路径:\s*(.+?)\s*$", path.read_text(encoding="utf-8"), re.MULTILINE
+        r"^-\s*测试锚点路径:\s*(.+?)\s*$", text, re.MULTILINE
     )
     return [pattern.strip() for value in values for pattern in value.split(";") if pattern.strip()]
 
@@ -1591,7 +2058,7 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
     anchored: set[str] = set()
     legacy_anchored: dict[Path, set[str]] = {}
     candidates = tracked_candidates(root)
-    patterns = test_anchor_patterns(root)
+    patterns = test_anchor_patterns(root, result)
     for relative in candidates:
         path = root / relative
         if not path.is_file():
@@ -1607,7 +2074,9 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
             if legacy:
                 legacy_anchored[relative] = legacy
     prd_path = root / "PRD.md"
-    prd = prd_path.read_text(encoding="utf-8") if prd_path.is_file() else ""
+    prd = ""
+    if prd_path.is_file():
+        prd = read_text_checked(prd_path, result, "PRD.md") or ""
     acceptance_ids: set[str] = set()
     requirements_without_acceptance_ids: list[str] = []
     for rid, body in sections(strip_code_fences(prd), R_HEADING_RE).items():
@@ -1647,9 +2116,12 @@ def code_anchors_enabled(root: Path, result: Result) -> bool:
     conventions = root / "CONVENTIONS.md"
     if not conventions.is_file():
         return False
+    text = read_text_checked(conventions, result, "CONVENTIONS.md")
+    if text is None:
+        return False
     match = re.search(
         r"^-\s*代码锚点:\s*(\S+)\s*$",
-        conventions.read_text(encoding="utf-8"),
+        text,
         re.MULTILINE,
     )
     if not match:
@@ -1669,7 +2141,7 @@ def check_code_anchors(root: Path, result: Result, enabled: bool) -> None:
     if not enabled:
         return
     task_ids = historical_task_ids(root)
-    patterns = test_anchor_patterns(root)
+    patterns = test_anchor_patterns(root, result)
     anchor_re = re.compile(r"AgentMap:\s*(.*)$", re.MULTILINE)
     for relative in tracked_candidates(root):
         path = root / relative
@@ -1754,7 +2226,9 @@ def check_hooks(root: Path, result: Result) -> None:
     for name in ("commit-msg", "pre-commit", "pre-push"):
         path = root / ".githooks" / name
         if path.is_file():
-            text = path.read_text(encoding="utf-8")
+            text = read_text_checked(path, result, f".githooks/{name}")
+            if text is None:
+                continue
             if f"{name}.d/" not in text or "continue" not in text:
                 result.errors.append(f".githooks/{name}: must safely dispatch an empty {name}.d/")
 
@@ -1782,7 +2256,9 @@ def check_hooks(root: Path, result: Result) -> None:
 
     conventions = root / "CONVENTIONS.md"
     if conventions.is_file():
-        text = conventions.read_text(encoding="utf-8")
+        text = read_text_checked(conventions, result, "CONVENTIONS.md")
+        if text is None:
+            return
         authority = re.findall(r"^-\s*权威验证入口:\s*(\S+)\s*$", text, re.MULTILINE)
         if len(authority) != 1:
             result.errors.append("CONVENTIONS.md: missing 权威验证入口")
@@ -1855,14 +2331,16 @@ def strict_test_anchors(root: Path, result: Result, forced: bool) -> bool:
     conventions = root / "CONVENTIONS.md"
     if not conventions.is_file():
         return True
-    text = conventions.read_text(encoding="utf-8")
+    text = read_text_checked(conventions, result, "CONVENTIONS.md")
+    if text is None:
+        return True
     match = re.search(r"^-\s*测试锚定模式:\s*(.+?)\s*$", text, re.MULTILINE)
     if not match:
-        result.errors.append("CONVENTIONS.md: missing 测试锚定模式: strict or migration T-nnn")
+        result.errors.append("CONVENTIONS.md: missing 测试锚定模式: strict, lite or migration T-nnn")
         return True
     mode = match.group(1)
-    if mode == "strict":
-        return True
+    if mode in ("strict", "lite"):
+        return mode == "strict"
     migration = re.fullmatch(r"migration\s+(T-\d{3})", mode)
     if not migration:
         result.errors.append("CONVENTIONS.md: invalid 测试锚定模式")
@@ -1877,9 +2355,13 @@ def strict_test_anchors(root: Path, result: Result, forced: bool) -> bool:
 def lint(root: Path, strict_tests: bool = False) -> Result:
     result = Result()
     changed = git_changed_paths(root)
+    result.legacy_cutoff = legacy_cutoff(root, result)
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
+    check_id_formats(root, result)
+    check_writing_style(root, result, changed)
     check_traceability(root, result)
+    check_core_document_budget(root, result)
     check_tasks(root, result, changed)
     check_test_anchors(root, result, strict_test_anchors(root, result, strict_tests))
     check_code_anchors(root, result, code_anchors_enabled(root, result))
@@ -1899,6 +2381,14 @@ def print_result(result: Result, report: bool) -> None:
             f"goals={len(result.goals)}, "
             f"tasks={result.tasks}"
         )
+        if result.task_line_counts:
+            counts = ", ".join(
+                f"{task_id}={lines}" for task_id, lines in sorted(result.task_line_counts.items())
+            )
+            print(
+                "AgentMap task 文书行数: "
+                f"{counts} (total={sum(result.task_line_counts.values())})"
+            )
     if result.warnings:
         print("agentmap lint warnings:")
         for warning in result.warnings:
@@ -1933,6 +2423,7 @@ The user can search.
 doc-type: solution
 mutation: living
 owner: agent
+核对日期: 2026-08-01
 ---
 # SOLUTION
 ## 架构视图清单
@@ -2012,10 +2503,12 @@ owner: agent
 ---
 # CONVENTIONS
 ## AgentMap 本地参数
+- agentmap 规范版本: 2
 - 需求组 01: User
 - 验证矩阵起始 task: T-001
 - 代码审核起始 task: T-001
 - 测试锚定模式: strict
+- 核心文档上限: 20000 token
 ## 验证门禁
 - 权威验证入口: .githooks/pre-push
 - CI 门禁: 不适用：fixture 没有共享集成分支
@@ -2029,7 +2522,10 @@ owner: agent
     source = Path(__file__).read_text(encoding="utf-8")
     (root / "tools").mkdir()
     (root / "tools/agentmap_lint.py").write_text(source, encoding="utf-8")
-    (root / "AGENTS.md").write_bytes((Path(__file__).parents[1] / "AGENTS.md").read_bytes())
+    agents_template = Path(__file__).parents[1] / "AGENTS.md.tmpl"
+    if not agents_template.is_file():
+        agents_template = Path(__file__).parents[1] / "AGENTS.md"
+    (root / "AGENTS.md").write_bytes(agents_template.read_bytes())
     (root / "tasks").mkdir()
     (root / "tasks/T-001-20260801-search.md").write_text(
         """---
@@ -2040,7 +2536,7 @@ id: T-001
 # Search
 状态: active
 关联: R-01-001 → Search
-风险等级: standard
+风险等级: high
 ## 背景与目标
 Provide searchable results.
 ## 差距评估
@@ -2087,7 +2583,167 @@ Run the search test.
         hook.chmod(0o755)
 
 
-def self_test_merge_task_renumbering() -> None:
+def self_test_risk_tiers() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        base = (root / "tasks/T-001-20260801-search.md").read_text(encoding="utf-8")
+
+        def variant(
+            task_id: str,
+            title: str,
+            risk: str,
+            *,
+            drop_matrix: bool = False,
+            minimal: bool = False,
+        ) -> str:
+            text = base.replace("id: T-001", f"id: {task_id}")
+            text = text.replace("# Search", f"# {title}")
+            text = text.replace("风险等级: high", f"风险等级: {risk}")
+            if drop_matrix:
+                text = re.sub(r"## 验证矩阵[\s\S]*?(?=## 终态与证据)", "", text)
+            if minimal:
+                # micro 章节分层：差距评估/收敛方案/测试计划 不再要求
+                for heading in ("测试计划", "收敛方案", "差距评估"):
+                    text = re.sub(rf"## {heading}[\s\S]*?(?=## |\Z)", "", text)
+            return text
+
+        micro = root / "tasks/T-002-20260801-micro.md"
+        micro.write_text(
+            variant("T-002", "Micro", "micro", drop_matrix=True, minimal=True),
+            encoding="utf-8",
+        )
+        standard = root / "tasks/T-003-20260801-standard.md"
+        standard.write_text(variant("T-003", "Standard", "standard"), encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        implementation_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        clean = lint(root, strict_tests=True)
+        assert not clean.errors, clean.errors
+
+        def complete(path: Path, evidence: str) -> None:
+            text = path.read_text(encoding="utf-8").replace("状态: active", "状态: completed")
+            path.write_text(text + evidence, encoding="utf-8")
+
+        micro_active_text = micro.read_text(encoding="utf-8")
+        complete(
+            micro,
+            f"""
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- commit: {implementation_commit}
+""",
+        )
+        micro_missing = lint(root, strict_tests=True)
+        assert any(
+            "completed task needs 风险自评 evidence" in error
+            for error in micro_missing.errors
+        ), micro_missing.errors
+        # 终态不可变：先回退到已提交的 active 文本，再带风险自评重关
+        micro.write_text(micro_active_text, encoding="utf-8")
+        complete(
+            micro,
+            f"""
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- commit: {implementation_commit}
+- 风险自评: 注释级调整，无行为变化
+""",
+        )
+        micro_ok = lint(root, strict_tests=True)
+        assert not micro_ok.errors, micro_ok.errors
+
+        complete(
+            standard,
+            f"""
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- commit: {implementation_commit}
+""",
+        )
+        standard_missing = lint(root, strict_tests=True)
+        assert any(
+            "completed task needs independent code review evidence" in error
+            for error in standard_missing.errors
+        )
+
+        standard.write_text(
+            standard.read_text(encoding="utf-8")
+            + "- review: 子代理 code-review，无 blocking finding\n",
+            encoding="utf-8",
+        )
+        standard_missing_checklist = lint(root, strict_tests=True)
+        assert any(
+            "completed standard task needs 自查清单" in error
+            for error in standard_missing_checklist.errors
+        )
+
+        standard.write_text(
+            standard.read_text(encoding="utf-8")
+            + "\n## 自查清单\n"
+            + "- 边界：空查询返回空结果\n"
+            + "- 异常路径：非法输入返回错误\n"
+            + "- 回归影响：既有搜索用例全部通过\n",
+            encoding="utf-8",
+        )
+        standard_ok = lint(root, strict_tests=True)
+        assert not standard_ok.errors, standard_ok.errors
+        standard_completed_text = standard.read_text(encoding="utf-8")
+
+        standard.write_text(
+            standard_completed_text.replace("风险等级: standard\n", ""), encoding="utf-8"
+        )
+        missing_risk = lint(root, strict_tests=True)
+        assert any(
+            "needs exactly one 风险等级: micro, standard or high" in error
+            for error in missing_risk.errors
+        )
+        standard.write_text(standard_completed_text, encoding="utf-8")
+
+        conventions = root / "CONVENTIONS.md"
+        original_conventions = conventions.read_text(encoding="utf-8")
+        conventions.write_text(
+            original_conventions.replace("- agentmap 规范版本: 2\n", ""), encoding="utf-8"
+        )
+        v1_lint = lint(root, strict_tests=True)
+        assert any("missing agentmap 规范版本" in warning for warning in v1_lint.warnings)
+        assert any(
+            "needs exactly one 风险等级: standard or high" in error for error in v1_lint.errors
+        )
+
+        conventions.write_text(
+            original_conventions.replace("- 测试锚定模式: strict", "- 测试锚定模式: lite"),
+            encoding="utf-8",
+        )
+        anchored_test = root / "tests/test_search.py"
+        original_test = anchored_test.read_text(encoding="utf-8")
+        anchored_test.write_text("def test_search(): pass\n", encoding="utf-8")
+        lite = lint(root, strict_tests=True)
+        assert not lite.errors, lite.errors
+        assert any(
+            "acceptance criteria without test anchor" in warning for warning in lite.warnings
+        )
+        anchored_test.write_text(original_test, encoding="utf-8")
+        conventions.write_text(original_conventions, encoding="utf-8")
+
+
+def self_test_id_formats() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         write_fixture(root)
@@ -2100,93 +2756,29 @@ def self_test_merge_task_renumbering() -> None:
             cwd=root,
             check=True,
         )
-        target_branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        implementation_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        task = (root / "tasks/T-001-20260801-search.md").read_text(encoding="utf-8")
-        incoming = root / "tasks/T-002-20260802-incoming.md"
-        incoming.write_text(
-            task.replace("id: T-001", "id: T-002")
-            .replace("# Search", "# Incoming")
-            .replace("关联: R-01-001 → Search", "关联: T-003")
-            .replace("状态: active", "状态: completed")
-            + f"""
-- 实现: merged
-- 测试: passed
-- SOLUTION 对照: SOLUTION 与实现一致
-- review:
-  - 审核方: reviewer-agent
-  - 目的理解: 验证 incoming task 的合并目标
-  - 执行方式: code-review skill
-  - 问题与修复: 无
-  - 复审结论: pass
-- commit: {implementation_commit}
-""",
-            encoding="utf-8",
-        )
-        followup = root / "tasks/T-003-20260802-followup.md"
-        followup.write_text(
-            task.replace("id: T-001", "id: T-003")
-            .replace("# Search", "# Followup")
-            .replace("关联: R-01-001 → Search", "关联: T-002"),
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "switch", "-qc", "incoming"], cwd=root, check=True)
-        subprocess.run(["git", "add", "tasks"], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "incoming tasks"],
-            cwd=root,
-            check=True,
-        )
-        subprocess.run(["git", "switch", "-q", target_branch], cwd=root, check=True)
-        target = root / "tasks/T-002-20260802-target.md"
-        target.write_text(
-            task.replace("id: T-001", "id: T-002").replace("# Search", "# Target"),
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "add", "tasks"], cwd=root, check=True)
-        subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "target task"],
-            cwd=root,
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "merge",
-                "--no-commit",
-                "--no-ff",
-                "incoming",
-            ],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        unresolved = lint(root, strict_tests=True)
-        assert any("incoming T-002 should be renumbered to T-003" in error for error in unresolved.errors)
-        assert any("incoming T-003 should be renumbered to T-004" in error for error in unresolved.errors)
+        clean = lint(root, strict_tests=True)
+        assert not clean.errors, clean.errors
 
-        mapping = {"T-002": "T-003", "T-003": "T-004"}
-        for old, new in ((incoming, incoming.with_name("T-003-20260802-incoming.md")),
-                         (followup, followup.with_name("T-004-20260802-followup.md"))):
-            text = old.read_text(encoding="utf-8")
-            old.unlink()
-            new.write_text(replace_task_ids(text, mapping), encoding="utf-8")
-        resolved = lint(root, strict_tests=True)
-        assert not resolved.errors, resolved.errors
+        prd = root / "PRD.md"
+        original = prd.read_text(encoding="utf-8")
+        prd.write_text(
+            original
+            + "\n参照需求R-100-001与任务T-0001、决策C-001AB、验收R-01-001/AC-021收口。\n",
+            encoding="utf-8",
+        )
+        flagged = lint(root, strict_tests=True)
+        for fragment in (
+            "invalid requirement id R-100-001",
+            "invalid task id T-0001",
+            "invalid decision id C-001AB",
+            "invalid acceptance id R-01-001/AC-021",
+        ):
+            assert any(fragment in error for error in flagged.errors), flagged.errors
+        prd.write_text(original + "\n参见任务T-001与需求R-01-001。\n", encoding="utf-8")
+        cjk_clean = lint(root, strict_tests=True)
+        assert not cjk_clean.errors, cjk_clean.errors
+        prd.write_text(original, encoding="utf-8")
+        assert not lint(root, strict_tests=True).errors
 
 
 def self_test_terminal_evidence_repair() -> None:
@@ -2322,6 +2914,210 @@ def self_test_terminal_evidence_repair() -> None:
         assert any("changed after reaching a terminal state" in error for error in result.errors), result.errors
 
 
+def self_test_state_scope_and_evidence() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        (root / "tools").mkdir(exist_ok=True)
+        shutil.copy(Path(__file__).resolve(), root / "tools/agentmap_lint.py")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        initial = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        assert not lint(root, strict_tests=True).errors
+
+        task = root / "tasks/T-001-20260801-search.md"
+        active_text = task.read_text(encoding="utf-8")
+
+        # 状态劫持防线：正文节内的「状态: completed」行只是引用文字，任务
+        # 仍以标题块的 active 为准；若全文搜索回归，此处会按 completed
+        # 追加实现/测试等证据缺失错误。
+        task.write_text(active_text + "状态: completed\n")
+        hijacked = lint(root, strict_tests=True)
+        assert not hijacked.errors, hijacked.errors
+        task.write_text(active_text)
+
+        # 终态证据占位防线：`- commit: 待补` 满足标签存在性检查，但值不是
+        # hash，不得当作已满足 commit 证据蒙混过关。
+        placeholder_text = active_text.replace("状态: active", "状态: completed") + f"""
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- review:
+  - 审核方: reviewer-agent
+  - 目的理解: 验证 Search task 的结果目标
+  - 执行方式: code-review skill
+  - 问题与修复: 无
+  - 复审结论: pass
+- commit: 待补
+"""
+        task.write_text(placeholder_text)
+        flagged = lint(root, strict_tests=True)
+        assert any(
+            "commit evidence line is not a commit hash: 待补" in error for error in flagged.errors
+        ), flagged.errors
+        assert not any(
+            "commit evidence must resolve to a reachable commit" in error
+            for error in flagged.errors
+        ), flagged.errors
+
+        task.write_text(placeholder_text.replace("- commit: 待补", f"- commit: {initial}"))
+        resolved = lint(root, strict_tests=True)
+        assert not resolved.errors, resolved.errors
+
+
+def self_test_io_errors() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        todo = root / "TODO.md"
+        todo.write_bytes(todo.read_bytes() + b"\n\xff\xfe not utf-8\n")
+        task = root / "tasks/T-001-20260801-search.md"
+        task.write_bytes(task.read_bytes() + b"\n\xff\xfe not utf-8\n")
+        result = lint(root, strict_tests=True)
+        assert any(
+            "TODO.md: cannot read file (UnicodeDecodeError" in error for error in result.errors
+        ), result.errors
+        assert any(
+            "tasks/T-001-20260801-search.md: cannot read file (UnicodeDecodeError" in error
+            for error in result.errors
+        ), result.errors
+        # The unreadable task is skipped, not hallucinated into a state: no
+        # secondary "missing valid 状态" error for the same file.
+        assert not any(
+            "missing valid 状态" in error for error in result.errors
+        ), result.errors
+
+
+def self_test_document_budget_and_decisions() -> None:
+    """Core-document budget gate plus RATIONALE supersession references."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        conventions = root / "CONVENTIONS.md"
+        conventions_original = conventions.read_text(encoding="utf-8")
+        solution = root / "SOLUTION.md"
+        solution_original = solution.read_text(encoding="utf-8")
+
+        conventions.write_text(conventions_original.replace("- 核心文档上限: 20000 token\n", ""))
+        unregistered = lint(root, strict_tests=True)
+        assert any("核心文档上限 not registered" in warning for warning in unregistered.warnings)
+        conventions.write_text(conventions_original)
+
+        solution.write_text(solution_original + "\n" + "x" * 70000 + "\n")
+        over_limit = lint(root, strict_tests=True)
+        assert any("over the registered limit" in error for error in over_limit.errors), over_limit.errors
+        conventions.write_text(conventions_original + "- 核心文档分片方案: SOLUTION.md 拆分见 tasks/\n")
+        planned = lint(root, strict_tests=True)
+        assert any("over the registered limit" in warning for warning in planned.warnings)
+        assert not any("over the registered limit" in error for error in planned.errors)
+        solution.write_text(solution_original)
+        conventions.write_text(conventions_original)
+
+        solution_line = "核对日期: 2026-08-01\n"
+        solution.write_text(solution_original.replace(solution_line, ""))
+        unverified = lint(root, strict_tests=True)
+        assert any("lacks 核对日期" in warning for warning in unverified.warnings)
+        solution.write_text(solution_original.replace(solution_line, "核对日期: 2026/08/01\n"))
+        malformed = lint(root, strict_tests=True)
+        assert any("核对日期 must be YYYY-MM-DD" in error for error in malformed.errors)
+        solution.write_text(solution_original)
+
+        rationale = root / "RATIONALE.md"
+        rationale_original = rationale.read_text(encoding="utf-8")
+        entries = (
+            "\n### C-001 采用单文件存储\n日期: 2026-08-01\n\n#### 上下文\n原型阶段。\n"
+            "#### 决策\n先用单文件。\n#### 被否方案及原因\n外部数据库过重。\n#### 影响面\n文档服务\n"
+            "\n### C-002 改用嵌入式存储\n日期: 2026-08-02\n\n#### 上下文\n并发写入受损。\n"
+            "#### 决策\n改用嵌入式存储。\n- 废弃: C-001\n#### 被否方案及原因\n维持单文件会继续损坏。\n#### 影响面\n文档服务\n"
+        )
+        rationale.write_text(rationale_original + entries)
+        clean = lint(root, strict_tests=True)
+        assert not any("superseded" in error for error in clean.errors), clean.errors
+        prd = root / "PRD.md"
+        prd_original = prd.read_text(encoding="utf-8")
+        prd.write_text(prd_original.replace("- 关联方案: Search", "- 关联方案: Search\n- 出处: C-001"))
+        stale = lint(root, strict_tests=True)
+        assert any(
+            "references superseded decision C-001 superseded by C-002" in error for error in stale.errors
+        ), stale.errors
+        prd.write_text(prd_original)
+
+        rationale.write_text(rationale_original + entries.replace("- 废弃: C-001", "- 废弃: C-999"))
+        dangling = lint(root, strict_tests=True)
+        assert any("superseded decision C-999 does not exist" in error for error in dangling.errors)
+        rationale.write_text(rationale_original)
+
+
+def self_test_legacy_cutoff() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        legacy = root / "tasks/20260731-legacy.md"
+        legacy.write_text(
+            "---\ndoc-type: task\nmutation: lifecycle\n---\n# Legacy\n状态: active\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        tolerated = lint(root, strict_tests=True)
+        assert not any("legacy task name" in error for error in tolerated.errors), tolerated.errors
+
+        conventions = root / "CONVENTIONS.md"
+        original = conventions.read_text(encoding="utf-8")
+        conventions.write_text(original + "- legacy 迁移截止: 2026-01-01\n", encoding="utf-8")
+        expired = lint(root, strict_tests=True)
+        assert any(
+            "legacy task name outlived the legacy 迁移截止" in error for error in expired.errors
+        ), expired.errors
+
+        conventions.write_text(original + "- legacy 迁移截止: 2099-01-01\n", encoding="utf-8")
+        future = lint(root, strict_tests=True)
+        assert not any(
+            "legacy task name outlived" in error or "迁移截止" in error for error in future.errors
+        ), future.errors
+
+        conventions.write_text(original + "- legacy 迁移截止: 2026-1-1\n", encoding="utf-8")
+        malformed = lint(root, strict_tests=True)
+        assert any(
+            "legacy 迁移截止 must be YYYY-MM-DD" in error for error in malformed.errors
+        ), malformed.errors
+        conventions.write_text(original, encoding="utf-8")
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -2343,6 +3139,35 @@ def self_test() -> None:
         valid = lint(root, strict_tests=True)
         assert not valid.errors, valid.errors
 
+        style_conventions = root / "CONVENTIONS.md"
+        style_original = style_conventions.read_text(encoding="utf-8")
+        style_conventions.write_text(style_original + "- " + "一条超长规则。" * 30 + "\n", encoding="utf-8")
+        style_flagged = lint(root, strict_tests=True)
+        assert any("list item may carry multiple rules" in warning for warning in style_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 外层（中含嵌套（内层））括号的列表项。\n", encoding="utf-8"
+        )
+        nested_flagged = lint(root, strict_tests=True)
+        assert any("nested parentheses" in warning for warning in nested_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 尽量在完成后适当调整相关文档。\n", encoding="utf-8"
+        )
+        vague_flagged = lint(root, strict_tests=True)
+        assert any("vague wording" in warning for warning in vague_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 系统配置文件读取模块错误处理逻辑由该层负责。\n", encoding="utf-8"
+        )
+        stack_flagged = lint(root, strict_tests=True)
+        assert any("long noun stack" in warning for warning in stack_flagged.warnings)
+        style_conventions.write_text(style_original, encoding="utf-8")
+        style_clean = lint(root, strict_tests=True)
+        assert not any(
+            "may carry multiple rules" in warning
+            or "nested parentheses" in warning
+            or "vague wording" in warning
+            or "long noun stack" in warning
+            for warning in style_clean.warnings
+        )
         implementation_commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -2357,6 +3182,16 @@ def self_test() -> None:
         invalid_todo = lint(root, strict_tests=True)
         assert any("entry needs one valid intake type tag" in error for error in invalid_todo.errors)
         todo.write_text(original_todo, encoding="utf-8")
+
+        solution = root / "SOLUTION.md"
+        original_solution = solution.read_text(encoding="utf-8")
+        solution.write_text(original_solution + "\n覆盖 R-01-001～R-02-003。\n", encoding="utf-8")
+        cross_group = lint(root, strict_tests=True)
+        assert any("spans requirement groups" in error for error in cross_group.errors)
+        solution.write_text(original_solution + "\n覆盖 R-01-001～R-01-999。\n", encoding="utf-8")
+        wide_range = lint(root, strict_tests=True)
+        assert any("spans over 100 ids" in error for error in wide_range.errors)
+        solution.write_text(original_solution, encoding="utf-8")
 
         task = root / "tasks/T-001-20260801-search.md"
         active_text = task.read_text(encoding="utf-8")
@@ -2377,7 +3212,7 @@ def self_test() -> None:
             encoding="utf-8",
         )
         skipped_task_id = lint(root, strict_tests=True)
-        assert any("new task ids must continue from T-002" in error for error in skipped_task_id.errors)
+        assert not skipped_task_id.errors, skipped_task_id.errors
         skipped_task.unlink()
 
         task.unlink()
@@ -2545,6 +3380,13 @@ def self_test() -> None:
         deleted = lint(root, strict_tests=True)
         assert any("terminal task was deleted or moved" in error for error in deleted.errors)
         task.write_text(git_head_text(root, task.relative_to(root)) or "", encoding="utf-8")
+        pre_rename = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         renamed = root / "tasks/T-002-20260801-search.md"
         task.rename(renamed)
         renamed.write_text(
@@ -2557,9 +3399,22 @@ def self_test() -> None:
             cwd=root,
             check=True,
         )
+        rename_history = Result()
+        check_history_transition(root, rename_history, pre_rename, "HEAD", check_additions=True)
+        assert any(
+            "changed after reaching a terminal state" in error for error in rename_history.errors
+        )
+        assert any(
+            "created directly in a terminal state" in error for error in rename_history.errors
+        )
         assert "T-002" in historical_task_ids(root)
+    self_test_id_formats()
+    self_test_state_scope_and_evidence()
+    self_test_io_errors()
+    self_test_document_budget_and_decisions()
+    self_test_legacy_cutoff()
     self_test_terminal_evidence_repair()
-    self_test_merge_task_renumbering()
+    self_test_risk_tiers()
     print("agentmap lint self-test passed")
 
 
@@ -2577,13 +3432,42 @@ def main() -> int:
         self_test()
         return 0
     root = args.root.resolve()
-    if args.staged:
-        with staged_checkout(root) as snapshot:
-            result = lint(snapshot, strict_tests=args.strict_tests)
-    else:
-        result = lint(root, strict_tests=args.strict_tests)
-    if args.pre_push:
-        check_outgoing_history(root, result, sys.stdin.read())
+    try:
+        if args.staged:
+            with staged_checkout(root) as snapshot:
+                result = lint(snapshot, strict_tests=args.strict_tests)
+        else:
+            result = lint(root, strict_tests=args.strict_tests)
+        if args.pre_push:
+            stdin_text = sys.stdin.read()
+            if not stdin_text.strip():
+                # git always passes <remote-name> <remote-url> to pre-push and
+                # sends an empty ref list only when there is nothing to push.
+                # Empty stdin without that context means the hook was invoked
+                # outside git, which would silently skip the history audit.
+                if len(args.hook_args) != 2:
+                    result.errors.append(
+                        "pre-push: no ref updates on stdin and no hook context "
+                        "(git passes <remote-name> <remote-url>); refusing to run "
+                        "without the outgoing history audit"
+                    )
+            else:
+                check_outgoing_history(root, result, stdin_text)
+    except (OSError, UnicodeDecodeError, subprocess.CalledProcessError) as error:
+        # Last-resort backstop for environment failures (broken repository,
+        # vanished files, undecodable bytes) so the hook fails closed with an
+        # actionable message instead of a traceback the agent cannot act on.
+        detail = (getattr(error, "stderr", "") or "").strip()
+        print(
+            "agentmap lint failed on an unrecoverable I/O or git error:"
+            f" {error.__class__.__name__}: {error}{(' | ' + detail) if detail else ''}",
+            file=sys.stderr,
+        )
+        print_result(
+            Result(errors=[f"I/O or git error: {error.__class__.__name__}: {error}"]),
+            args.report,
+        )
+        return 1
     print_result(result, args.report)
     return bool(result.errors)
 
