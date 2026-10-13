@@ -503,13 +503,13 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 配置与状态服务
-- 职责: `advisor-flow` 命名空间 live re-apply 与宿主 SettingsForms 适配；web 设置卡 gateway RPC；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
+- 职责: `advisor-flow` 命名空间 live re-apply 与宿主 SettingsForms 适配；模型目录查询（web 卡下拉数据源，自有 gateway RPC）；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
   - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging、turnReviewExemptPatterns；旧键警告保留。
   - turnReviewExemptPatterns 兼作咨询工具面守卫的判定清单（C-025）：审核类子会话豁免与工具面守卫共用同一关键词语义，不新增键。
   - 0.2.0 SettingsForms 适配（T-028，C-026）：插件模块导出 schemastery `Config`（宿主经 `entry.fiber.runtime.Config` 发现，describe/update 由此驱动）；schema 成员一律宽松 `z.any().volatile()`——volatile 承担编辑面判定，零校验零默认填充，校验单点仍在解析器；entry config 的 volatile cell 统一经 `unwrapVolatileConfig` 解包（cell 非透传 proxy，读值必须 `.get()`）；宿主热更新经 `loader/volatile-update` 事件桥接 live re-apply，读时求值点始终兜底且仅在 source 原文变化时应用（运行时写入不回退）。
-  - 持久写缝：卡片保存经 `settings.update(ns, patch)`（SettingsForms volatile 写缝）落 profile patch 行配置；补丁按 schema 顶层声明键投影——宿主 validatePaths 拒绝 schema 外顶层键，未知键留在文档层（junk 保留语义不破坏）。
+  - 持久写缝（T-030 起 web 卡走宿主客户端管线）：卡片保存 = 一次 `settings.mutate(ns, ops)`（宿主 configForms 通道）；插件服务端写缝 `settings.update(ns, patch)`（SettingsForms volatile 写缝，落 profile patch 行配置）保留给 gateway/API 面；补丁按 schema 顶层声明键投影——宿主 validatePaths 拒绝 schema 外顶层键，未知键留在文档层（junk 保留语义不破坏）。
   - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）
@@ -534,8 +534,8 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### web 设置卡
-- 职责: 插件管理页 Advisor Flow 行配置卡（开关、模型、门矩阵、新配置键、隐私档位、风险提示），经自有 gateway RPC 读写（承接 R-02-001 的 GUI 面）
-- 关键内部结构: 0.2.0 挂点为插件管理页 keyed 槽 `plugins.row.config`（key `<包名>#<行 id>` = `dsh-advisor-flow#advisor-flow`；ownerProps `{view:'summary'|'page'}`——summary 一行摘要、page 渲染整卡；旧 `settings.plugin.item` 槽 0.2.0 已移除）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省（T-016）。
+- 职责: 插件管理页 Advisor Flow 配置卡（开关、模型、门矩阵、新配置键、隐私档位、风险提示），值流走宿主 configForms 管线（承接 R-02-001 的 GUI 面）
+- 关键内部结构: 0.2.0 挂点为插件管理页 keyed 槽 `plugins.bundle.config`（key = 包名 = `dsh-advisor-flow`；dsh-context 同构，T-030），组件渲染于 bundle 详情页 `detailSections`；注册整体活在 `ctx.effect` 内且仅当宿主 `configForms.whileServed(['advisor-flow'])` 判定本命名空间被服务（apply 同步帧绝不触碰 slots——T-029 槽声明竞态教训）。值流（T-030，dsh-context 同构）：读经 `configForms.get(ns)` 控制器快照订阅（宿主 describe 镜像，revision 栅栏与自愈由宿主承载）；写经保存时一次 `form.mutate(全量脏字段 set ops)`（宿主正规写缝 `settings.mutate` → volatile write → profile patch → volatile-update live re-apply）；自有 gateway RPC 只保留模型目录（`llm/listProviders`、`session/modelCatalog`）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省（T-016）。
   - 保存控件常驻: footer 按钮组以 sticky 定位常驻滚动视口底部（R-02-001/AC-09；C-024）。
   - 长表单滚动到任意位置时，保存与放弃修改控件保持可见。
   - 未保存徽标: 存在暂存修改时，卡片头部呈现「未保存」标识（R-02-001/AC-10）。
@@ -556,7 +556,7 @@ flowchart TD
 - 插件零宿主补丁、零 postinstall；对 dsh 插件接缝的版本假设在 package.json 声明。
 - 宿主服务访问双原语（装载期实测教训）：必选服务声明式 `inject = ['agents', 'llm']`；可选服务一律条件 `ctx.inject` 子上下文；绝不以 try/catch 探测 ctx 代理属性。tools 特殊：条件子上下文 + 注册失败 fail loud（ask_advisor 与 record_advisor_outcome 为用户面）。
 - package.json 必须声明 `exports` 段含 `./client` 子路径。
-- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`ctx.on('agent/turn-stopping', …, {global:true})`（收口评审缝，T-008 实测载体）、`agent.steer`、`ctx.systemPrompt.section`、设置面 `Config` 导出（SettingsForms schema 发现，T-028）、`settings.update` 写缝投影、`loader/volatile-update`（宿主热更新事件，T-028）、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）、`ctx.subagents.list()/start()`（子会话呈现缝，R-02-007）。
+- 全部 dsh 接缝调用点：`ctx.root.get('llm')`、`llm.resolveModelInfo` 能力门控、`ctx.on('tools/pre-execute')`、`ctx.on('tools/result')`、`ctx.on('session/event', …, {global:true})`、`ctx.on('agent/turn-stopping', …, {global:true})`（收口评审缝，T-008 实测载体）、`agent.steer`、`ctx.systemPrompt.section`、设置面 `Config` 导出（SettingsForms schema 发现，T-028）、`settings.update` 写缝投影、`loader/volatile-update`（宿主热更新事件，T-028）、client 侧 `configForms.get/whileServed` + `settings.mutate` 写缝（web 卡值流，T-030）、GatewayService RPC、命令注册表、dsh-session-query（素材脉络，T-012 spike 确认形态）、`ctx.subagents.list()/start()`（子会话呈现缝，R-02-007）。
 - 思考型顾问路由默认 effort 可能为 max：调用必须显式携带能力门控后的 effort；预算与超时可配置，不得硬编码。
 - 日志统一 `ctx.logger('advisor-flow')`，失败原因 info 级可见。
 

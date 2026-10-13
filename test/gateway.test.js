@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advisorFlowTypertContribution, createConfigGateway, mergeAdvisorFlowConfig, toWireJson } from '../lib/gateway.js';
+import { SAVE_NOTICE_EPHEMERAL, SAVE_NOTICE_PERSISTED, SAVE_NOTICE_WRITE_FAILED } from '../lib/config.js';
 
 const BASE = {
     enabled: true,
@@ -148,7 +149,7 @@ test('R-02-001/AC-01 TypertRemoteService 服务方法：get/set 委托处理器�
             ok: true,
             config: { enabled: true, advisor: { provider: 'p', model: payload.args.patch.advisor.model } },
             persisted: true,
-            notice: '已保存并持久化到 settings.yaml。',
+            notice: SAVE_NOTICE_PERSISTED,
         }),
     };
     const { gateway } = typertModule.registerAdvisorFlowGateway(stubCtx, handlers);
@@ -193,7 +194,7 @@ test('R-02-001/AC-01 持久写：set 成功时经写缝落 settings.yaml（merge
     const result = await withPersist['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
     assert.equal(result.ok, true);
     assert.equal(result.persisted, true);
-    assert.equal(result.notice, '已保存并持久化到 settings.yaml。');
+    assert.equal(result.notice, SAVE_NOTICE_PERSISTED);
     // 写回内容 = 合并后的 RAW 命名空间（JSON 序列化断言）
     assert.equal(writes.length, 1);
     assert.equal(writes[0].advisor.model, 'm2');
@@ -280,7 +281,7 @@ test('R-02-001/AC-01 持久化失败→恢复→再失败全链：降级标注�
     shouldThrow = false;
     const recovered = await gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm3' } } } });
     assert.equal(recovered.persisted, true);
-    assert.equal(recovered.notice, '已保存并持久化到 settings.yaml。');
+    assert.equal(recovered.notice, SAVE_NOTICE_PERSISTED);
     assert.equal(recoveries.length, 1);
     assert.deepEqual(failures, ['persist-write-failed']); // 失败计数未虚增
 
@@ -317,7 +318,7 @@ test('R-02-001/AC-01 回执三态：persisted / 写失败专属文案 / 缺失�
     notices.push((await missingSeam['advisor-flow/set']({ args: { patch: { advisor: { model: 'm4' } } } })).notice);
     assert.deepEqual(
         [...new Set(notices)],
-        ['已保存并持久化到 settings.yaml。', '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。', '已保存到当前运行时；持久化尚未启用，重启后修改会丢失。'],
+        [SAVE_NOTICE_PERSISTED, SAVE_NOTICE_WRITE_FAILED, SAVE_NOTICE_EPHEMERAL],
     );
 });
 

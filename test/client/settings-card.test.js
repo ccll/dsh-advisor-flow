@@ -50,35 +50,100 @@ function gatewayHandlers(rawRef, persist) {
     });
 }
 
-function makeCard({ raw = structuredClone(RAW), persist, catalog } = {}) {
+/** ops（settings.mutate 形态）→ 嵌套 patch（宿主 gateway set 入参同构）。 */
+function nestOps(ops) {
+    const patch = {};
+    for (const op of ops) {
+        if (op.op !== 'set') {
+            continue;
+        }
+        let node = patch;
+        for (const key of op.path.slice(0, -1)) {
+            node[key] ??= {};
+            node = node[key];
+        }
+        node[op.path[op.path.length - 1]] = structuredClone(op.value);
+    }
+    return patch;
+}
+
+/**
+ * ConfigFormController 测试桩（宿主 configForms 契约子集，T-030）：
+ * 值源 = 宿主 gateway（真实解析/合并语义的服务端替身），写经 mutate(ops)
+ * 走同一 gateway set——快照同步由 publish() 显式驱动（模拟宿主
+ * volatile-update live 同步）。catalog 用例注入目录 RPC handler。
+ */
+async function makeCard({ raw = structuredClone(RAW), persist, catalog, mutateBehavior } = {}) {
     const rawRef = { current: structuredClone(raw) };
-    const degradations = { askPolicy: 'approver-seam-missing' };
-    const gatewayPromise = gatewayHandlers(rawRef, persist);
+    const gateway = await gatewayHandlers(rawRef, persist);
+    // gateway handler 返回裸值（{config, warnings}），非 RPC 信封
+    const initial = await gateway['advisor-flow/get']({ args: {} });
+    let snapshot = { status: 'ready', value: structuredClone(initial.config), writable: true };
+    const listeners = new Set();
+    const mutations = [];
+    const form = {
+        mutations,
+        ensured: 0,
+        getSnapshot() {
+            return snapshot;
+        },
+        subscribe(listener) {
+            listeners.add(listener);
+            return () => {
+                listeners.delete(listener);
+            };
+        },
+        ensure() {
+            form.ensured += 1;
+        },
+        async mutate(ops) {
+            mutations.push(structuredClone(ops));
+            if (mutateBehavior === false) {
+                return false; // 宿主拒绝（revision 栅栏/服务态）
+            }
+            if (mutateBehavior instanceof Error) {
+                throw mutateBehavior;
+            }
+            if (typeof mutateBehavior === 'function') {
+                return mutateBehavior(gateway, ops);
+            }
+            const patch = nestOps(ops);
+            const result = await gateway['advisor-flow/set']({ args: { patch } });
+            if (result.ok && result.config !== undefined) {
+                snapshot = { ...snapshot, value: structuredClone(result.config) };
+            }
+            for (const listener of [...listeners]) {
+                listener();
+            }
+            return true;
+        },
+        /** 测试辅助：外部值变化 → 通知派生（宿主 live 同步的替身）。 */
+        publish(nextStatus, nextValue) {
+            if (nextStatus !== undefined) {
+                snapshot = {
+                    ...snapshot,
+                    status: nextStatus,
+                    value: nextStatus === 'ready' ? (nextValue ?? snapshot.value) : null,
+                };
+            }
+            for (const listener of [...listeners]) {
+                listener();
+            }
+        },
+    };
     const catalogHandlers = catalog
         ? {
             'llm/listProviders': async () => catalog.providers,
             'session/modelCatalog': async () => catalog.catalog,
         }
         : {};
-    const rpc = makeRpc({
-        handlers: new Proxy({}, {
-            get: (_target, method) => async (payload) => {
-                if (catalogHandlers[method]) {
-                    return catalogHandlers[method](payload);
-                }
-                const gateway = await gatewayPromise;
-                return gateway[method](payload);
-            },
-        }),
-    });
+    const rpc = makeRpc({ handlers: catalogHandlers });
     const controller = createSettingsCardController({
+        form,
         rpc,
         logger: { warn() {}, error() {} },
     });
-    // 模拟宿主把降级标注随 get 返回（真实接线为状态面而非配置通道；
-    // 此处直接在控制器外层验证 degradations 展示由 render 消费）
-    void degradations;
-    return { controller, rpc, rawRef };
+    return { controller, rpc, rawRef, form, gateway };
 }
 
 /** 微型 DOM 桩：createElement/appendChild/事件监听，足够驱动 render.js。 */
@@ -163,14 +228,14 @@ function expandCard(container) {
 }
 
 async function renderedCard(options = {}) {
-    const { controller, rpc, rawRef } = makeCard(options);
+    const { controller, rpc, rawRef, form } = await makeCard(options);
     const dom = createDomStub();
     const container = dom.createElement('div');
     const card = renderSettingsCard({ document: dom, container, controller });
     await controller.load(); // load 触发 emit → refresh 重渲染
     await pump(); // 目录后台拉取（load 不再 await catalog）——等微任务链收敛
     card.refresh();
-    return { controller, container, card, dom, rpc, rawRef };
+    return { controller, container, card, dom, rpc, rawRef, form };
 }
 
 test('切换开关不引起滚动重锚：原子替换整棵新树并还原焦点（东家目验）', async () => {
@@ -257,8 +322,8 @@ test('R-02-001/AC-01 卡片经自有 gateway RPC 读回配置并渲染表单（�
     assert.ok(htmlOpen.includes('advisor-flow-discard'));
 });
 
-test('R-02-001/AC-01 卡片编辑经 set 保存成功：patch 提交、raw 吸收、表单回显新值', async () => {
-    const { controller, container, rpc } = await renderedCard();
+test('R-02-001/AC-01 卡片编辑经 mutate 保存成功：ops 提交、值同步、表单回显新值', async () => {
+    const { controller, container, rawRef, form } = await renderedCard();
     expandCard(container);
     controller.setField('advisor.model', 'm2');
     controller.setField('enabled', true);
@@ -270,14 +335,16 @@ test('R-02-001/AC-01 卡片编辑经 set 保存成功：patch 提交、raw 吸�
     root.listeners.mousedown[0]({ target: save });
     await root.listeners.mouseup[0]({ target: save });
     await pump(); // 委托内 IIFE 异步落库
-    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
-    assert.ok(setCall);
-    assert.equal(setCall.payload.args.patch.advisor.model, 'm2');
-    // 保存成功后 patch 清空、raw 吸收
+    assert.equal(form.mutations.length, 1); // 一批 mutate 提交全部字段
+    const ops = form.mutations[0];
+    assert.deepEqual(ops, [
+        { op: 'set', path: ['advisor', 'model'], value: 'm2' },
+        { op: 'set', path: ['enabled'], value: true },
+    ]);
+    // 保存成功后 patch 清空、宿主快照吸收新值
     assert.equal(controller.getState().patch.advisor, undefined);
-    await controller.load();
-    const state = controller.getState();
-    assert.equal(state.effectiveConfig.advisor.model, 'm2');
+    assert.equal(controller.getState().effectiveConfig.advisor.model, 'm2');
+    assert.equal(rawRef.current.advisor.model, 'm2'); // gateway 替身同步吸收
 });
 
 test('R-02-001/AC-03 enabled 且缺 provider/model 时保存被阻断：不发起 RPC 且按钮禁用并给出原因', async () => {
@@ -299,36 +366,26 @@ test('R-02-001/AC-03 enabled 且缺 provider/model 时保存被阻断：不发�
 });
 
 test('R-02-001/AC-03 宿主拒绝保存时错误可见且表单保留（patch 不丢）', async () => {
-    const rawRef = { current: structuredClone(RAW) };
-    const gateway = await gatewayHandlers(rawRef);
-    // 包装 set 使其拒绝（模拟宿主端竞态拒绝）
-    const originalSet = gateway['advisor-flow/set'];
-    gateway['advisor-flow/set'] = async (payload) => ({ ok: false, error: '并发修改冲突' });
-    void originalSet;
-    const rpc = makeRpc({ handlers: { 'advisor-flow/get': async () => ({ config: rawRef.current, warnings: [] }), 'advisor-flow/set': gateway['advisor-flow/set'] } });
-    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
-    const dom = createDomStub();
-    const container = dom.createElement('div');
-    renderSettingsCard({ document: dom, container, controller });
-    await controller.load();
+    // mutate false = 宿主未收（revision 栅栏/服务态）——草稿保留供重试
+    const { controller, container } = await renderedCard({ mutateBehavior: false });
     expandCard(container);
     controller.setField('advisor.model', 'm9');
     const result = await controller.save();
     assert.equal(result.ok, false);
-    assert.match(result.error, /并发修改冲突/);
+    assert.match(result.error, /保存被宿主拒绝/);
     assert.equal(controller.getState().patch.advisor.model, 'm9'); // 表单保留待重试
     const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
     assert.equal(errorNodes.length >= 1, true);
 });
 
-test('R-02-001/AC-01 discard 放弃修改：patch 清空且无 gateway 写入', async () => {
-    const { controller, rpc } = await renderedCard();
+test('R-02-001/AC-01 discard 放弃修改：patch 清空且无宿主写入', async () => {
+    const { controller, form } = await renderedCard();
     controller.setField('advisor.provider', 'other');
     controller.discard();
     assert.deepEqual(controller.getState().patch, {});
     const result = await controller.save();
     assert.equal(result.ok, true); // 空 patch 也能过（无变化）
-    assert.equal(rpc.calls.filter((call) => call.method === 'advisor-flow/set').length, 1);
+    assert.equal(form.mutations.length, 0); // 无变化不发起 mutate
 });
 
 test('R-02-001/AC-01 卡片开关与下拉编辑映射到正确配置路径（官方 Switch + toggleRow 结构）', async () => {
@@ -430,8 +487,8 @@ test('R-02-001 循环门阈值随门开关联动禁用；守则门块无策略/�
     assert.equal(findById(container, 'advisor-gate-completion-policy'), undefined);
 });
 
-test('R-02-001/AC-08 顾问超时与输出上限数字输入：填写覆盖、清空回归缺省、保存语义与 settings.yaml 一致', async () => {
-    const { controller, container, card, rpc, rawRef } = await renderedCard();
+test('R-02-001/AC-08 顾问超时与输出上限数字输入：填写覆盖、清空回归缺省、保存语义一致', async () => {
+    const { controller, container, card, rawRef, form } = await renderedCard();
     expandCard(container);
     // RAW 未配置两键 → 输入框为空、占位文案呈现缺省语义
     const maxTokensInput = findById(container, 'advisor-max-tokens');
@@ -450,33 +507,32 @@ test('R-02-001/AC-08 顾问超时与输出上限数字输入：填写覆盖、�
     // 清空 → null = 回归缺省（覆盖后的显式撤销路径）
     maxTokensInput.listeners.change[0]({ target: { value: '' } });
     assert.equal(controller.getState().patch.advisor.maxTokens, null);
-    // 保存 → 合并进 raw，解析器把 null 视为缺省（与 settings.yaml 同语义）
+    // 保存 → ops 批次（null = 显式缺省载体，与 settings.yaml 同语义）
     const result = await controller.save();
     assert.equal(result.ok, true);
-    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
-    assert.equal(setCall.payload.args.patch.advisor.callTimeoutMs, 480000);
-    assert.equal(setCall.payload.args.patch.advisor.maxTokens, null);
+    const ops = form.mutations[0];
+    assert.equal(ops.find((op) => op.path[1] === 'callTimeoutMs').value, 480000);
+    assert.equal(ops.find((op) => op.path[1] === 'maxTokens').value, null);
     assert.equal(rawRef.current.advisor.callTimeoutMs, 480000);
     assert.equal(rawRef.current.advisor.maxTokens, null);
-    // 重载后表单回显：null 渲染为空输入（跟随语义），显式值回显数字
-    await controller.load();
+    // live 同步已让宿主快照吸收新值：null 渲染为空输入（跟随语义），显式值回显数字
     card.refresh();
     assert.equal(findById(container, 'advisor-max-tokens').attrs.value, undefined);
     assert.equal(findById(container, 'advisor-call-timeout-ms').attrs.value, '480000');
 });
 
-test('R-02-001/AC-01 保存成功回执：提示运行时态与重启失效（持久写归后续任务）', async () => {
+test('R-02-001/AC-01 保存成功回执：宿主持久化形态（mutate 通道单一回执）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
     controller.setField('advisor.model', 'm2');
     const result = await controller.save();
     assert.equal(result.ok, true);
-    assert.match(result.notice, /当前运行时/);
-    assert.match(result.notice, /重启后修改会丢失/);
+    assert.equal(result.persisted, true);
+    assert.match(result.notice, /已保存并持久化/);
     // 渲染可见
     const notices = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-notice'));
     assert.equal(notices.length, 1);
-    assert.ok(notices[0].textContent.includes('重启后修改会丢失'));
+    assert.ok(notices[0].textContent.includes('持久化'));
     // 新编辑使旧回执失效
     controller.setField('advisor.provider', 'p2');
     assert.equal(controller.getState().savedNotice, undefined);
@@ -498,47 +554,21 @@ test('R-02-001/AC-01 保存回执双形态：写缝可得时「已保存并持�
     assert.equal(writes.length, 1);
 });
 
-test('R-02-001/AC-01 保存回执双形态：写缝缺失时「仅运行时态」提示仍在', async () => {
-    const { controller } = await renderedCard({ persist: undefined });
-    controller.setField('advisor.model', 'm2');
-    const result = await controller.save();
-    assert.equal(result.ok, true);
-    assert.equal(result.persisted, false);
-    assert.match(result.notice, /当前运行时/);
-    assert.match(result.notice, /重启后修改会丢失/);
-});
-
-test('R-02-001/AC-01 写失败回执携带原因摘要（persistError 消费，不误读为功能缺失）', async () => {
-    const rawRef = { current: structuredClone(RAW) };
-    const gateway = await gatewayHandlers(rawRef);
-    gateway['advisor-flow/set'] = async (payload) => ({
-        ok: true,
-        config: rawRef.current,
-        persisted: false,
-        notice: '已保存到运行时；写入 settings.yaml 失败，重启即失（原因见详情）。',
-        persistError: 'Error: yaml write failed',
-    });
-    const rpc = makeRpc({ handlers: { 'advisor-flow/get': async () => ({ config: rawRef.current, warnings: [] }), 'advisor-flow/set': gateway['advisor-flow/set'] } });
-    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
-    const dom = createDomStub();
-    const container = dom.createElement('div');
-    renderSettingsCard({ document: dom, container, controller });
-    await controller.load();
+test('R-02-001/AC-01 mutate 异常：保存失败显性化且草稿保留（宿主通道抛错不吞）', async () => {
+    const { controller, container } = await renderedCard({ mutateBehavior: new Error('boom from host') });
     expandCard(container);
     controller.setField('advisor.model', 'm9');
     const result = await controller.save();
-    assert.equal(result.ok, true);
-    assert.equal(result.persisted, false);
-    assert.match(result.notice, /写入 settings\.yaml 失败/);
-    assert.match(result.notice, /原因：.*yaml write failed/); // 原因摘要进回执
-    assert.equal(controller.getState().persistError, 'Error: yaml write failed');
-    const notices = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-notice'));
-    assert.ok(notices[0].textContent.includes('原因：'));
+    assert.equal(result.ok, false);
+    assert.match(result.error, /保存失败.*boom from host/);
+    assert.equal(controller.getState().patch.advisor.model, 'm9'); // 草稿保留供重试
+    const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
+    assert.ok(errorNodes[0].textContent.includes('boom from host'));
 });
 
 test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch、save 往返保留', async () => {
     const writes = [];
-    const { controller, container, rpc } = await renderedCard({
+    const { controller, container, rawRef, form } = await renderedCard({
         persist: async (raw) => writes.push(raw),
     });
     expandCard(container);
@@ -558,10 +588,8 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     assert.equal(controller.getState().patch.advisor.reasoningEffort, 'high');
     const result = await controller.save();
     assert.equal(result.ok, true);
-    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
-    assert.equal(setCall.payload.args.patch.advisor.reasoningEffort, 'high');
-    const written = writes[0];
-    assert.equal(written.advisor.reasoningEffort, 'high'); // 写回内容保留档位
+    assert.equal(form.mutations[0].find((op) => op.path[1] === 'reasoningEffort').value, 'high');
+    assert.equal(rawRef.current.advisor.reasoningEffort, 'high'); // 写回内容保留档位
 
     // 选回「不指定」→ null（可穿越 JSON 序列化的「未配置」载体，非法值校验不拒）
     effortSelect.listeners.change[0]({ target: { value: '' } });
@@ -573,44 +601,25 @@ test('R-02-001/AC-01 卡片提供 effort 选择器：渲染、选择进入 patch
     controller.setField('advisor.model', 'm2'); // 顺带验证同次保存
     const cleared = await controller.save();
     assert.equal(cleared.ok, true);
-    const wirePatch = JSON.parse(JSON.stringify(rpc.calls.findLast((call) => call.method === 'advisor-flow/set').payload.args.patch));
-    assert.equal(wirePatch.advisor.reasoningEffort, null); // null 穿越序列化（undefined 会被丢弃）
-    const writtenCleared = writes[writes.length - 1];
+    const clearedOps = form.mutations[form.mutations.length - 1];
+    const effortOp = clearedOps.find((op) => op.path[1] === 'reasoningEffort');
+    assert.equal(effortOp?.value, null); // null 穿越序列化（undefined 会被丢弃）
+    const writtenCleared = rawRef.current;
     assert.equal(writtenCleared.advisor.reasoningEffort, null); // 持久写内容不含 'high'
     const { resolveAdvisorFlowConfig } = await import('../../lib/config.js');
     const resolved = resolveAdvisorFlowConfig(writtenCleared);
     assert.equal(resolved.config.advisor.reasoningEffort, undefined); // null → 缺省=跟随模型默认
 });
 
-test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通用异常（connection 契约）', async () => {
-    const rawRef = { current: structuredClone(RAW) };
-    // 直接以信封形态 resolve（connection.rpc.call 的失败也是 resolve 非 reject）：
-    // get 失败验证 load 路径，set 失败验证 save 路径（分两个控制器）。
-    const envelope = (message) => ({ ok: false, error: { code: 'gateway/internal', message } });
-    let getShouldFail = true;
-    const getFail = {
-        calls: [],
-        call: async (channel, method) => {
-            getFail.calls.push({ channel, method });
-            if (method === 'advisor-flow/get') {
-                // 前两次失败（首帧 + 重试），之后恢复——error 态必须可自愈
-                if (getShouldFail) {
-                    return envelope('settings service unavailable');
-                }
-                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
-            }
-            throw new Error(`no endpoint ${method}`);
-        },
-    };
-    const controller = createSettingsCardController({ rpc: getFail, logger: { warn() {}, error() {} } });
-    const dom = createDomStub();
-    const container = dom.createElement('div');
-    renderSettingsCard({ document: dom, container, controller });
-    await controller.load();
+test('R-02-003/AC-02 宿主快照不可用 → 错误显性化；恢复 ready 后 live 恢复（describe 镜像契约）', async () => {
+    const { controller, container, form } = await renderedCard();
+    // 宿主 describe 镜像进入 unavailable（服务/网络瞬态）
+    form.publish('unavailable');
+    await pump();
     assert.equal(controller.getState().status, 'error');
-    assert.match(controller.getState().error, /settings service unavailable/); // error.message 显性化
+    assert.match(controller.getState().error, /配置服务不可用/);
     const errorNodes = findAll(container, (node) => (node.attrs.class ?? '').includes('advisor-flow-error'));
-    assert.ok(errorNodes[0].textContent.includes('settings service unavailable'));
+    assert.ok(errorNodes[0].textContent.includes('配置服务不可用'));
     // error 态无表单（内容消失形态）但必须提供重试——无恢复手段则表单永久
     // 消失且 header 点击永远回不来（东家目验缺陷）
     assert.equal(byTag(container, 'fieldset').length, 0);
@@ -618,30 +627,15 @@ test('R-02-003/AC-02 信封 ok:false → 卡片显性化 error.message 而非通
     assert.ok(retry, 'error 态渲染重试按钮');
     assert.ok((retry.attrs.class ?? '').includes('advisorflow_retry'), '重试按钮用独立角色类（样式与放弃按钮同款）');
     assert.ok(!(retry.attrs.class ?? '').includes('advisorflow_discard'), '重试按钮不占放弃角色命名空间——按下-抬起/键盘委托不把重试误判为放弃');
-    getShouldFail = false;
-    retry.listeners.click[0](); // void controller.load()——异步
+    const ensuredBefore = form.ensured;
+    retry.listeners.click[0](); // controller.retry()——再拉一次宿主快照
+    await pump();
+    assert.ok(form.ensured > ensuredBefore, '重试按钮触发宿主 ensure 再拉取');
+    // 宿主恢复 ready（describe 镜像自愈/重拉成功）→ live 恢复
+    form.publish('ready', structuredClone(RAW));
     await pump();
     assert.equal(controller.getState().status, 'ready');
-    assert.ok(findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_form')).length > 0, '重试成功后表单恢复');
-
-    // save 路径：load 成功、set 信封失败 → 保存失败显性化并区分 error.code
-    const setFail = {
-        calls: [],
-        call: async (channel, method, payload) => {
-            setFail.calls.push({ channel, method, payload });
-            if (method === 'advisor-flow/get') {
-                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
-            }
-            return envelope('set dispatch failed');
-        },
-    };
-    const saveController = createSettingsCardController({ rpc: setFail, logger: { warn() {}, error() {} } });
-    await saveController.load();
-    saveController.setField('advisor.provider', 'p');
-    const result = await saveController.save();
-    assert.equal(result.ok, false);
-    assert.match(result.error, /set dispatch failed/);
-    assert.equal(result.code, 'gateway/internal'); // 区分 error.code
+    assert.ok(findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_form')).length > 0, '恢复后表单回归');
 });
 
 const CATALOG_PROVIDERS = [
@@ -671,27 +665,6 @@ test('R-02-001 目录 RPC 挂起不得阻塞表单：ready 立即达成，表单
     expandCard(container);
     const html = JSON.stringify(container);
     assert.ok(html.includes('顾问提供方'), '表单在目录挂起时照常渲染');
-});
-
-test('R-02-001/AC-01 load 瞬态失败自动重试一次：再失败才落 error（自愈优先）', async () => {
-    let attempts = 0;
-    const rpc = {
-        call: async (channel, method) => {
-            attempts += 1;
-            if (method === 'advisor-flow/get' && attempts === 1) {
-                throw new TypeError('Failed to fetch'); // 瞬态网络失败
-            }
-            if (method === 'advisor-flow/get') {
-                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
-            }
-            throw new Error(`no endpoint ${method}`);
-        },
-    };
-    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
-    const status = await controller.load();
-    assert.equal(status, 'ready'); // 重试后成功，未落 error
-    assert.ok(attempts >= 2, 'fetch 失败后自动重试了一次');
-    assert.equal(controller.getState().status, 'ready');
 });
 
 test('R-02-001/AC-01 目录驱动三级联动：provider/model 下拉来自目录，effort 来自模型声明', async () => {    const { controller, container } = await renderedCard({
@@ -765,43 +738,6 @@ test('R-02-001/AC-01 目录拉取失败回退：provider/model 自由文本、ef
     void warns;
 });
 
-test('R-02-003/AC-02 信封成功但 value 形态意外 → fallback 文案而非 undefined（产物新鲜度守卫同轮）', async () => {
-    const rpc = {
-        calls: [],
-        call: async (channel, method) => {
-            rpc.calls.push({ channel, method });
-            if (method === 'advisor-flow/get') {
-                return { ok: true, value: 'unexpected scalar' }; // value 非 record/array
-            }
-            return { ok: true, value: 'unexpected' };
-        },
-    };
-    const controller = createSettingsCardController({ rpc, logger: { warn() {}, error() {} } });
-    const dom = createDomStub();
-    const container = dom.createElement('div');
-    renderSettingsCard({ document: dom, container, controller });
-    await controller.load();
-    assert.equal(controller.getState().status, 'error');
-    assert.match(controller.getState().error, /配置通道返回了意外形态/); // fallback 文案而非 undefined
-    // save 路径同语义（独立控制器：get 成功、set 返回意外形态 value）
-    const saveRpc = {
-        calls: [],
-        call: async (channel, method, payload) => {
-            saveRpc.calls.push({ channel, method, payload });
-            if (method === 'advisor-flow/get') {
-                return { ok: true, value: { config: structuredClone(RAW), warnings: [] } };
-            }
-            return { ok: true, value: 'unexpected scalar' };
-        },
-    };
-    const saveController = createSettingsCardController({ rpc: saveRpc, logger: { warn() {}, error() {} } });
-    await saveController.load();
-    saveController.setField('advisor.provider', 'p');
-    const result = await saveController.save();
-    assert.equal(result.ok, false);
-    assert.match(result.error, /配置通道返回了意外形态/);
-});
-
 test('R-02-001/AC-01 展开态跨 setField/emit 重绘存续：改字段不塌卡片（T-006 实测回归钉住）', async () => {
     const { controller, container } = await renderedCard();
     expandCard(container);
@@ -868,7 +804,7 @@ function createStyleCapableDom() {
 }
 
 test('R-02-001/AC-09 footer sticky 常驻：样式声明固定于滚动视口底部，按钮组为 body 末尾', async () => {
-    const { controller } = makeCard();
+    const { controller } = await makeCard();
     const dom = createStyleCapableDom(); // 共享桩无 head，injectStyles 被跳过——样式断言须独立桩
     const container = dom.createElement('div');
     renderSettingsCard({ document: dom, container, controller });
@@ -925,7 +861,7 @@ test('R-02-001/AC-12 未保存徽标：放弃修改与保存成功后消失', as
 });
 
 test('R-02-001/AC-12 按下-抬起之间重绘换树时保存仍生效（root 级委托兜底）', async () => {
-    const { controller, container, rpc } = await renderedCard();
+    const { controller, container, form } = await renderedCard();
     expandCard(container);
     const root = container.children[0];
     assert.ok(root, '卡片 root 存在');
@@ -945,16 +881,17 @@ test('R-02-001/AC-12 按下-抬起之间重绘换树时保存仍生效（root �
     assert.notEqual(newSave, oldSave, '换树后按钮为重建节点（复现换树序列）');
     root.listeners.mouseup[0]({ target: newSave });
     await pump();
-    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
-    assert.ok(setCall, '委托路径提交了保存');
-    assert.equal(setCall.payload.args.patch.gates.loop.threshold, 8, '换树期间暂存的编辑随保存提交');
+    assert.equal(form.mutations.length, 1, '委托路径提交了保存');
+    const op = form.mutations[0].find((item) => item.path.join('.') === 'gates.loop.threshold');
+    assert.ok(op, '暂存的阈值编辑随保存提交');
+    assert.equal(op.value, 8, '换树期间暂存的编辑随保存提交');
     assert.equal(controller.getState().dirty, false, '保存后 dirty 清除');
     const badges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
     assert.equal(badges().length, 0, '保存完成后未保存徽标消失（AC-12）');
 });
 
 test('R-02-001/AC-12 键盘激活保存（合成 click detail=0）与鼠标 click 不重入', async () => {
-    const { controller, container, rpc } = await renderedCard();
+    const { controller, container, form } = await renderedCard();
     expandCard(container);
     const root = container.children[0];
     controller.setField('advisor.model', 'm2');
@@ -963,15 +900,15 @@ test('R-02-001/AC-12 键盘激活保存（合成 click detail=0）与鼠标 clic
     // 键盘激活：Enter/Space 派发 detail=0 的合成 click，无按下-抬起序列
     await root.listeners.click[0]({ target: save, detail: 0 });
     await pump();
-    const setCall = rpc.calls.find((call) => call.method === 'advisor-flow/set');
-    assert.ok(setCall, '键盘路径提交了保存');
-    assert.equal(setCall.payload.args.patch.advisor.model, 'm2');
+    assert.equal(form.mutations.length, 1, '键盘路径提交了保存');
+    const kbOp = form.mutations[0].find((op) => op.path.join('.') === 'advisor.model');
+    assert.equal(kbOp.value, 'm2');
     assert.equal(controller.getState().dirty, false, '键盘保存后 dirty 清除');
     const kbBadges = () => findAll(container, (node) => (node.attrs.class ?? '').includes('advisorflow_dirtyBadge'));
     assert.equal(kbBadges().length, 0, '键盘保存完成后未保存徽标消失（AC-12）');
     // 鼠标 click（detail≥1）不在此重入：按下-抬起委托已处理，二次执行必须被拒
-    const before = rpc.calls.length;
+    const before = form.mutations.length;
     await root.listeners.click[0]({ target: save, detail: 1 });
     await pump();
-    assert.equal(rpc.calls.length, before, '鼠标 click 不经键盘路径重入');
+    assert.equal(form.mutations.length, before, '鼠标 click 不经键盘路径重入');
 });

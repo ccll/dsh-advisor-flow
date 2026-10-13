@@ -10,6 +10,30 @@ import { fileURLToPath } from 'node:url';
 // 前端（症状：白屏 "Failed to load plugins"）。
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** 装载 bundle 工厂（经典脚本语义）并断言旧挂点退役。 */
+function loadBundleFactory() {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    assert.ok(!text.includes('settings.plugin.item'), '旧挂点已退役（0.2.0 全宿主零引用）');
+    assert.ok(!text.includes('plugins.row.config'), '行级槽已退役（bundle 级 dsh-context 同构）');
+    let loaded;
+    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
+    new Function('window', text)(windowStub);
+    assert.equal(loaded.id, 'dsh-advisor-flow');
+    return loaded;
+}
+
+const REACT_STUB = {
+    Fragment: 'Fragment',
+    createElement: (type, props) => ({ type, props }),
+    useRef: (initial) => ({ current: initial }),
+    useEffect: () => {},
+};
+
+function runFactory(loaded, ctx) {
+    const mod = loaded.factory((id) => (id === 'react' ? REACT_STUB : Promise.reject(new Error(`unexpected require: ${id}`))));
+    return mod.apply(ctx);
+}
+
 test('client bundle 是经典脚本（closure-factory CJS），无裸 ESM', () => {
     const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
     assert.ok(text.includes('window.__ModuleLoader__.load('), '缺少 loader 注册入口');
@@ -18,136 +42,119 @@ test('client bundle 是经典脚本（closure-factory CJS），无裸 ESM', () =
     assert.doesNotThrow(() => new Function(text));
 });
 
-test('R-02-001/AC-01 T-028 挂载：工厂执行后 apply 在 plugins.row.config keyed 槽注册行配置卡', () => {
-    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
-    assert.ok(!text.includes('settings.plugin.item'), '旧挂点已退役（0.2.0 全宿主零引用）');
-    let loaded;
-    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
-    new Function('window', text)(windowStub); // 经典脚本语义装载
-    assert.equal(loaded.id, 'dsh-advisor-flow');
+test('R-02-001/AC-01 T-030 挂载：configForms 管线 + whileServed 门控注册 bundle 配置卡（dsh-context 同构）', async () => {
+    const loaded = loadBundleFactory();
 
-    const React = {
-        Fragment: 'Fragment',
-        createElement: (type, props) => ({ type, props }),
-        useRef: (initial) => ({ current: initial }),
-        useEffect: () => {},
+    const injected = [];
+    const registered = [];
+    let watched;
+    let effectCalls = 0;
+    const configForms = {
+        get: (ns) => {
+            assert.equal(ns, 'advisor-flow', '控制器按 settings 命名空间获取');
+            return { ensure() {}, subscribe() { return () => {}; } };
+        },
+        whileServed: (namespaces, registerFn) => {
+            watched = namespaces;
+            // served 即挂卡（宿主门控语义）；返回宿主 off
+            return registerFn();
+        },
     };
-    const registrations = [];
     const slots = {
         register: (options, component) => {
-            registrations.push({ options, component });
-            return Promise.resolve(() => {});
+            registered.push({ options, component });
+            return () => {};
+        },
+        inject: (name, factory) => {
+            const outcome = factory(); // factory 内部走 slots.register
+            injected.push({ name, outcome });
+            return outcome;
         },
     };
     const ctx = {
-        logger: () => ({ warn() {}, info() {}, error() {} }),
+        logger: () => ({ warn() {}, info() {}, error() {}, debug() {} }),
         connection: { rpc: {} },
         slots,
+        inject: (names, fn) => fn({ configForms }),
+        effect: (fn) => { effectCalls += 1; return fn(); },
     };
-    const mod = loaded.factory((id) => {
-        if (id === 'react') {
-            return React;
-        }
-        throw new Error(`unexpected require: ${id}`);
-    });
-    assert.equal(typeof mod.apply, 'function');
-    const applied = mod.apply(ctx);
-    // 直接同步注册（不等槽声明——等声明会 park 激活，慢设备输给 boot 门审计竞态）
-    assert.equal(registrations.length, 1, 'apply 内直接注册 keyed 槽');
-    assert.equal(registrations[0].options.name, 'plugins.row.config');
-    assert.equal(registrations[0].options.key, 'dsh-advisor-flow#advisor-flow');
-    assert.equal(typeof registrations[0].component, 'function');
+    const applied = runFactory(loaded, ctx);
+    await Promise.resolve();
+    assert.equal(effectCalls, 1, '注册整体活在 ctx.effect 内（apply 帧零 slots 触碰）');
+    assert.deepEqual(watched, ['advisor-flow'], 'whileServed 监听本插件命名空间');
+    assert.equal(injected.length, 1, 'whileServed served 后注册 keyed 槽');
+    assert.equal(injected[0].name, 'plugins.bundle.config', '挂点=bundle 配置页（dsh-context 同构）');
+    assert.equal(registered[0].options.key, 'dsh-advisor-flow', 'key=包名（宿主契约 entryKey=包名）');
+    assert.equal(registered[0].options.locale, 'dsh-advisor-flow');
+    assert.equal(registered[0].options.name, 'plugins.bundle.config');
+    assert.equal(typeof registered[0].component, 'function');
     assert.equal(typeof applied.refresh, 'function');
 
-    // ownerProps 契约：view=summary 一行摘要、view=page 整卡容器（ref 由内部 useRef 提供）
-    const summary = registrations[0].component({ view: 'summary' });
-    assert.ok(String(summary.type) === 'Fragment', 'summary 视图渲染一行摘要');
-    const page = registrations[0].component({ view: 'page' });
+    // ownerProps 契约：bundle 配置页渲染整卡（组件返回 div 容器，useRef 挂 DOM）
+    const page = registered[0].component({ view: 'page' });
     assert.equal(page.type, 'div');
     assert.equal(typeof page.props.ref, 'object');
 });
 
-test('R-02-001/AC-01 槽未声明时注册重试且不阻塞激活（手机端竞态回归）', async () => {
+test('R-02-001/AC-01 configForms 缝缺失降级：不注册、告警恰好一条、apply 正常返回（boot 不受累）', async () => {
     const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
     let loaded;
     const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
     new Function('window', text)(windowStub);
-
-    const React = {
-        Fragment: 'Fragment',
-        createElement: (type, props) => ({ type, props }),
-        useRef: (initial) => ({ current: initial }),
-        useEffect: () => {},
-    };
-    const registrations = [];
-    const scheduled = [];
-    let calls = 0;
-    const slots = {
-        register: (options, component) => {
-            calls += 1;
-            if (calls === 1) {
-                throw new Error('slot "plugins.row.config" is not declared (a parent entry\'s children table must declare it)');
-            }
-            registrations.push({ options, component });
-            return Promise.resolve(() => {});
-        },
-    };
-    const ctx = {
-        logger: () => ({ warn() {}, info() {}, debug() {}, error() {} }),
-        connection: { rpc: {} },
-        slots,
-        setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
-    };
-    const mod = loaded.factory((id) => {
-        if (id === 'react') {
-            return React;
-        }
-        throw new Error(`unexpected require: ${id}`);
-    });
-    const applied = mod.apply(ctx);
-    assert.equal(registrations.length, 0, '未声明时不注册');
-    assert.equal(scheduled.length, 1, '安排了 timer 重试');
-    assert.equal(scheduled[0].ms, 200);
-    await scheduled[0].fn();
-    assert.equal(registrations.length, 1, '声明就绪后重试注册成功');
-    assert.equal(typeof applied.refresh, 'function');
-});
-
-test('R-02-001/AC-01 非时序注册错误降级告警且不重试不阻塞激活', async () => {
-    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
-    let loaded;
-    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
-    new Function('window', text)(windowStub);
-
-    const React = {
-        Fragment: 'Fragment',
-        createElement: (type, props) => ({ type, props }),
-        useRef: (initial) => ({ current: initial }),
-        useEffect: () => {},
-    };
     const warnings = [];
-    const scheduled = [];
-    const slots = {
-        register: () => {
-            throw new Error('boom: unexpected slot failure');
-        },
-    };
+    const registered = [];
+    const slots = { register: (options, component) => { registered.push({ options, component }); return () => {}; } };
     const ctx = {
-        logger: () => ({ warn: (message) => warnings.push(String(message)), info() {}, debug() {}, error() {} }),
+        logger: () => ({ warn: (message) => warnings.push(String(message)), info() {}, error() {}, debug() {} }),
         connection: { rpc: {} },
         slots,
-        setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+        inject: (names, fn) => fn({}), // configForms 缝不可用
+        effect: (fn) => fn(),
     };
-    const mod = loaded.factory((id) => {
-        if (id === 'react') {
-            return React;
-        }
-        throw new Error(`unexpected require: ${id}`);
-    });
-    const applied = mod.apply(ctx);
-    assert.equal(scheduled.length, 0, '非时序错误不安排重试');
+    const applied = runFactory(loaded, ctx);
+    await Promise.resolve();
+    assert.equal(registered.length, 0, 'configForms 缝缺失不注册');
     assert.equal(warnings.length, 1, '降级告警恰好一条');
-    assert.match(warnings[0], /boom/, '告警携带原始错误文本');
+    assert.match(warnings[0], /configForms/, '告警指明 configForms 缝');
     assert.equal(typeof applied.refresh, 'function', 'apply 正常返回——boot 不受累');
 });
 
+test('R-02-001/AC-01 whileServed 未服务不挂卡、恢复服务后注册（宿主官方门控回归）', async () => {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    let loaded;
+    const windowStub = { __ModuleLoader__: { load: (spec) => { loaded = spec; } } };
+    new Function('window', text)(windowStub);
+
+    const registered = [];
+    let slotInjects = 0;
+    let registerCallback;
+    const slots = {
+        register: (options, component) => { registered.push({ options, component }); return () => {}; },
+        inject: (slotName, factory) => { slotInjects += 1; const value = factory(); return value; },
+    };
+    // whileServed 桩：模拟宿主门控——watched 命名空间未服务时不调用注册回调
+    let watched;
+    const configForms = {
+        get: (ns) => ({ ensure() {}, subscribe() { return () => {}; } }),
+        whileServed: (namespaces, callback) => {
+            watched = namespaces;
+            registerCallback = callback; // 未服务：只记回调，不执行
+            return () => {};
+        },
+    };
+    const ctx = {
+        logger: () => ({ warn() {}, info() {}, error() {}, debug() {} }),
+        connection: { rpc: {} },
+        slots,
+        inject: (names, fn) => fn({ configForms }),
+        effect: (fn) => fn(),
+    };
+    const applied = runFactory(loaded, ctx);
+    await Promise.resolve();
+    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回');
+    assert.deepEqual(watched, ['advisor-flow']);
+    assert.equal(slotInjects, 0, '未服务时不注册');
+    // 宿主判定本命名空间被服务 → 注册回调执行 → 注册发生
+    registerCallback();
+    assert.equal(slotInjects, 1, '恢复服务后注册');
+});
