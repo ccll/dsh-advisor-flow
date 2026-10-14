@@ -8,7 +8,7 @@ mutation: lifecycle
 # T-032 默认介入强度回归 soft + maxTokens 占位显示实际值
 
 风险等级: standard
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -65,4 +65,9 @@ mutation: lifecycle
 
 ## 终态与证据
 
-（关闭时填写）
+- 实现: 缺省单点 lib/config.js `DEFAULT_INTERVENTION_MODE='soft'`（C-032 废弃 C-022 缺省裁定）；门显示走解析后真值（lib/client/card-state.js `displayConfig()` + lib/client/render.js 门 fieldset 改读 `state.displayConfig`，解析失败回退未解析叠加值）；maxTokens 占位显值 lib/client/card-state.js `modelMaxTokens()`（正整数守卫）+ lib/client/render.js placeholder 动态拼接；原子级联 PRD.md:12/:149、SOLUTION.md:371/:377、RATIONALE.md C-032 四段式、lib/tool-guard.js 与 lib/status.js 注释同步；构建产物 lib/client.js 随实现提交入库（sha1 db779c42）。
+- 测试: `node --test "test/**/*.test.js"` 323/323 绿（exit=0；321→323：tool-guard 归一行为用例 + settings-card 默认面用例，含无声明/非法声明回退断言）；bundle 确定性重建 sha 一致；af-home staging 浏览器 E2E 七项断言全过（mode 显示 soft、四门 aria-checked=true、占位回退原文、pageerror=0；tasks/evidence/T-032/）。
+- SOLUTION 对照: R-01-009/AC-02 与 R-02-001/AC-04 改写缺省承诺（soft）；SOLUTION 设置命名空间条目同步；RATIONALE C-032 记录翻案与被否方案；双向追溯与实现一致（agentmap lint 通过）。
+- review: 审核方 = 独立子代理（独立上下文，非实现上下文），两轮。第一轮 0+2 blocking（B1 PRD.md:128 残留缺省 hard 承诺与测试锚定矛盾；B2 task frontmatter 缺 doc-type 致全仓 lint exit=1）+ 4 non-blocking；修复后第二轮复审（同一审核方）逐项核验关闭（B1/B2/N1/N2/N3 全部 file:line 证据在案，含突变推演证实新行为用例能察觉归一行回退），结论：通过，无新增 blocking。non-blocking 处置：关闭提交须带重建产物（已随实现提交入库）；测试增量表述精确为 +2；C-032 部分废弃的机械盲区登记 TODO.md [维护想法]；maxTokens 非法声明边界补 4 行断言（已收口）。残余风险：占位数字以目录声明值为准，宿主运行时未声明值时仍可能取运行时覆盖（本仓不可实测，已按不猜测原则回退）。
+- 风险自评: —（standard 档）
+- commit: fd59059（实现；关闭提交独立于本提交）
