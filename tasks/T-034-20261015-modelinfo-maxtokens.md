@@ -8,7 +8,7 @@ mutation: lifecycle
 # T-034 maxTokens 占位数值改走自有 modelInfo RPC（宿主目录不携带模型 limits）
 
 风险等级: standard
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -64,4 +64,4 @@ mutation: lifecycle
 - SOLUTION 对照: SOLUTION.md:505（配置与状态服务职责增 modelInfo 数据源）与 :537（web 设置卡关键内部结构：RPC 形态/正负缓存/一次性降级/回退语义）；核对日期 2026-10-15 已核验；PRD 不动（承诺锚 R-02-001/AC-07）成立。
 - review: 独立子代理会话（独立上下文 reviewer，未与实现共用上下文），目的理解先行记录（含宿主 checkout 独立证实目录无 limits）；blocking 1（B1 证据文件明文 token，已脱敏——token 行改为「经 AF_TOKEN 环境变量注入，不落盘」）已修复；non-blocking 5 项：N1 白名单用例标题陈旧（已改为「仅目录与模型声明值查询」）、N2 typert-gateway.js:78/:107 get|set 文档漂移（已补 modelInfo）、N3 网关用例锚 AC-04 实质归属 AC-07（已改锚 AC-07）、N4 resolver 生产装配静默吞错致 resolve-failed 与 warn 生产死代码（已改为直接委派不吞错，gateway 统一降级并记 warn）+ 业务级 ok:false 客户端按「未声明」负缓存（表现一致，记录为残余语义）、N5 task 测试计划与实际执行漂移（终态前已对齐：真实 af-home 环境 + /当前 \d+/ 断言 + 256000 来源注明）。复审结论：B1 修复后无 blocking 残留，可收口。
 - 风险自评: —（standard 档）
-- commit: （提交后回填）
+- commit: 8419c50（实现，含审核修复 B1 脱敏/N1 标题/N2 文档/N3 改锚/N4 不吞错与验证矩阵、终态文书）
