@@ -11,6 +11,9 @@
    终态后，残留未锚定 AC 即为错误——预期失败清单不得比它的 task 活得久。
 4. 零 AC 逃逸分支（adv-8）：migration task 终态后，每个 PRD 需求必须至少
    有一个 AC——零 AC 需求不产生「未锚定」信号，须显式兜底。
+5. 幽灵豁免（C-031）：CONVENTIONS `必锚幽灵豁免` 行登记的 AC 引用视为东家
+   已裁决的坏指针（终态任务不可改 × PRD 合法演进的组合死锁出口），从幽灵
+   错误中减去；未登记的幽灵引用仍报错。
 
 终态置位权沿用 AgentMap task 生命周期（置位动作即执行 agent 关闭 task 本身，
 无额外权限通道；C-012）。`--self-test` 用合成 fixture 实跑零 AC 错误分支并
@@ -38,6 +41,7 @@ MIGRATION_RE = re.compile(r"^\s*-\s*测试锚定模式:\s*migration\s*(T-\d{3})\
 STATUS_RE = re.compile(r"^状态:\s*(\S+)\s*$", re.MULTILINE)
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
 NEEDED_LIST_RE = re.compile(r"^-\s*必锚 AC（收敛闸门）[:：]\s*(.+)$", re.MULTILINE)
+GHOST_EXEMPT_RE = re.compile(r"^\s*-\s*必锚幽灵豁免[:：]\s*(.+)$", re.MULTILINE)
 
 
 def prd_acceptance_ids(root: Path) -> dict[str, set[str]]:
@@ -96,6 +100,28 @@ def needed_refs(root: Path) -> set[str]:
     return refs
 
 
+def ghost_exemptions(root: Path) -> set[str]:
+    """CONVENTIONS `必锚幽灵豁免` 行登记的引用集（C-031）。
+
+    终态任务的必锚清单不可修订（agentmap_lint 不可变契约），而 PRD 可合法
+    演进（需求变更删除/重编 AC）——两者组合必然产生幽灵引用。豁免行逐 AC
+    显式登记、经东家确认；未登记的幽灵引用仍报错。
+    """
+    conventions = root / "CONVENTIONS.md"
+    if not conventions.is_file():
+        return set()
+    refs: set[str] = set()
+    for block in GHOST_EXEMPT_RE.findall(conventions.read_text(encoding="utf-8")):
+        expanded = AC_RANGE_RE.sub(
+            lambda m: " ".join(
+                f"{m.group(1)}/AC-{n:02d}" for n in range(int(m.group(2)), int(m.group(3)) + 1)
+            ),
+            block,
+        )
+        refs.update(f"{rid}/AC-{ac}" for rid, ac in AC_REF_RE.findall(expanded))
+    return refs
+
+
 def migration_status(root: Path) -> tuple[str | None, str | None]:
     conventions = root / "CONVENTIONS.md"
     if not conventions.is_file():
@@ -118,8 +144,9 @@ def evaluate(root: Path) -> tuple[str, list[str]]:
     anchored = anchored_ids(root)
     unanchored = all_ids - anchored
     needed = needed_refs(root)
+    exempt = ghost_exemptions(root)
 
-    ghost = sorted(needed - all_ids)
+    ghost = sorted(needed - all_ids - exempt)
     if ghost:
         errors.append(f"必锚清单引用不存在的 AC: {', '.join(ghost)}")
 
@@ -146,9 +173,11 @@ def evaluate(root: Path) -> tuple[str, list[str]]:
     summary = (
         f"anchor coverage: prd-ac={len(all_ids)} anchored={len(all_ids & anchored)}"
         f" unanchored={len(unanchored)} needed-union={len(needed)}"
+        f" ghost-exempt={len(exempt)}"
         f" migration={task_id or 'none'}:{status or 'n/a'}"
         "（needed-union=各 task 必锚清单引用 AC 的并集，区间已展开；"
         "anchored=测试源码中出现且存在于 PRD 的 AC；unanchored=prd-ac 减 anchored；"
+        "ghost-exempt=CONVENTIONS 豁免行登记的幽灵引用；"
         "migration=迁移 task 及其生命周期状态）"
     )
     return summary, errors
