@@ -135,6 +135,9 @@ async function makeCard({ raw = structuredClone(RAW), persist, catalog, mutateBe
         ? {
             'llm/listProviders': async () => catalog.providers,
             'session/modelCatalog': async () => catalog.catalog,
+            // modelInfo（T-034）：宿主声明值桩——catalog.modelInfo 为 async
+            // (payload) => 信封；缺省无处理器 → rpc 抛错 → 通道降级路径。
+            ...(catalog.modelInfo ? { 'advisor-flow/modelInfo': catalog.modelInfo } : {}),
         }
         : {};
     const rpc = makeRpc({ handlers: catalogHandlers });
@@ -244,15 +247,15 @@ test('切换开关不引起滚动重锚：原子替换整棵新树并还原焦�
     assert.equal(rebuilt.__focused, true, '重建后焦点还原，浏览器无需重锚滚动');
 });
 
-test('R-02-001/AC-01 卡值全走宿主 configForms、自有 RPC 仅目录查询（平铺常开，C-030）', async () => {
+test('R-02-001/AC-01 卡值全走宿主 configForms、自有 RPC 仅目录与模型声明值查询（平铺常开，C-030）', async () => {
     const { container, rpc } = await renderedCard();
-    // 卡值读=快照订阅（不走 RPC）；自有通道只剩模型目录两查询（llm/
-    // listProviders、session/modelCatalog——目录失败回退为手动输入，见目
-    // 录用例）。负向契约：advisor-flow/get|set 不得出现在 RPC 面上（回归
-    // 者重新接回自有 gateway 读写即此例红）。
+    // 卡值读=快照订阅（不走 RPC）；自有通道只剩模型目录两查询 + 模型声明
+    // 值查询（T-034 modelInfo——占位数值数据源；目录失败回退为手动输入，
+    // 见目录用例）。负向契约：advisor-flow/get|set 不得出现在 RPC 面上
+    // （回归者重新接回自有 gateway 读写即此例红）。
     assert.ok(rpc.calls.length >= 1);
-    assert.ok(rpc.calls.every((call) => /^(llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
-    assert.ok(rpc.calls.every((call) => !call.method.startsWith('advisor-flow/')), '卡值不再走自有 gateway RPC');
+    assert.ok(rpc.calls.every((call) => /^(llm\/listProviders|session\/modelCatalog|advisor-flow\/modelInfo)$/.test(call.method)));
+    assert.ok(rpc.calls.every((call) => !/^advisor-flow\/(get|set)$/.test(call.method)), '卡值不走自有 gateway 读写（modelInfo 仅查模型声明，T-034）');
     // 平铺常开（C-030：0.2.0 每插件独享配置页，折叠交互退役）：header 为
     // 静态标题行（非 button、无 chevron），字段直接渲染。
     const html = JSON.stringify(container);
@@ -352,7 +355,7 @@ test('R-02-001/AC-03 路由不完整派生禁用：横幅提示可见，编辑/�
     const before = rpc.calls.length;
     const result = await controller.save();
     assert.equal(result.ok, true); // 保存照常（AC-13：补齐即自动启用）
-    assert.ok(rpc.calls.every((call) => /^(llm\/listProviders|session\/modelCatalog)$/.test(call.method)));
+    assert.ok(rpc.calls.every((call) => /^(llm\/listProviders|session\/modelCatalog|advisor-flow\/modelInfo)$/.test(call.method)));
     assert.equal(rpc.calls.length >= before, true);
 });
 
@@ -618,9 +621,10 @@ const CATALOG_PROVIDERS = [
 const CATALOG = {
     routableProviders: ['openai', 'gpu'],
     groups: [
-        // gpt-x 不声明 maxTokens（回退形态）；glm-5.3 声明（占位显示形态，T-032）
+        // 真实宿主形态（T-034）：目录快照只透出 provider/id/name/inputModalities，
+        // 不携带 maxTokens/limits——声明值只能经 modelInfo RPC（见默认面用例）。
         { id: 'openai', name: 'OpenAI (CPA)', models: [{ id: 'gpt-x', name: 'GPT X', reasoning: { efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }], defaultEffort: 'low' } }] },
-        { id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-5.3', name: 'GLM 5.3', maxTokens: 131072, reasoning: { efforts: [{ id: 'max', name: '最大' }], defaultEffort: 'max' } }] },
+        { id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-5.3', name: 'GLM 5.3', reasoning: { efforts: [{ id: 'max', name: '最大' }], defaultEffort: 'max' } }] },
     ],
 };
 
@@ -737,36 +741,51 @@ test('R-02-001/AC-01 幽灵回显回归：model 未选时下拉必须显示占�
     assert.equal(reselected?.attrs?.value, 'glm-5.3', '选择后回显真实选中项');
 });
 
-test('R-02-001/AC-04 默认面（T-032）：mode 缺省显示 soft、四门默认开启、maxTokens 占位显示模型声明值', async () => {
-    // 目录声明 maxTokens → 占位追加实际数字（生产 gpu glm-5.3-flash-512k = 131072 同型）
+test('R-02-001/AC-04 默认面（T-032/T-034）：mode 缺省显示 soft、四门默认开启、maxTokens 占位显示宿主声明值', async () => {
+    // 宿主 modelInfo 声明 defaultMaxTokens → 占位追加实际数字（生产 gpu
+    // glm-5.3-flash-512k = 131072 同型；目录快照不携带 limits，T-034）
+    const modelInfoCalls = [];
     const declared = await renderedCard({
         raw: { advisor: { provider: 'gpu', model: 'glm-5.3' } },
-        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+        catalog: {
+            providers: CATALOG_PROVIDERS,
+            catalog: CATALOG,
+            modelInfo: async (payload) => {
+                modelInfoCalls.push(payload);
+                return { ok: true, value: { defaultMaxTokens: 131072 } };
+            },
+        },
     });
     assert.equal(
         findById(declared.container, 'advisor-max-tokens').attrs.placeholder,
         '跟随所选模型配置（当前 131072）',
-        '占位含声明值',
+        '占位含宿主声明值',
     );
-    // 未声明 maxTokens 的模型 → 回退原文，不猜测
+    assert.deepEqual(modelInfoCalls, [{ args: { provider: 'gpu', model: 'glm-5.3' } }], '声明值按当前路由对查询');
+    // 未声明 defaultMaxTokens（键省略）→ 回退原文，不猜测
     const undeclared = await renderedCard({
         raw: { advisor: { provider: 'openai', model: 'gpt-x' } },
-        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG, modelInfo: async () => ({ ok: true, value: {} }) },
     });
     assert.equal(
         findById(undeclared.container, 'advisor-max-tokens').attrs.placeholder,
         '跟随所选模型配置',
         '无声明回退原文',
     );
-    // 非法声明（0/负数/非整数）同走回退，不显示无效数字（复审 N4 残余缺口收口）
-    const invalidDecl = await renderedCard({
-        raw: { advisor: { provider: 'gpu', model: 'glm-bad' } },
-        catalog: { providers: CATALOG_PROVIDERS, catalog: { routableProviders: ['gpu'], groups: [{ id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-bad', name: 'BAD', maxTokens: 0 }] }] } },
+    // 通道失败（ok:false 信封）同走回退——信息增强缝失败不干扰配置值流
+    const failedChannel = await renderedCard({
+        raw: { advisor: { provider: 'gpu', model: 'glm-5.3' } },
+        catalog: {
+            providers: CATALOG_PROVIDERS,
+            catalog: CATALOG,
+            modelInfo: async () => ({ ok: false, value: undefined, error: { code: 'resolve-failed', message: 'boom' } }),
+        },
     });
+    assert.equal(failedChannel.controller.getState().limitsDegraded, true, '信封失败 → 一次性降级');
     assert.equal(
-        findById(invalidDecl.container, 'advisor-max-tokens').attrs.placeholder,
+        findById(failedChannel.container, 'advisor-max-tokens').attrs.placeholder,
         '跟随所选模型配置',
-        '非法声明（0）回退原文',
+        '通道失败回退原文',
     );
     // mode 缺省显示 soft（C-032）：raw 无 mode，控件选中解析缺省
     const modeSelect = findById(undeclared.container, 'advisor-mode');
@@ -780,6 +799,19 @@ test('R-02-001/AC-04 默认面（T-032）：mode 缺省显示 soft、四门默�
             `${kind} 门默认开启`,
         );
     }
+});
+
+test('T-034 modelInfo 通道降级：rpc 抛错一次性显性化，路由变化不再重试', async () => {
+    const { controller, container, rpc } = await renderedCard({
+        raw: { advisor: { provider: 'gpu', model: 'glm-5.3' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG }, // 无 modelInfo 处理器 → rpc 抛错
+    });
+    assert.equal(controller.getState().limitsDegraded, true, '通道抛错 → 一次性降级');
+    assert.equal(findById(container, 'advisor-max-tokens').attrs.placeholder, '跟随所选模型配置', '占位回退原文');
+    const before = rpc.calls.filter((call) => call.method === 'advisor-flow/modelInfo').length;
+    assert.equal(before, 1, '首个路由对仅发一次');
+    controller.setField('advisor.model', 'gpt-x'); // 路由变化也不重试（已降级）
+    assert.equal(rpc.calls.filter((call) => call.method === 'advisor-flow/modelInfo').length, before, '降级后不再重发');
 });
 
 test('R-02-001/AC-01 null effort 保留：选「跟随模型默认」写 null 且往返不丢', async () => {

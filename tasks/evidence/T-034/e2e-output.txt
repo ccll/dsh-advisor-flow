@@ -1,0 +1,8 @@
+环境: af-home 3087（af-boot-t034.log，无 AF_FRESH，advisor-flow 路由保留 provider=deepseek-official/model=deepseek-flash；访问 token 经 AF_TOKEN 环境变量注入，不落盘）
+输出:
+✔ maxTokens 占位含宿主声明数值（T-034 modelInfo 链路） —— placeholder=跟随所选模型配置（当前 256000）
+✔ mode 下拉缺省选中 soft（回归） —— value=soft
+pageerror=0
+
+截图: detail-placeholder.png（1440x900，介入强度=soft、豁免关键词含 复审、provider=DeepSeek、model=DeepSeek-V41-Flash、effort=跟随模型默认 (default: high)；maxTokens 输入位于折叠线下，数值由探针 DOM 断言）
+注: 256000 来自 deepseek 适配器连接级缺省（configured?.maxTokens ?? connection.maxTokens），语义=宿主对所选模型实际生效的声明值（AC-07）。

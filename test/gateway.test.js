@@ -94,10 +94,10 @@ test('R-02-001/AC-02 mergeAdvisorFlowConfig：section 按键合并、gates 按�
     assert.equal(merged.privacy.history, 'off');
 });
 
-test('R-02-001/AC-01 typert 贡献声明：namespace=advisor-flow 派生 /api/advisor-flow/get|set', () => {
+test('R-02-001/AC-01 typert 贡献声明：namespace=advisor-flow 派生 /api/advisor-flow/get|set|modelInfo', () => {
     const contribution = advisorFlowTypertContribution();
     assert.equal(contribution.package, 'dsh-advisor-flow');
-    assert.equal(contribution.invocations.length, 2);
+    assert.equal(contribution.invocations.length, 3); // get/set + modelInfo（T-034）
     for (const invocation of contribution.invocations) {
         assert.equal(invocation.namespace, 'advisor-flow'); // 前缀规则：/api/<namespace>/<method>
         assert.equal(invocation.invocation.kind, 'direct');
@@ -334,4 +334,59 @@ test('R-02-001/AC-01 persistError 字段随失败回执透出（服务端 API fa
     const recovered = createGatewayFixture({});
     const ok = await recovered.gateway['advisor-flow/set']({ args: { patch: { advisor: { model: 'm2' } } } });
     assert.equal(ok.persistError, undefined); // 成功回执不带原因字段
+});
+
+test('R-02-001/AC-07 modelInfo（T-034）：宿主声明 defaultMaxTokens 经自有 RPC 透传', async () => {
+    const calls = [];
+    const gateway = createConfigGateway({
+        getRawConfig: () => ({}),
+        applyResolved: () => {},
+        resolveModelLimits: async (provider, model) => {
+            calls.push([provider, model]);
+            return provider === 'gpu'
+                ? { ok: true, defaultMaxTokens: 131072 }
+                : { ok: true }; // 未声明 → 无 defaultMaxTokens 键
+        },
+    });
+    const hit = await gateway['advisor-flow/modelInfo']({ args: { provider: 'gpu', model: 'glm-5.3-flash-512k' } });
+    assert.deepEqual(hit, { ok: true, defaultMaxTokens: 131072 });
+    const undeclared = await gateway['advisor-flow/modelInfo']({ args: { provider: 'plain', model: 'm' } });
+    assert.deepEqual(undeclared, { ok: true }); // toWireJson 剥除 undefined 后的裸形态
+    // 非正整数声明同样剥除（服务端正整数守卫，客户端双保险）
+    const guarded = createConfigGateway({
+        getRawConfig: () => ({}),
+        applyResolved: () => {},
+        resolveModelLimits: async () => ({ ok: true, defaultMaxTokens: 0 }),
+    });
+    assert.deepEqual(await guarded['advisor-flow/modelInfo']({ args: { provider: 'p', model: 'm' } }), { ok: true });
+    assert.deepEqual(calls, [['gpu', 'glm-5.3-flash-512k'], ['plain', 'm']]);
+});
+
+test('R-02-001/AC-07 modelInfo（T-034）：非法入参/注入缺失/解析抛错一律降级不抛', async () => {
+    const logs = { warn: [] };
+    const gateway = createConfigGateway({
+        getRawConfig: () => ({}),
+        applyResolved: () => {},
+        resolveModelLimits: async () => {
+            throw new Error('catalog boom');
+        },
+        logger: { warn: (m) => logs.warn.push(m) },
+    });
+    assert.deepEqual(await gateway['advisor-flow/modelInfo']({ args: { provider: '', model: 'm' } }), { ok: false, reason: 'invalid-args' });
+    assert.deepEqual(await gateway['advisor-flow/modelInfo']({ args: { provider: 'p', model: 42 } }), { ok: false, reason: 'invalid-args' });
+    assert.deepEqual(await gateway['advisor-flow/modelInfo']({}), { ok: false, reason: 'invalid-args' });
+    const boom = await gateway['advisor-flow/modelInfo']({ args: { provider: 'p', model: 'm' } });
+    assert.deepEqual(boom, { ok: false, reason: 'resolve-failed' });
+    assert.equal(logs.warn.length, 1); // 一次性 warn 显性化
+    const noInjection = createConfigGateway({ getRawConfig: () => ({}), applyResolved: () => {} });
+    assert.deepEqual(await noInjection['advisor-flow/modelInfo']({ args: { provider: 'p', model: 'm' } }), { ok: false, reason: 'model-info-unavailable' });
+});
+
+test('T-034 贡献声明含 modelInfo 端点（provider+model 两参数，src-json）', () => {
+    const contribution = advisorFlowTypertContribution();
+    const entry = contribution.invocations.find((invocation) => invocation.method === 'modelInfo');
+    assert.ok(entry, 'modelInfo invocation 声明缺失');
+    assert.equal(entry.namespace, 'advisor-flow');
+    assert.deepEqual(entry.parameters.map((parameter) => parameter.name), ['provider', 'model']);
+    assert.deepEqual(contribution.invocations.map((invocation) => invocation.method), ['get', 'set', 'modelInfo']);
 });

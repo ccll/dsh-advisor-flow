@@ -502,7 +502,7 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 配置与状态服务
-- 职责: `advisor-flow` 命名空间 live re-apply 与宿主 SettingsForms 适配；模型目录查询（web 卡下拉数据源，自有 gateway RPC）；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
+- 职责: `advisor-flow` 命名空间 live re-apply 与宿主 SettingsForms 适配；模型目录查询（web 卡下拉数据源，自有 gateway RPC）；模型声明值查询（`advisor-flow/modelInfo`，T-034——宿主 llm 运行时 `resolveModelInfo` 的 `defaultMaxTokens` 透传，占位数值数据源）；用量台账（逐次+累计+剩余次数）；状态快照（含门决策统计、干预计数、介入强度与收口评审计数）（承接 R-02-001、R-02-002、R-02-003）
 - 关键内部结构:
   - 设置解析器拒绝非法值但保留未知键并警告；默认值 SSOT 对齐 pi 0.8.2（C-008），偏离项 failureMode 默认 block-tool（C-017）。
   - 新键：customInvocation、modelWhitelist、blockOnBlocked、toolPolicies、contextMaxChars、gitContextMaxChars、privacy.repoContext(off|summary|full)、privacy.toolResultMaxLines、privacy.untrackedContent、privacy.trackedFileContent、outcomeLogging、turnReviewExemptPatterns；旧键警告保留。
@@ -534,7 +534,7 @@ flowchart TD
 
 ### web 设置卡
 - 职责: 插件管理页 Advisor Flow 配置卡（模型路由、门矩阵、新配置键、隐私档位、风险提示），值流走宿主 configForms 管线（承接 R-02-001 的 GUI 面）
-- 关键内部结构: 挂点为插件管理页 keyed 槽 `plugins.bundle.config`（key = 包名 = `dsh-advisor-flow`；与 dsh-context 同构，C-029），组件渲染于 bundle 详情页 `detailSections`；注册整体活在 `ctx.effect` 内且仅当宿主 `configForms.whileServed(['advisor-flow'])` 判定本命名空间被服务（apply 同步帧绝不触碰 slots，C-029）。值流：读经 `configForms.get(ns)` 控制器快照订阅（宿主 describe 镜像，revision 栅栏与自愈由宿主承载）；写经保存时一次 `form.mutate(全量脏字段 set ops)`（宿主正规写缝 `settings.mutate` → volatile write → profile patch → volatile-update live re-apply）；自有 gateway RPC 只保留模型目录（`llm/listProviders`、`session/modelCatalog`）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省。
+- 关键内部结构: 挂点为插件管理页 keyed 槽 `plugins.bundle.config`（key = 包名 = `dsh-advisor-flow`；与 dsh-context 同构，C-029），组件渲染于 bundle 详情页 `detailSections`；注册整体活在 `ctx.effect` 内且仅当宿主 `configForms.whileServed(['advisor-flow'])` 判定本命名空间被服务（apply 同步帧绝不触碰 slots，C-029）。值流：读经 `configForms.get(ns)` 控制器快照订阅（宿主 describe 镜像，revision 栅栏与自愈由宿主承载）；写经保存时一次 `form.mutate(全量脏字段 set ops)`（宿主正规写缝 `settings.mutate` → volatile write → profile patch → volatile-update live re-apply）；自有 gateway RPC 保留模型目录（`llm/listProviders`、`session/modelCatalog`）与模型声明值查询（`advisor-flow/modelInfo`，T-034：目录快照不携带模型 limits——宿主 `session/modelCatalog` 只透出 provider/id/name/inputModalities，maxTokens 占位数值经 `ctx.llm.resolveModelInfo` 解析的 `defaultMaxTokens` 透传，未声明/通道失败回退原文，按 provider+model 对正负缓存、通道失败一次性降级）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省。
   - 卡片平铺常开: 0.2.0 插件详情页为每插件独享配置面，无折叠交互；保留静态标题行（标题/描述/未保存徽标，不可点），表单常开（C-030）。
   - 未配置提示横幅（唯一表面）: `advisor.provider`/`advisor.model` 任一缺失（含暂存补丁后的生效值）时，整卡置顶呈现 `advisorflow_banner` 提示横幅——不出手的原因可查询、字段照常可编辑，补齐后即时消失；表单内不再叠加第二段近似告警（R-02-001/AC-03/AC-13，C-030）。provider/model 下拉在「目录不可用、provider 目录外或该 provider 无模型声明」时回退自由文本输入，保证路由始终可补齐。
   - 保存控件常驻: footer 按钮组以 sticky 定位常驻滚动视口底部（R-02-001/AC-09；C-024）。
