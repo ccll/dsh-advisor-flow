@@ -1,0 +1,8 @@
+T-032 af-home staging E2E（3087，2026-10-15）
+✔ mode 下拉缺省选中 soft（C-032） —— value=soft
+✔ plan 门开关缺省开启 —— aria-checked=true
+✔ failure 门开关缺省开启 —— aria-checked=true
+✔ loop 门开关缺省开启 —— aria-checked=true
+✔ completion 门开关缺省开启 —— aria-checked=true
+✔ maxTokens 占位回退原文 —— placeholder=跟随所选模型配置
+✔ pageerror=0

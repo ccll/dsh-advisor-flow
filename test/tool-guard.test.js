@@ -7,6 +7,7 @@ import {
     TOOL_FACE_CLOSED_REASON,
     SESSION_EXEMPT_REASON,
 } from '../lib/tool-guard.js';
+import { DEFAULT_INTERVENTION_MODE } from '../lib/config.js';
 import { createReviewerClassifier } from '../lib/reviewer-classifier.js';
 import { reviewerSubsessionEvents } from './helpers.js';
 
@@ -101,11 +102,24 @@ test('R-01-001/AC-10 未启用（enabled=false）放行：沿用引擎禁用路�
     assert.equal(await guard('main-1'), undefined);
 });
 
-test('R-01-001/AC-10 mode 未定义归一缺省（hard）：不构成 fail-open 旁路（C-025）', async () => {
-    const cfg = { enabled: true, turnReviewExemptPatterns: ['review'] }; // 无 mode 键
-    const { guard } = makeGuard({ config: cfg, classifier: { isReviewerSubsession: async () => false } });
-    const refusal = await guard('main-1');
-    assert.equal(refusal.code, TOOL_FACE_CLOSED_CODE); // 归一 hard：拒绝而非放行
+test('R-01-001/AC-10 mode 未定义归一 DEFAULT_INTERVENTION_MODE（现 soft，C-032）：档位单点缺省（C-025）', async () => {
+    // 归一本质：守卫不携带第二套缺省，undefined mode 必须落到 config.js
+    // 的单点缺省常量——断言常量本体，而非档位行为（行为差异已由
+    // guidelinesActive 谓词与 config.test.js 缺省用例覆盖）。
+    assert.equal(DEFAULT_INTERVENTION_MODE, 'soft');
+});
+
+test('R-01-001/AC-10 mode 未定义走归一 soft 行为路径：审核类子会话按 SESSION_EXEMPT 拒绝而非硬模式关闭（复审 N1，C-032）', async () => {
+    // 行为级锚定 lib/tool-guard.js:86 归一行：无 mode 键 + 审核类子会话 →
+    // 命中 soft 分支（放行主会话、按审核类子会话豁免拒绝）；若归一行被
+    // 改回字面 'hard'，本用例将得到 TOOL_FACE_CLOSED 而非 SESSION_EXEMPT。
+    const { guard } = makeGuard({
+        config: { enabled: true, turnReviewExemptPatterns: ['review'] }, // 无 mode 键
+        classifier: { isReviewerSubsession: async () => true },
+    });
+    const refusal = await guard('review-1');
+    assert.equal(refusal.code, SESSION_EXEMPT_CODE);
+    assert.notEqual(refusal.code, TOOL_FACE_CLOSED_CODE);
 });
 
 test('R-01-001/AC-10 时序缝：盘上 mode 切换后首次调用按新档位判定（applyConfig 先于判定）', async () => {

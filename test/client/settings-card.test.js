@@ -618,8 +618,9 @@ const CATALOG_PROVIDERS = [
 const CATALOG = {
     routableProviders: ['openai', 'gpu'],
     groups: [
+        // gpt-x 不声明 maxTokens（回退形态）；glm-5.3 声明（占位显示形态，T-032）
         { id: 'openai', name: 'OpenAI (CPA)', models: [{ id: 'gpt-x', name: 'GPT X', reasoning: { efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }], defaultEffort: 'low' } }] },
-        { id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-5.3', name: 'GLM 5.3', reasoning: { efforts: [{ id: 'max', name: '最大' }], defaultEffort: 'max' } }] },
+        { id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-5.3', name: 'GLM 5.3', maxTokens: 131072, reasoning: { efforts: [{ id: 'max', name: '最大' }], defaultEffort: 'max' } }] },
     ],
 };
 
@@ -734,6 +735,51 @@ test('R-02-001/AC-01 幽灵回显回归：model 未选时下拉必须显示占�
     const reselected = findById(container, 'advisor-model')
         .children.find((node) => node.attrs?.selected === 'selected');
     assert.equal(reselected?.attrs?.value, 'glm-5.3', '选择后回显真实选中项');
+});
+
+test('R-02-001/AC-04 默认面（T-032）：mode 缺省显示 soft、四门默认开启、maxTokens 占位显示模型声明值', async () => {
+    // 目录声明 maxTokens → 占位追加实际数字（生产 gpu glm-5.3-flash-512k = 131072 同型）
+    const declared = await renderedCard({
+        raw: { advisor: { provider: 'gpu', model: 'glm-5.3' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+    });
+    assert.equal(
+        findById(declared.container, 'advisor-max-tokens').attrs.placeholder,
+        '跟随所选模型配置（当前 131072）',
+        '占位含声明值',
+    );
+    // 未声明 maxTokens 的模型 → 回退原文，不猜测
+    const undeclared = await renderedCard({
+        raw: { advisor: { provider: 'openai', model: 'gpt-x' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+    });
+    assert.equal(
+        findById(undeclared.container, 'advisor-max-tokens').attrs.placeholder,
+        '跟随所选模型配置',
+        '无声明回退原文',
+    );
+    // 非法声明（0/负数/非整数）同走回退，不显示无效数字（复审 N4 残余缺口收口）
+    const invalidDecl = await renderedCard({
+        raw: { advisor: { provider: 'gpu', model: 'glm-bad' } },
+        catalog: { providers: CATALOG_PROVIDERS, catalog: { routableProviders: ['gpu'], groups: [{ id: 'gpu', name: 'GPU 路由', models: [{ id: 'glm-bad', name: 'BAD', maxTokens: 0 }] }] } },
+    });
+    assert.equal(
+        findById(invalidDecl.container, 'advisor-max-tokens').attrs.placeholder,
+        '跟随所选模型配置',
+        '非法声明（0）回退原文',
+    );
+    // mode 缺省显示 soft（C-032）：raw 无 mode，控件选中解析缺省
+    const modeSelect = findById(undeclared.container, 'advisor-mode');
+    const modeSelected = modeSelect.children.find((node) => node.attrs?.selected === 'selected');
+    assert.equal(modeSelected?.attrs?.value, 'soft', '介入强度控件缺省选中 soft');
+    // 四门默认开启（AC-04 既有承诺）：raw 无 gates，开关默认 aria-checked=true
+    for (const kind of ['plan', 'failure', 'loop', 'completion']) {
+        assert.equal(
+            findById(undeclared.container, `advisor-gate-${kind}-enabled`).attrs['aria-checked'],
+            'true',
+            `${kind} 门默认开启`,
+        );
+    }
 });
 
 test('R-02-001/AC-01 null effort 保留：选「跟随模型默认」写 null 且往返不丢', async () => {

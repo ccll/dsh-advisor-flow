@@ -116,10 +116,10 @@ test('R-01-009/AC-13 硬模式守则停用：mode=hard 时守则族求值为空�
     const soft = { ...config({ plan: true, failure: true, completion: true }), mode: 'soft' };
     const text = guidelineTextFactory(() => soft)({ agent: { id: 's1' } });
     assert.ok(text.includes(GUIDELINE_TEXTS.plan)); // soft 模式守则照常注入
-    // mode 未定义归一 DEFAULT_INTERVENTION_MODE（hard）→ 不注入（与状态呈现同向）。
+    // mode 未定义归一 DEFAULT_INTERVENTION_MODE（soft，C-032 废弃缺省 hard）→ 守则照常注入。
     const undefinedMode = { ...config({ plan: true }) };
     delete undefinedMode.mode;
-    assert.equal(guidelineTextFactory(() => undefinedMode)({ agent: { id: 's1' } }), '');
+    assert.ok(guidelineTextFactory(() => undefinedMode)({ agent: { id: 's1' } }).includes(GUIDELINE_TEXTS.plan));
     // 在线切换即时生效（活配置读时求值）。
     let live = soft;
     const render = guidelineTextFactory(() => live);

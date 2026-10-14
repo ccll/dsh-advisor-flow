@@ -249,10 +249,10 @@ test('R-01-009/AC-01 mode 非法值拒绝且原因可查；合法值透传（C-0
     }
 });
 
-test('R-01-009/AC-02 mode 缺省 hard（开箱即获收口评审，C-022；废弃 C-021 缺省 soft）', () => {
+test('R-01-009/AC-02 mode 缺省 soft（开箱温和，pi 行为；C-032 废弃 C-022 缺省 hard）', () => {
     const result = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' } });
     assert.equal(result.ok, true);
-    assert.equal(result.config.mode, 'hard'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
+    assert.equal(result.config.mode, 'soft'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
 });
 
 test('R-02-001/AC-04 T-023 turnReviewExemptPatterns 解析：默认双语预置（C-023）、显式覆盖、空数组关闭、非法拒绝', () => {
