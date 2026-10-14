@@ -8,7 +8,7 @@ mutation: lifecycle
 # T-033 收口评审豁免关键词缺省清单增补「复审」
 
 风险等级: standard
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -57,4 +57,4 @@ mutation: lifecycle
 - SOLUTION 对照: 子会话审核豁免条目缺省清单已同步（T-033 增补标注）；机制语义（显式覆盖/空数组关闭/非法拒绝/缓存签名 patternsKey 含清单内容自动重判）不变，与实现一致。
 - review: 审核方 = 独立子代理（独立上下文），结论 blocking=0 / non-blocking=2（N1 lint 文风告警属既存类不处置；N2 评审以只读比对代替重建复跑——实现方已实际重建并入库）。全仓词表硬编码排查无遗漏枚举点；两处测试锚点真实锚定核验通过；复审结论：通过。
 - 风险自评: —（standard 档）
-- commit: （提交后回填）
+- commit: 455d544（实现；关闭提交独立于本提交）
