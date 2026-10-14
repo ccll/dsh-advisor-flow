@@ -88,7 +88,7 @@ test('R-02-001/AC-01 T-030 挂载：configForms 管线 + whileServed 门控注�
     assert.equal(registered[0].options.locale, undefined, 'locale 未声明即不注册（F2：卡片零 locale 消费）');
     assert.equal(registered[0].options.name, 'plugins.bundle.config');
     assert.equal(typeof registered[0].component, 'function');
-    assert.equal(typeof applied.refresh, 'function');
+    assert.equal(applied, undefined, 'apply 按 cordis 契约返回 undefined（对象返回值会触发 Invalid effect 校验）');
 
     // ownerProps 契约：bundle 配置页渲染整卡（组件返回 div 容器，useRef 挂 DOM）
     const page = registered[0].component({ view: 'page' });
@@ -116,7 +116,7 @@ test('R-02-001/AC-01 configForms 缝缺失降级：不注册、告警恰好一�
     assert.equal(registered.length, 0, 'configForms 缝缺失不注册');
     assert.equal(warnings.length, 1, '降级告警恰好一条');
     assert.match(warnings[0], /configForms/, '告警指明 configForms 缝');
-    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回——boot 不受累');
+    assert.equal(applied, undefined, 'apply 按 cordis 契约返回 undefined——boot 不受累');
 });
 
 test('R-02-001/AC-01 whileServed 未服务不挂卡、恢复服务后注册（宿主官方门控回归）', async () => {
@@ -151,7 +151,7 @@ test('R-02-001/AC-01 whileServed 未服务不挂卡、恢复服务后注册（�
     };
     const applied = runFactory(loaded, ctx);
     await Promise.resolve();
-    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回');
+    assert.equal(applied, undefined, 'apply 按 cordis 契约返回 undefined');
     assert.deepEqual(watched, ['advisor-flow']);
     assert.equal(slotInjects, 0, '未服务时不注册');
     // 宿主判定本命名空间被服务 → 注册回调执行 → 注册发生
@@ -189,7 +189,7 @@ test('R-02-001/AC-01 configForms.get 无控制器：告警一条、不注册、�
     };
     const applied = runFactory(loaded, ctx);
     await Promise.resolve();
-    assert.equal(typeof applied.refresh, 'function', 'apply 正常返回');
+    assert.equal(applied, undefined, 'apply 按 cordis 契约返回 undefined');
     registerCallback();
     assert.equal(slotInjects, 0, '无控制器不注册槽');
     assert.equal(registered.length, 0);
