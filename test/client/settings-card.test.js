@@ -707,6 +707,35 @@ test('R-02-001 目录死路回退：provider 目录外或该 provider 无模型�
     assert.equal(findById(bare.container, 'advisor-model').tag, 'input', '无模型声明时 model 是自由文本');
 });
 
+test('R-02-001/AC-01 幽灵回显回归：model 未选时下拉必须显示占位项而非首个真实选项（东家生产报障回归）', async () => {
+    // 无占位项时 <select> 空值匹配不到任何 option，浏览器把第一个真实
+    // 选项渲染成已选中——用户看到「已配置」，实际存储为空、保存发不出
+    // model 操作、横幅按真实状态常挂。修复：与 provider 一致补占位项。
+    const { container, controller } = await renderedCard({
+        raw: { advisor: { provider: 'gpu' } }, // 目录里 gpu 有 glm-5.3，但未选模型
+        catalog: { providers: CATALOG_PROVIDERS, catalog: CATALOG },
+    });
+    const select = findById(container, 'advisor-model');
+    assert.equal(select.tag, 'select', '目录里 gpu 有真实模型 → 渲染下拉');
+    assert.deepEqual(
+        select.children.map((option) => option.attrs.value),
+        ['', 'glm-5.3'],
+        '占位项 + 该 provider 的真实模型',
+    );
+    assert.equal(select.children[0].textContent, '— 选择模型 —', '占位文案与 provider 对齐');
+    const selected = select.children.find((node) => node.attrs?.selected === 'selected');
+    assert.equal(selected?.attrs?.value, '', '空值选中占位项——显示诚实，不幽灵回显真实模型');
+    // 横幅按真实状态可见（未选模型 = 派生禁用），占位显示不谎报已配置
+    assert.ok(JSON.stringify(container).includes('advisor 未启用'));
+    // 用户真正选择后横幅即时消失（派生启用）
+    controller.setField('advisor.model', 'glm-5.3');
+    assert.equal(controller.getState().enabled, true);
+    assert.ok(!JSON.stringify(container).includes('advisor 未启用'));
+    const reselected = findById(container, 'advisor-model')
+        .children.find((node) => node.attrs?.selected === 'selected');
+    assert.equal(reselected?.attrs?.value, 'glm-5.3', '选择后回显真实选中项');
+});
+
 test('R-02-001/AC-01 null effort 保留：选「跟随模型默认」写 null 且往返不丢', async () => {
     const writes = [];
     const { controller } = await renderedCard({
