@@ -40,5 +40,3 @@ owner: 双方
 - [缺陷线索] 门咨询 caller 中止极性偏离对齐基线：pi 为拦截当次调用，port 按 failureMode 处置（warn-and-continue 下放行）——是否对齐待东家裁决
 - [缺陷线索] 设置卡「会话历史档位」下拉写 privacy.history，但服务端键表（lib/config.js PRIVACY_FIELDS）无此键：按未知键告警透传、运行时无任何消费方（grep 佐证）——控件承诺了不存在的效果（选 off 并不改变咨询行为；T-031 E2E 顺带发现，pi 侧旧键，SOLUTION 记为旧键迁移但卡片仍以活控件呈现）——候选处置：卡片改迁移提示或按 pi 语义在素材装配补齐消费方
 - [维护想法] agentmap_lint 废弃声明仅支持整条废弃（`- 废弃: C-nnn`），部分废弃（如 C-032 只废弃 C-022 的缺省裁定、控件置顶部分仍有效）无机械表达——后续引用 C-022 作缺省依据时 lint 不拦（T-032 复审 N3 登记；候选：lint 支持带范围限定的废弃行）
-- [缺陷线索] AgentMap Skill 验证清单要求裸跑 `.githooks/pre-push`，canonical pre-push lint 以 `--pre-push` 模式运行、须由 git 提供 stdin ref 行与 remote 参数，裸调被拒（拒绝执行 outgoing 历史审计）——验证须以模拟 hook 上下文执行；修正落点在上游 Skill，非本仓受管文件（2026-10-14 bootstrap 核验发现）
-- [维护想法] 核心文档上限未在 CONVENTIONS 本地参数登记，核心文档预算闸门停用——93 AC 体量下建议定值登记（2026-10-14 bootstrap 核验发现）
