@@ -831,7 +831,7 @@ test('R-02-001 T-023 收口评审豁免关键词输入：默认清单回显、�
     // gateway get 返回 resolved 配置：未配置 raw 时回显缺省双语预置（C-023）
     const input = findById(container, 'advisor-turn-review-exempt-patterns');
     assert.ok(input, '豁免关键词输入存在');
-    assert.equal(input.attrs.value, 'review, 审核, 审查, 评审, 审计');
+    assert.equal(input.attrs.value, 'review, 审核, 审查, 评审, 复审, 审计');
     // 逗号/中文逗号/换行分隔 → 非空字符串数组进 patch
     input.listeners.change[0]({ target: { value: 'review, 审计' } });
     assert.deepEqual(controller.getState().patch.turnReviewExemptPatterns, ['review', '审计']);

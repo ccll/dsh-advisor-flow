@@ -262,6 +262,7 @@ test('R-02-001/AC-04 T-023 turnReviewExemptPatterns 解析：默认双语预置�
     assert.deepEqual(def.config.turnReviewExemptPatterns, DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS);
     assert.ok(def.config.turnReviewExemptPatterns.includes('review')); // 英文词
     assert.ok(def.config.turnReviewExemptPatterns.includes('审核')); // 中文词
+    assert.ok(def.config.turnReviewExemptPatterns.includes('复审')); // T-033 增补词
     // 显式覆盖生效
     const override = resolveAdvisorFlowConfig({ ...base, turnReviewExemptPatterns: ['audit'] });
     assert.deepEqual(override.config.turnReviewExemptPatterns, ['audit']);

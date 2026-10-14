@@ -580,7 +580,7 @@ flowchart TD
   - fork 会话 header 无 `origin` 字段，不判为子会话（`origin === 'subagent'` 严格相等判定绕开 seed 回放边界）。
   - 判定失败 fail-open（R-01-009/AC-12）：缝缺失、读取失败、解析失败一律不豁免（照常评审）；只凭阳性判定豁免。
   - 豁免判定按会话缓存（仅缓存成功读取的判定，失败不缓存、次轮收口重判）；缓存随 `session/disposed` 摘除。
-  - 豁免清单为配置键 `turnReviewExemptPatterns`（非空字符串数组；空数组 = 豁免关闭；默认双语预置 review/审核/审查/评审/审计，C-023）。
+  - 豁免清单为配置键 `turnReviewExemptPatterns`（非空字符串数组；空数组 = 豁免关闭；默认双语预置 review/审核/审查/评审/复审/审计，C-023，T-033 增补「复审」）。
   - 豁免面按内容关键词收窄：执行类子会话（搜索、计划、判断）照常评审，仅审核类跳过（C-023）。
 - **咨询工具面守卫**（C-025）：
   - `ask_advisor` execute 前判定调用方会话：hard 模式拒绝一切会话（`TOOL_FACE_CLOSED`）；soft 模式拒绝审核类子会话与已登记顾问子会话（`SESSION_EXEMPT`）。
