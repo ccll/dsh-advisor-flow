@@ -225,7 +225,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "bc2a13b66c1a6c641fd19bee3a036350f50d1f806c0a96a50642e3c12190f96f",
+    "AGENTS.md": "75bf4f8c7546cdefc7bd547ce4f39d67998b697d38aab3b5a7111552585ae1f6",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "c85da06d5f5423959656195835bb570912839e9e65483d3cc20bf096aea9cd4c",
@@ -1088,7 +1088,7 @@ def check_writing_style(root: Path, result: Result, changed: set[str]) -> None:
             if list_match:
                 content = noisy[list_match.end():]
                 stops = len(re.findall(r"[。；]", content))
-                if stops >= STYLE_LIST_ITEM_MAX_STOPS:
+                if stops > STYLE_LIST_ITEM_MAX_STOPS:
                     result.warnings.append(
                         f"{relative}:{line_number}: list item may carry multiple rules; "
                         "split so each line has one condition and one action"
@@ -1297,6 +1297,17 @@ def task_state(text: str) -> str | None:
     header = re.split(r"^## ", text, maxsplit=1, flags=re.MULTILINE)[0]
     match = re.search(
         r"^状态:\s*(active|completed|abandoned|superseded)\s*$", header, re.MULTILINE
+    )
+    if match:
+        return match.group(1)
+    # Upgrade compatibility: pre-upgrade tasks carry the state line inside
+    # `## 终态与证据` and terminal tasks are immutable, so fall back to the
+    # pre-v2 full-text search when the canonical header position is empty.
+    # Tasks written by write_fixture always carry the header line, so the
+    # fallback never engages for them and the prose-hijack risk stays limited
+    # to legacy-shaped files.
+    match = re.search(
+        r"^状态:\s*(active|completed|abandoned|superseded)\s*$", text, re.MULTILINE
     )
     return match.group(1) if match else None
 
@@ -1856,6 +1867,11 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
         require_review_labels = False
         require_self_check = False
         risk: list[str] = []
+        # legacy-named tasks (no T-id) never reach the assignment inside the
+        # name_match branch, but the completed-evidence block still reads
+        # risk_level; default to standard so they neither crash nor gain the
+        # micro-only 风险自评 requirement.
+        risk_level = "standard"
         if name_match and fm.get("id") != name_match.group(1):
             result.errors.append(
                 f"tasks/{path.name}: id should be {name_match.group(1)}, got {fm.get('id')}"
@@ -1871,7 +1887,14 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
             require_matrix = within_scope
             require_review = review_start is not None and int(task_id[2:]) >= review_start
             if spec_version >= 2:
-                if within_scope and len(risk) != 1:
+                # Tasks already terminal at HEAD predate the v2 风险等级 regime
+                # and are immutable, so the authoring requirement only binds
+                # active and newly written tasks.
+                if (
+                    within_scope
+                    and len(risk) != 1
+                    and not (old is not None and task_state(old) in TERMINAL_STATES)
+                ):
                     result.errors.append(
                         f"tasks/{path.name}: needs exactly one 风险等级: micro, standard or high"
                     )
@@ -3118,6 +3141,152 @@ def self_test_legacy_cutoff() -> None:
         conventions.write_text(original, encoding="utf-8")
 
 
+def self_test_upgrade_compat_regressions() -> None:
+    """v2 升级兼容回归的行为证据：三个修复分支各有一个可失败用例。
+
+    - legacy 命名 task 的 completed 证据分支读取 risk_level 时不得
+      UnboundLocalError，也不得按 micro 追加风险自评要求；
+    - 状态行只存在于正文（frontmatter 无 状态）时 task_state 仍可解析；
+    - HEAD 已终态且缺 风险等级 的存量 task 免报错，active 的新 task 仍报。
+    """
+    # Part 1: legacy-named task + body-only 状态 → standard 默认，无崩溃
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        legacy = root / "tasks/20260801-legacy-search.md"
+        # 存量形态：legacy 命名 + 状态行不在头部区而在 ## 终态与证据 节内。
+        # 先以 active 形态入库（old is not None 才免 bad name），再置为 completed
+        legacy.write_text(
+            """---
+doc-type: task
+mutation: lifecycle
+---
+# Legacy search
+状态: active
+## 背景与目标
+Legacy task kept from the pre-upgrade layout.
+""",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "track legacy task"],
+            cwd=root,
+            check=True,
+        )
+        legacy.write_text(
+            f"""---
+doc-type: task
+mutation: lifecycle
+---
+# Legacy search
+## 终态与证据
+状态: completed
+- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- commit: {baseline}
+""",
+            encoding="utf-8",
+        )
+        # 修复前此调用直接抛 UnboundLocalError；返回即第一层证据
+        legacy_result = lint(root, strict_tests=True)
+        assert not any(
+            "bad name" in error for error in legacy_result.errors
+        ), legacy_result.errors
+        assert not any(
+            "missing valid 状态" in error for error in legacy_result.errors
+        ), legacy_result.errors
+        assert not any(
+            "风险自评" in error for error in legacy_result.errors
+        ), legacy_result.errors
+        assert not any(
+            "completed task needs" in error for error in legacy_result.errors
+        ), legacy_result.errors
+
+    # Part 2: v2 风险等级要求只约束 active/新写 task，HEAD 已终态者豁免
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"],
+            cwd=root,
+            check=True,
+        )
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        base = (root / "tasks/T-001-20260801-search.md").read_text(encoding="utf-8")
+        active_text = (
+            base.replace("id: T-001", "id: T-002")
+            .replace("# Search", "# Riskless")
+            .replace("风险等级: high\n", "")
+        )
+        task = root / "tasks/T-002-20260801-riskless.md"
+        task.write_text(active_text, encoding="utf-8")
+        flagged = lint(root, strict_tests=True)
+        assert any(
+            "needs exactly one 风险等级" in error for error in flagged.errors
+        ), flagged.errors
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "add T-002"],
+            cwd=root,
+            check=True,
+        )
+        completed_text = active_text.replace(
+            "状态: active", "状态: completed"
+        ) + f"""- 实现: src/search.py
+- 测试: tests/test_search.py passed
+- SOLUTION 对照: SOLUTION 与实现一致
+- commit: {baseline}
+- review: independent review passed
+
+## 自查清单
+- 边界: empty query is rejected
+- 异常: io failure surfaces as error
+- 回归: existing search suite stays green
+"""
+        task.write_text(completed_text, encoding="utf-8")
+        # HEAD 仍是 active：豁免不生效，报错必须保留（阳性对照）
+        pending = lint(root, strict_tests=True)
+        assert any(
+            "needs exactly one 风险等级" in error for error in pending.errors
+        ), pending.errors
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "complete T-002"],
+            cwd=root,
+            check=True,
+        )
+        # HEAD 已终态 → 豁免生效，且整树无任何 error
+        exempt = lint(root, strict_tests=True)
+        assert not any(
+            "风险等级" in error for error in exempt.errors
+        ), exempt.errors
+        assert not exempt.errors, exempt.errors
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -3159,6 +3328,20 @@ def self_test() -> None:
         )
         stack_flagged = lint(root, strict_tests=True)
         assert any("long noun stack" in warning for warning in stack_flagged.warnings)
+        style_conventions.write_text(
+            style_original + "- 首项声明句。次项补充句；末项收束句。\n", encoding="utf-8"
+        )
+        three_stops_flagged = lint(root, strict_tests=True)
+        assert not any(
+            "list item may carry multiple rules" in warning for warning in three_stops_flagged.warnings
+        )
+        style_conventions.write_text(
+            style_original + "- 一处声明。又一处声明。再一处声明。末处声明。\n", encoding="utf-8"
+        )
+        four_stops_flagged = lint(root, strict_tests=True)
+        assert any(
+            "list item may carry multiple rules" in warning for warning in four_stops_flagged.warnings
+        )
         style_conventions.write_text(style_original, encoding="utf-8")
         style_clean = lint(root, strict_tests=True)
         assert not any(
@@ -3415,6 +3598,7 @@ def self_test() -> None:
     self_test_legacy_cutoff()
     self_test_terminal_evidence_repair()
     self_test_risk_tiers()
+    self_test_upgrade_compat_regressions()
     print("agentmap lint self-test passed")
 
 
