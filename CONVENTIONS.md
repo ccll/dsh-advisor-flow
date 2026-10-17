@@ -24,7 +24,7 @@ owner: agent 主笔，项目属主审批
 
 ## AgentMap 本地参数
 
-- agentmap 规范版本: 2
+- agentmap 规范版本: 3
 - 核心文档上限: 30000 token
 - 核心文档分片方案: SOLUTION.md 按子系统专题下钻分片，重组 task 立项时定具体落点（现况 111133 B > 30000 token × 3 B = 90000 B，超限为告警；重组完成后删除本行以恢复硬校验）
 
