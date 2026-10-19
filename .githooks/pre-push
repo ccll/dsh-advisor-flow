@@ -22,7 +22,9 @@ if [[ -e "$commit_hook" ]]; then
     fi
     for commit in $commits; do
       git show -s --format=%B "$commit" >"$message"
-      if ! "$commit_hook" "$message"; then
+      # AGENTMAP_COMMIT_REPLAY switches the task-closure check to judge the
+      # replayed commit's own tree instead of the live staged index.
+      if ! AGENTMAP_COMMIT_REPLAY="$commit" "$commit_hook" "$message"; then
         echo "pre-push: $(git rev-parse --short "$commit") rejected by .githooks/commit-msg" >&2
         exit 1
       fi

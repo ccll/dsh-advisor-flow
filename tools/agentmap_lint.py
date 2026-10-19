@@ -92,7 +92,28 @@ APPEND_ONLY_FILES = ("RATIONALE.md", "DECISIONS.md")
 # interrupted migration never dead-ends the gate.
 RATIONALE_DIR = "RATIONALE"
 DECISION_STORE_NON_ENTRIES = frozenset({"index.md", ".gitkeep"})
-DECISION_ENTRY_FILE_RE = re.compile(r"^(C-\d{3}[A-Z]?)-\S.+\.md$")
+DECISION_CID_PATTERN = r"C-\d{3}[A-Z]?"
+DECISION_ENTRY_FILE_RE = re.compile(rf"^({DECISION_CID_PATTERN})-\S.+\.md$")
+# Optional machine-readable supersession declared by the revising entry.
+# One line per frontmatter; values may list several ids (a consolidation
+# decision can replace more than one predecessor).
+SUPERSEDES_LINE_RE = re.compile(r"^\s*supersedes:\s*(\S.*)$", re.MULTILINE)
+# A succession chain of this many replacement events triggers a doctor-style
+# revision-churn warning (the count of supersession edges, not entries).
+SUPERSESSION_CHAIN_WARN = 3
+# receipts/: optional write-once run records for tasks whose acceptance is a
+# real run (training, deployment) instead of in-repo tests. The genre only
+# exists where a repo creates receipts/, so absence is legal everywhere and
+# every check below no-ops without the directory. Receipts stay out of the
+# core-document budget and the style scan on purpose: they are evidence
+# records, not living prose a session must re-read.
+RECEIPTS_DIR = "receipts"
+RECEIPT_FILE_RE = re.compile(r"^(T-\d{3})-\S.+\.md$")
+RECEIPT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A completed task that declared empirical acceptance must cite its run
+# receipt; the declaration is made when the task is created, the citation
+# when it closes.
+RECEIPT_DECLARE_RE = re.compile(r"^实证验收:\s*是\s*$", re.MULTILINE)
 LEGACY_DETAIL_TITLES = ("方案细化清单", "设计细化清单")
 LEGACY_READINESS_NAMES = {"重大设计选择已收敛": "重大方案选择已收敛"}
 # Commit hashes mix digits and hex letters a-f. Requiring at least one of
@@ -118,7 +139,13 @@ DECISION_EVIDENCE_RE = re.compile(
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
 COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
-TASK_NAME_RE = re.compile(r"^(T-\d{3})-\d{8}-.+\.md$")
+# Canonical task names are dateless: T-nnn-slug.md. T-ID order already encodes
+# creation order and Git history is the time authority, so a filename date is
+# redundant metadata that only invites fabricated dates. Dated names
+# (T-nnn-YYYYMMDD-slug.md) stay valid for already tracked tasks (grandfathered);
+# only new tasks must be dateless.
+TASK_NAME_RE = re.compile(r"^(T-\d{3})-.+\.md$")
+DATED_TASK_NAME_RE = re.compile(r"^T-\d{3}-\d{8}-.+\.md$")
 LEGACY_TASK_NAME_RE = re.compile(r"^\d{8}-.+\.md$")
 # Optional CONVENTIONS local parameter: once the registered date has passed,
 # legacy task names and legacy map file names stop being grandfathered and
@@ -274,13 +301,13 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "e7160b1aabe4bdadb65f25ea019703fc9cc380f1af1261b8a57904488f91bfa5",
+    "AGENTS.md": "76159d1ac615e319c851079960568e036c5e09ce00b45c1ff9cfb2a916b814a8",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
-    ".githooks/pre-push": "c85da06d5f5423959656195835bb570912839e9e65483d3cc20bf096aea9cd4c",
+    ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
     ".githooks/pre-commit.d/20-agentmap-lint.sh": "95c7df8021cceb8b357c7ea4edafbb2559ddd4179527327f5197ae851d9aa9c4",
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
-    "tools/agentmap_validate_commit_msg.py": "3fa7abf08602abfa479eb4d8e196bc9d37342421c55535d69b04b6527b522eeb",
+    "tools/agentmap_validate_commit_msg.py": "b3672d4c2d4f0aa3bf623742d88e3aba0847ddb84804d3c96f0874840754f477",
 }
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
 # Same CJK calibration as the id regexes below: \b is blind when CJK touches
@@ -301,6 +328,12 @@ CORE_BUDGET_RE = re.compile(
     r"^- 核心文档上限:\s*(\d+)\s*(字节|token)\s*$", re.MULTILINE
 )
 CORE_SPLIT_PLAN_RE = re.compile(r"^- 核心文档分片方案:\s*\S", re.MULTILINE)
+# Optional deadline inside the registration line: "…;截止: YYYY-MM-DD" (also
+# accepts the full-width colon). Once the date passes, the escape hatch stops
+# covering the overage and the budget violation becomes an error again — the
+# 2026-11 registry survey found a repo sitting 3.2× over budget behind an
+# open-ended "待定" registration, which turns the hatch into a permanent waiver.
+CORE_SPLIT_DEADLINE_RE = re.compile(r"截止[:：]\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE)
 SUPERSEDED_DECLARATION_RE = re.compile(r"^\s*-\s*废弃[:：]\s*(C-\d{3}[A-Z]?)\s*$", re.MULTILINE)
 
 
@@ -313,6 +346,7 @@ class Result:
     solution_covered: set[str] = field(default_factory=set)
     decision_ids: set[str] = field(default_factory=set)
     superseded_decisions: dict[str, str] = field(default_factory=dict)
+    supersedes_fields: dict[str, list[str]] = field(default_factory=dict)
     test_anchored: set[str] = field(default_factory=set)
     test_anchored_acceptance_criteria: set[str] = field(default_factory=set)
     goals: set[str] = field(default_factory=set)
@@ -380,6 +414,16 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
             key, _, value = line.partition(":")
             fields[key.strip()] = value.strip()
     return fields
+
+
+def frontmatter_block(text: str) -> str:
+    """Return the raw frontmatter body (without --- delimiters), or "".
+
+    parse_frontmatter collapses duplicate keys silently, so checks that must
+    define duplicate-line behavior read this raw block instead.
+    """
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    return match.group(1) if match else ""
 
 
 def duplicate_ids(ids: list[str]) -> set[str]:
@@ -1169,6 +1213,7 @@ def check_rationale_store(root: Path, result: Result, changed: set[str]) -> None
         }
     entries: dict[str, tuple[str, str]] = {}
     seen_ids: set[str] = set()
+    pending_supersedes: list[tuple[str, str, str]] = []
     for path in rationale_entry_paths(root):
         relative = path.relative_to(root).as_posix()
         name_match = DECISION_ENTRY_FILE_RE.match(path.name)
@@ -1190,6 +1235,32 @@ def check_rationale_store(root: Path, result: Result, changed: set[str]) -> None
             result.errors.append(f"{relative}: id should be {cid}, got {fm.get('id')}")
         if not fm.get("owner"):
             result.errors.append(f"{relative}: missing owner")
+        raw_fm = frontmatter_block(text)
+        supersede_lines = SUPERSEDES_LINE_RE.findall(raw_fm)
+        if len(supersede_lines) > 1:
+            result.errors.append(f"{relative}: more than one supersedes line in frontmatter")
+        for token in re.split(r"[,;，；、\s]+", " ".join(supersede_lines)):
+            if not token:
+                continue
+            if not re.fullmatch(DECISION_CID_PATTERN, token):
+                result.errors.append(
+                    f"{relative}: supersedes value should be a decision id, got {token}"
+                )
+                continue
+            if token == cid:
+                result.errors.append(f"{relative}: decision {cid} cannot supersede itself")
+                continue
+            pending_supersedes.append((relative, cid, token))
+            if SUPERSEDED_DECLARATION_RE.search(decision_entry_body(text)):
+                result.warnings.append(
+                    f"{relative}: declares supersession in both the supersedes field and "
+                    "prose; keep one channel"
+                )
+        if not supersede_lines and fm.get("supersedes") is not None:
+            result.errors.append(
+                f"{relative}: supersedes value should be a decision id, "
+                f"got {fm.get('supersedes') or '(empty)'}"
+            )
         first_body_line = next(
             (line for line in decision_entry_body(text).splitlines() if line.strip()), ""
         )
@@ -1204,6 +1275,20 @@ def check_rationale_store(root: Path, result: Result, changed: set[str]) -> None
     for cid, head_relative in sorted(head_by_cid.items()):
         if cid not in seen_ids and head_relative in changed:
             result.errors.append(f"RATIONALE: removed existing history ({head_relative})")
+    known_ids = seen_ids | boundary_ids
+    field_map: dict[str, list[str]] = {}
+    for relative, cid, target in pending_supersedes:
+        if target not in known_ids:
+            result.errors.append(f"{relative}: supersedes target {target} does not exist")
+            continue
+        field_map.setdefault(target, []).append(cid)
+    for target, successors in sorted(field_map.items()):
+        if len(successors) > 1:
+            result.errors.append(
+                f"RATIONALE: decision {target} is superseded more than once "
+                f"({', '.join(successors)})"
+            )
+    result.supersedes_fields = field_map
     for relative, (cid, text) in entries.items():
         if relative not in changed:
             continue
@@ -1243,6 +1328,99 @@ def check_rationale_store(root: Path, result: Result, changed: set[str]) -> None
                 f"{relative}: new decision entry contains implementation evidence; "
                 "code paths, commits, and solution details belong in SOLUTION"
             )
+
+
+def check_receipts(root: Path, result: Result, changed: set[str]) -> None:
+    """Optional receipts/ archive: one write-once run record per empirical task.
+
+    Runs only when the repo creates receipts/. A receipt binds to exactly one
+    task via both its file name and its task back-link; multiple receipts per
+    task are legal (one per run). Receipts are frozen once written: a later
+    edit or delete breaks the evidence chain, so both are lint errors and a
+    new run gets a new receipt file. Receipts predating the contract (tracked,
+    untouched, non-conforming) downgrade to warnings with a sanctioned path:
+    a dedicated metadata-only commit completes their frontmatter while the
+    run content stays frozen.
+    """
+    receipts_dir = root / RECEIPTS_DIR
+    if not receipts_dir.is_dir():
+        return
+    try:
+        head_names = run_git(
+            root, ["ls-tree", "-r", "--name-only", "HEAD", "--", RECEIPTS_DIR]
+        ).splitlines()
+    except GitCommandError as error:
+        git_data_error(result, "receipt discovery failed", error)
+        head_names = []
+    texts: dict[str, str] = {}
+    for path in sorted(receipts_dir.rglob("*.md")):
+        relative = path.relative_to(root).as_posix()
+        name_match = RECEIPT_FILE_RE.match(path.name)
+        if not name_match:
+            result.errors.append(f"{relative}: receipt file must be named <T-ID>-<slug>.md")
+            continue
+        task_id = name_match.group(1)
+        text = read_text_checked(path, result, relative)
+        if text is None:
+            continue
+        texts[relative] = text
+        problems: list[str] = []
+        fm = parse_frontmatter(text)
+        if fm is None:
+            problems.append(f"{relative}: missing frontmatter")
+        else:
+            if fm.get("doc-type") != "receipt":
+                problems.append(
+                    f"{relative}: doc-type should be receipt, got {fm.get('doc-type')}"
+                )
+            fm_task = fm.get("task", "")
+            if not fm_task:
+                problems.append(f"{relative}: missing task back-link")
+            elif not re.fullmatch(r"T-\d{3}", fm_task):
+                problems.append(f"{relative}: task should be T-nnn, got {fm_task}")
+            elif fm_task != task_id:
+                problems.append(f"{relative}: task should be {task_id}, got {fm_task}")
+            elif not any((root / "tasks").rglob(f"{task_id}-*.md")):
+                problems.append(
+                    f"{relative}: task back-link points to missing task {task_id}"
+                )
+            if not RECEIPT_DATE_RE.fullmatch(fm.get("日期", "")):
+                problems.append(
+                    f"{relative}: 日期 should be YYYY-MM-DD, got {fm.get('日期') or 'missing'}"
+                )
+        # 新写入或本次触及的回执必须完整合规;存量且未触及的旧回执降级为
+        # warning——硬报错会让带旧回执的仓库在升级 lint 后无法提交任何
+        # 变更。整理走专项元数据补全提交(正文冻结不变),见下方冻结分支。
+        if relative in changed or relative not in head_names:
+            result.errors.extend(problems)
+        else:
+            result.warnings.extend(
+                f"{problem} (legacy receipt; normalize metadata in a dedicated commit)"
+                for problem in problems
+            )
+    for name in head_names:
+        if not name.endswith(".md"):
+            continue
+        if name not in texts and name in changed:
+            result.errors.append(
+                f"{name}: receipt was deleted or moved; restore it or record "
+                "the replacement run in a new receipt"
+            )
+        elif name in texts and name in changed:
+            old = git_head_text(root, Path(name))
+            if old is not None and old != texts[name]:
+                if decision_entry_body(old) == decision_entry_body(texts[name]):
+                    # 元数据补全:正文逐字节不变,只动 frontmatter——存量回执
+                    # 迁入契约的受控通道;正文一旦变化仍走硬错
+                    result.warnings.append(
+                        f"{name}: receipt frontmatter changed with run content "
+                        "unchanged (legacy contract adoption); verify only metadata moved"
+                    )
+                else:
+                    result.errors.append(
+                        f"{name}: receipt is frozen (write-once run record); "
+                        "record the new run in a new receipt"
+                    )
 
 
 def check_todo_entries(root: Path, result: Result) -> None:
@@ -1299,7 +1477,29 @@ def check_core_document_budget(root: Path, result: Result) -> None:
         f"over the registered limit {match.group(1)} {match.group(2)} = {limit} bytes"
     )
     if CORE_SPLIT_PLAN_RE.search(text):
-        result.warnings.append(f"{detail}; the registered 核心文档分片方案 covers the transition")
+        plan_line_match = re.search(r"^- 核心文档分片方案:.*$", text, re.MULTILINE)
+        deadline_match = (
+            CORE_SPLIT_DEADLINE_RE.search(plan_line_match.group(0))
+            if plan_line_match
+            else None
+        )
+        if deadline_match:
+            try:
+                deadline = date.fromisoformat(deadline_match.group(1))
+            except ValueError:
+                deadline = None
+            if deadline is not None and date.today() > deadline:
+                result.errors.append(
+                    f"{detail}; the registered 核心文档分片方案 deadline "
+                    f"{deadline_match.group(1)} has passed — reorganize now or register a new deadline"
+                )
+                return
+        suffix = (
+            f", deadline {deadline_match.group(1)}" if deadline_match else ""
+        )
+        result.warnings.append(
+            f"{detail}; the registered 核心文档分片方案 covers the transition{suffix}"
+        )
     else:
         result.errors.append(
             f"{detail}; reorganize the current-state layer or register a "
@@ -1502,6 +1702,27 @@ def check_revision_discipline(root: Path, result: Result, changed: set[str]) -> 
             break
 
 
+STYLE_SCAN_OFF_RE = re.compile(r"^- 写作风格扫描:\s*停用\s*$", re.MULTILINE)
+
+
+def writing_style_disabled(root: Path) -> bool:
+    """Per-repo opt-out for the writing-style scan, registered in CONVENTIONS.
+
+    The 2026-11 registry survey found three repositories that surgically
+    removed the style check from their local lint copy after the early
+    blocking-era rollout; without a supported switch, every framework refresh
+    would resurrect what the owner deliberately removed and push the repo to
+    fork the lint file (a third drift source). Only the exact value 停用
+    disables the scan; absence or any other value keeps it on, and every
+    other check is unaffected.
+    """
+    try:
+        text = (root / "CONVENTIONS.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(STYLE_SCAN_OFF_RE.search(text))
+
+
 def check_writing_style(root: Path, result: Result, changed: set[str]) -> None:
     # Dirty tree (pre-commit / staged): only flag files inside the pending change
     # (staged or unstaged edits, plus untracked new files) so historical warnings
@@ -1681,6 +1902,53 @@ def check_traceability(root: Path, result: Result) -> None:
     for cid, successor in sorted(superseded.items()):
         if cid not in result.decision_ids:
             result.errors.append(f"{store_label}: superseded decision {cid} does not exist")
+    # Merge machine-readable supersedes declarations into the same map: the
+    # field and prose channels coexist, and a cross-channel conflict is the
+    # same "two successors for one decision" defect the prose check already
+    # rejects. Dangling field targets were validated against the store in
+    # check_rationale_store.
+    for target, successors in sorted(result.supersedes_fields.items()):
+        for successor in successors:
+            existing = superseded.get(target)
+            if existing is not None and existing != successor:
+                result.errors.append(
+                    f"RATIONALE: decision {target} is superseded more than once "
+                    f"({existing}, {successor})"
+                )
+                continue
+            superseded[target] = successor
+    # Succession chains: a long replacement chain is the revision-churn smell
+    # the dogfooding audit surfaced (one decision rewritten repeatedly through
+    # short-lived successors). Warn at the chain root only.
+    values = set(superseded.values())
+    starts = [cid for cid in sorted(superseded) if cid not in values] or sorted(superseded)
+    visited: set[str] = set()
+    for start in starts:
+        if start in visited:
+            continue
+        chain = [start]
+        visited.add(start)
+        current = start
+        while True:
+            successor = superseded.get(current)
+            if successor is None:
+                break
+            if successor in visited and successor not in chain:
+                break
+            if successor in chain:
+                result.errors.append(
+                    f"{store_label}: supersession cycle involving {successor}"
+                )
+                break
+            chain.append(successor)
+            visited.add(successor)
+            current = successor
+        events = len(chain) - 1
+        if events >= SUPERSESSION_CHAIN_WARN:
+            result.warnings.append(
+                f"{store_label}: decision chain {' -> '.join(chain)} has {events} "
+                "successive replacements — high revision churn, consider a consolidation"
+            )
     result.superseded_decisions = superseded
 
     for rid in sorted(duplicate_ids(requirement_ids)):
@@ -2014,6 +2282,27 @@ def outgoing_push_lines(root: Path, input_text: str, result: Result) -> list[lis
     return lines
 
 
+def receipt_history_failure(root: Path, result: Result, parent: str, commit: str) -> str | None:
+    """Replay write-once semantics per outgoing commit: a receipt may only be
+    added. A later commit that modifies or removes it breaks the evidence
+    chain the same way editing a terminal task does."""
+    try:
+        statuses = run_git(
+            root,
+            ["diff", "--name-status", parent, commit, "--", RECEIPTS_DIR],
+            expected=(0,),
+        ).splitlines()
+    except GitCommandError as error:
+        git_data_error(result, "receipt history audit failed", error)
+        return None
+    for line in statuses:
+        parts = line.split("\t")
+        status = parts[0][:1]
+        if status in ("M", "D", "R"):
+            return f"receipt {parts[1]} was modified or removed ({status}) after being written"
+    return None
+
+
 def check_history_transition(root: Path, result: Result, parent: str, commit: str, check_additions: bool) -> None:
     old_store = ref_decision_store(root, parent)
     new_store = ref_decision_store(root, commit)
@@ -2038,6 +2327,10 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
         if is_commit_evidence_repair(root, old_text, new_tasks.get(path, "")):
             continue
         result.errors.append(f"{commit[:12]}: {path} changed after reaching a terminal state")
+
+    receipt_failure = receipt_history_failure(root, result, parent, commit)
+    if receipt_failure:
+        result.errors.append(f"{commit[:12]}: {receipt_failure}")
 
     if not check_additions:
         return
@@ -2353,7 +2646,7 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
             old = git_ref_text(root, merge_head, relative)
         if not name_match and not (LEGACY_TASK_NAME_RE.match(path.name) and old is not None):
             result.errors.append(
-                f"{task_label}: bad name, expect T-nnn-YYYYMMDD-slug.md"
+                f"{task_label}: bad name, expect T-nnn-slug.md"
             )
         elif (
             not name_match
@@ -2361,7 +2654,21 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
         ):
             result.errors.append(
                 f"{task_label}: legacy task name outlived the legacy 迁移截止 "
-                f"({result.legacy_cutoff.isoformat()}); rename to T-nnn-YYYYMMDD-slug.md"
+                f"({result.legacy_cutoff.isoformat()}); rename to T-nnn-slug.md"
+            )
+        elif (
+            name_match
+            and path.parent == tasks_dir
+            and old is None
+            and DATED_TASK_NAME_RE.match(path.name)
+        ):
+            # Untracked task still carrying the retired dated shape: dateless
+            # is canonical, tracked dated names are grandfathered, so only
+            # reject new (untracked) ones. Subdirectories (e.g. tasks/archive/)
+            # are exempt — moving an existing task must not force a rename.
+            result.errors.append(
+                f"{task_label}: bad name, new tasks must not embed a date; "
+                "expect T-nnn-slug.md (dated names stay valid for already tracked tasks)"
             )
         text = read_text_checked(path, result, f"{task_label}")
         if text is None:
@@ -2459,6 +2766,21 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                     if not re.search(rf"^-\s*{label}:\s*\S", evidence, re.MULTILINE):
                         result.errors.append(
                             f"{task_label}: completed task needs {label} evidence"
+                        )
+                if name_match and RECEIPT_DECLARE_RE.search(text):
+                    # 引用必须落到真实文件:幻影路径同样让实证验收闭环失效
+                    receipt_ref = re.search(
+                        rf"(receipts/{re.escape(name_match.group(1))}-\S+?\.md)", text
+                    )
+                    if receipt_ref is None:
+                        result.errors.append(
+                            f"{task_label}: 实证验收 task needs a "
+                            f"receipts/{name_match.group(1)}-<slug>.md run receipt"
+                        )
+                    elif not (root / receipt_ref.group(1)).is_file():
+                        result.errors.append(
+                            f"{task_label}: receipt reference {receipt_ref.group(1)} "
+                            "does not exist"
                         )
                 # hash 提取用 hex 字符类而非 \S+：全角括号紧跟 hash（「54f4309（说明）」）
                 # 会被 \S+ 整体吞掉再被 fullmatch 拒绝，误伤合法格式
@@ -2897,11 +3219,13 @@ def lint(root: Path, strict_tests: bool = False) -> Result:
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
     check_id_formats(root, result)
-    check_writing_style(root, result, changed)
+    if not writing_style_disabled(root):
+        check_writing_style(root, result, changed)
     check_revision_discipline(root, result, changed)
     check_traceability(root, result)
     check_core_document_budget(root, result)
     check_tasks(root, result, changed)
+    check_receipts(root, result, changed)
     check_test_anchors(root, result, strict_test_anchors(root, result, strict_tests))
     check_code_anchors(root, result, code_anchors_enabled(root, result))
     check_hooks(root, result)
@@ -3908,13 +4232,13 @@ def self_test() -> None:
         assert any("id should be T-001" in error for error in mismatched_task_id.errors)
         task.write_text(active_text, encoding="utf-8")
 
-        duplicate_task = root / "tasks/T-001-20260802-other.md"
+        duplicate_task = root / "tasks/T-001-other.md"
         duplicate_task.write_text(active_text.replace("# Search", "# Other"), encoding="utf-8")
         duplicate_task_id = lint(root, strict_tests=True)
         assert any("duplicate task id T-001" in error for error in duplicate_task_id.errors)
         duplicate_task.unlink()
 
-        skipped_task = root / "tasks/T-003-20260802-skipped.md"
+        skipped_task = root / "tasks/T-003-skipped.md"
         skipped_task.write_text(
             active_text.replace("id: T-001", "id: T-003").replace("# Search", "# Skipped"),
             encoding="utf-8",
@@ -3924,7 +4248,7 @@ def self_test() -> None:
         skipped_task.unlink()
 
         task.unlink()
-        reused_task = root / "tasks/T-001-20260802-reused.md"
+        reused_task = root / "tasks/T-001-reused.md"
         reused_task.write_text(active_text.replace("# Search", "# Reused"), encoding="utf-8")
         reused_task_id = lint(root, strict_tests=True)
         assert any("reused task id T-001" in error for error in reused_task_id.errors)
@@ -3937,8 +4261,22 @@ def self_test() -> None:
             encoding="utf-8",
         )
         invalid_legacy = lint(root, strict_tests=True)
-        assert any("expect T-nnn-YYYYMMDD-slug.md" in error for error in invalid_legacy.errors)
+        assert any("expect T-nnn-slug.md" in error for error in invalid_legacy.errors)
         new_legacy.unlink()
+
+        # 新 task 不得沿用带日期段命名；已跟踪的带日期名（如 fixture 的
+        # T-001-20260801-search.md）保持合法——该豁免由 self_test_risk_tiers
+        # 与外部 make_fixture 的 clean 断言共同回归。
+        new_dated = root / "tasks/T-002-20260801-dated.md"
+        new_dated.write_text(
+            active_text.replace("id: T-001", "id: T-002").replace("# Search", "# Dated"),
+            encoding="utf-8",
+        )
+        dated_new = lint(root, strict_tests=True)
+        assert any(
+            "new tasks must not embed a date" in error for error in dated_new.errors
+        ), dated_new.errors
+        new_dated.unlink()
 
         matrix_row = "| 异常 | 适用：搜索异常 | `tests/test_search.py::test_search` |\n"
         task.write_text(active_text.replace(matrix_row, ""), encoding="utf-8")
@@ -4155,7 +4493,7 @@ def doctor_creation_commit(root: Path, name: str) -> str | None:
     return hashes[-1] if hashes else None
 
 
-def doctor_appenditivity(root: Path, name: str) -> tuple[int, int, int] | None:
+def doctor_appenditivity(root: Path, name: str, window: int) -> tuple[int, int, int] | None:
     """(non-creation touching commits, added, deleted) over the last window.
 
     Excludes the creation commit because a document's birth commit is all
@@ -4163,7 +4501,7 @@ def doctor_appenditivity(root: Path, name: str) -> tuple[int, int, int] | None:
     for every freshly adopted repository. Binary rows ("-") count as zero.
     """
     creation = doctor_creation_commit(root, name)
-    out = run_git(root, ["log", "--numstat", "--format=%H", f"-{DOCTOR_WINDOW}", "--", name])
+    out = run_git(root, ["log", "--numstat", "--format=%H", f"-{window}", "--", name])
     commits = 0
     added = 0
     deleted = 0
@@ -4191,7 +4529,11 @@ def doctor_appenditivity(root: Path, name: str) -> tuple[int, int, int] | None:
     return commits, added, deleted
 
 
-def doctor_budget_outlook(root: Path, histories: dict[str, tuple[int, int, int] | None]) -> str:
+def doctor_budget_outlook(
+    root: Path,
+    histories: dict[str, tuple[int, int, int] | None],
+    window: int,
+) -> str:
     """A2: core-document budget usage plus a touchdown extrapolation.
 
     Line deltas from numstat are converted with each file's current average
@@ -4237,17 +4579,40 @@ def doctor_budget_outlook(root: Path, histories: dict[str, tuple[int, int, int] 
         if history_any:
             return f"{usage};近期净增持平或为负,无触顶风险"
         return f"{usage};提交历史不足,无增速外推"
-    per_commit = byte_delta / DOCTOR_WINDOW
+    per_commit = byte_delta / window
     eta = int((limit - total) / per_commit)
     return (
-        f"{usage};近 {DOCTOR_WINDOW} 次提交净增约 +{byte_delta:,.0f} 字节"
+        f"{usage};近 {window} 次提交净增约 +{byte_delta:,.0f} 字节"
         f"(≈{per_commit:,.0f} 字节/次),预计约 {eta} 次提交触顶"
     )
+
+
+DOCTOR_WINDOW_RE = re.compile(r"^- 文档体检窗口:\s*(\d+)\s*次?$", re.MULTILINE)
+
+
+def doctor_window(root: Path) -> int:
+    """A1/A2 lookback window, overridable per repository via CONVENTIONS.
+
+    The default window of 20 commits saturates in high-velocity repositories
+    (every core document reads "touched 20 times", drowning the ratio), so a
+    repo may register a wider observation window with
+    `- 文档体检窗口: <N>` in its CONVENTIONS.md user region.
+    """
+    try:
+        text = (root / "CONVENTIONS.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return DOCTOR_WINDOW
+    match = DOCTOR_WINDOW_RE.search(text)
+    if not match:
+        return DOCTOR_WINDOW
+    return max(1, int(match.group(1)))
 
 
 DOCTOR_DUPLICATE_THRESHOLD = 0.6
 DOCTOR_DUPLICATE_LIMIT = 5
 DOCTOR_MIN_UNIT_CHARS = 15
+AGENTMAP_BLOCK_BEGIN = "<!-- BEGIN AGENTMAP COMMIT CONVENTION -->"
+AGENTMAP_BLOCK_END = "<!-- END AGENTMAP COMMIT CONVENTION -->"
 
 
 def doctor_units(text: str, label: str) -> list[tuple[str, int, frozenset, str]]:
@@ -4303,6 +4668,31 @@ def _flush_doctor_buffer(
     return [(label, buffer[0][0], shingles, buffer[0][1])]
 
 
+def doctor_managed_lines(text: str) -> frozenset[int]:
+    """Line numbers inside an `AGENTMAP COMMIT CONVENTION` managed region.
+
+    The framework keeps that block canonical: repositories cannot reword it
+    (bootstrap overwrites the block on upgrade), so overlap between two lines
+    that both live inside managed regions is scaffold self-similarity, not
+    document decay. A3 therefore drops such pairs while keeping any pair with
+    at least one repo-owned side — real cross-document duplication (a PRD
+    restating a CONVENTIONS registration verbatim) still surfaces.
+    """
+    managed: set[int] = set()
+    inside = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if AGENTMAP_BLOCK_BEGIN in line or AGENTMAP_BLOCK_END in line:
+            # The marker lines themselves are framework text too: a bare
+            # marker's few shingles are easily subsumed by the adjacent
+            # managed block, which is exactly the self-noise pair.
+            inside = AGENTMAP_BLOCK_BEGIN in line
+            managed.add(number)
+            continue
+        if inside:
+            managed.add(number)
+    return frozenset(managed)
+
+
 def doctor_duplicate_candidates(root: Path) -> list[str]:
     """A3: strongest paragraph-overlap pairs across the living core documents.
 
@@ -4312,6 +4702,7 @@ def doctor_duplicate_candidates(root: Path) -> list[str]:
     numbers for a human to judge — this signal never gates.
     """
     units: list[tuple[str, int, frozenset, str]] = []
+    managed: dict[str, frozenset[int]] = {}
     for name in DOCTOR_LIVING_DOCS:
         path = root / name
         try:
@@ -4321,9 +4712,14 @@ def doctor_duplicate_candidates(root: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
         units.extend(doctor_units(text, name))
+        managed[name] = doctor_managed_lines(text)
     candidates: list[tuple[float, str, int, str, int, str]] = []
     for index, first in enumerate(units):
         for second in units[index + 1:]:
+            if managed.get(first[0]) and first[1] in managed[first[0]] and (
+                managed.get(second[0]) and second[1] in managed[second[0]]
+            ):
+                continue
             smaller = min(len(first[2]), len(second[2]))
             if not smaller:
                 continue
@@ -4472,6 +4868,45 @@ def doctor_staleness(root: Path) -> list[str]:
     return lines
 
 
+def doctor_task_staleness(root: Path) -> list[str]:
+    """A5 extension: active tasks untouched while the repository keeps moving.
+
+    The 2026-11 registry survey found active tasks weeks stale in docsim and
+    homelab while repository activity moved on — the backlog nobody looks at.
+    Terminal tasks are excluded on purpose: their files are frozen by the
+    immutability contract, so an old terminal task is the mechanism, not
+    decay. Repo-relative counting again, no wall clock involved.
+    """
+    lines: list[str] = []
+    tasks_dir = root / "tasks"
+    if not tasks_dir.is_dir():
+        return lines
+    stale: list[tuple[int, str, str]] = []
+    for path in tasks_dir.rglob("*.md"):
+        relative = path.relative_to(root).as_posix()
+        try:
+            if task_state(path.read_text(encoding="utf-8")) != "active":
+                continue
+        except (OSError, UnicodeDecodeError):
+            continue
+        touch = doctor_last_substantive_touch(root, relative)
+        if touch is None:
+            continue
+        hash_, date = touch
+        count = int(run_git(root, ["rev-list", "--count", f"{hash_}..HEAD"]).strip() or 0)
+        if count >= DOCTOR_STALENESS_COMMITS:
+            stale.append((count, relative, date))
+    stale.sort(key=lambda item: (-item[0], item[1]))
+    for count, relative, date in stale[:DOCTOR_DUPLICATE_LIMIT]:
+        lines.append(
+            f"[A5 积压] {relative}: active 任务最近实质修改 {date},此后仓库已有 {count} 次提交"
+            "——任务积压,建议核查是否已实质完成或应废弃"
+        )
+    if len(stale) > DOCTOR_DUPLICATE_LIMIT:
+        lines.append(f"(另有 {len(stale) - DOCTOR_DUPLICATE_LIMIT} 个积压 active 任务未列出)")
+    return lines
+
+
 def run_doctor(root: Path, out: IO[str]) -> int:
     """Document-quality checkup: measurable decay signals, report-only.
 
@@ -4488,9 +4923,10 @@ def run_doctor(root: Path, out: IO[str]) -> int:
         return 1
     print(f"agentmap doctor — {root}", file=out)
     print("核心文档体检(报告级信号,不参与门禁):", file=out)
+    window = doctor_window(root)
     histories: dict[str, tuple[int, int, int] | None] = {}
     for name in CORE_BUDGET_FILES:
-        histories[name] = doctor_appenditivity(root, name)
+        histories[name] = doctor_appenditivity(root, name, window)
     for name in CORE_BUDGET_FILES:
         history = histories[name]
         if history is None:
@@ -4501,16 +4937,18 @@ def run_doctor(root: Path, out: IO[str]) -> int:
         if added >= DOCTOR_APPENDITIVITY_MIN_ADDED and ratio >= DOCTOR_APPENDITIVITY_RATIO:
             marker = "—— 追加式增长,建议安排一次文档整理 task"
         print(
-            f"  [A1 只增不改] {name}: 近 {DOCTOR_WINDOW} 次内触及 {commits} 次"
+            f"  [A1 只增不改] {name}: 近 {window} 次内触及 {commits} 次"
             f" +{added}/-{deleted} 行{marker}",
             file=out,
         )
-    print(f"  [A2 预算] {doctor_budget_outlook(root, histories)}", file=out)
+    print(f"  [A2 预算] {doctor_budget_outlook(root, histories, window)}", file=out)
     for line in doctor_duplicate_candidates(root):
         print(f"  {line}", file=out)
     for line in doctor_stale_references(root):
         print(f"  {line}", file=out)
     for line in doctor_staleness(root):
+        print(f"  {line}", file=out)
+    for line in doctor_task_staleness(root):
         print(f"  {line}", file=out)
     return 0
 
