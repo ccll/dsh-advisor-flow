@@ -8,7 +8,7 @@ mutation: lifecycle
 # T-035 顾问子会话零工具契约执行面修复与会话 cwd 采集
 
 风险等级: standard
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -56,4 +56,9 @@ mutation: lifecycle
 
 ## 终态与证据
 
-（待关闭时填写）
+- 实现: 子会话执行面守卫 lib/subsession-guard.js（tools/pre-execute waterfall 第一级 deny-all，SUBSESSION_TOOL_DENIED 三点式 reason，fail-open 仅阳性否决）；接线 lib/index.js:240-247（守卫创建）/:373（status 合成）/:658-667（pre-execute 两级组合）；getCwd 修复 lib/index.js:107-130（getWorkspaceCwd 经 sessionQuery 读 header.cwd）与 lib/consultation.js（resolveWorkspaceCwd :592-604、callAdvisor :621 一次解析供 :632/:679 两点）；persona 附加段 lib/consultation.js:87（ADVISOR_NO_DELEGATION_ADDENDUM）与 :721（persona 模板串）；登记跳过留痕 lib/subsession.js:166-176（审核 F1）；status/commands 否决计数与渲染。
+- 测试: `node --test` 341/341 全绿（新增 test/subsession-guard.test.js 7 用例；index.test.js 接线级 3 用例含 deny-不计数 G1 断言与会话工作区 cwd 接线回归；consultation.test.js persona 附加段断言 + 工作区 cwd 现场用例；status/commands 快照键与渲染断言；pi-texts 冻结断言保持绿）。独立轻量审核（subagent 34d95a11，独立上下文）实测 340/340 后补 G1 断言至 341。
+- SOLUTION 对照: SOLUTION.md#咨询服务（persona 附加禁委派段 bullet）、#素材装配器（会话工作区 cwd bullet）、#门控服务（两级 waterfall + 守卫结构 bullet）、#配置与状态服务（快照键）、#运行时、并发与失败语义（子会话执行面守卫 bullet + 重入防护第三防线）、需求追溯索引 R-02-006/R-02-007 行；核对日期 2026-10-19 已核验；PRD 不动（NG-1/R-02-007 承诺既有）。
+- commit: 48e769b
+- review: 独立子代理 34d95a11-7973-4dee-be83-fca24dc1b914（独立上下文，先读 T-035/C-034 完成目的理解后对照代码核验六项重点），结论 blocking=0；non-blocking F1（登记静默跳过无留痕）/F2（注释常量名漂移）/F3（SOLUTION 重复行）均已修复，测试缺口 G1（deny 不进循环门计数）已补直接断言（同签名两次否决零咨询）；non-blocking 结论收口。
+- 风险自评补充: 残余风险六项（登记竞态窄窗口/AC-05 字面可见性/header.cwd 联调项/插件重载失忆/降级档回落/deny-all 粒度立场）均为宿主侧或产品立场约束，已记录于 RATIONALE C-034 与审核报告，不构成回归；真机 repository_changes 披露证据待东家下次会话实测留痕。
