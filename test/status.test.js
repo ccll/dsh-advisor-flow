@@ -123,4 +123,9 @@ test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（缺�
     const guarded = { ...review, toolFaceStats: () => ({ refused: 3, byCode: { SESSION_EXEMPT: 2, TOOL_FACE_CLOSED: 1 } }) };
     const guardedSnapshot = createStatusProvider({ config: { ...soft, mode: 'hard' }, engine: guarded }).snapshot();
     assert.deepEqual(guardedSnapshot.toolFaceStats, { refused: 3, byCode: { SESSION_EXEMPT: 2, TOOL_FACE_CLOSED: 1 } });
+    // R-02-007/AC-05（T-035；C-034）：子会话执行面否决计数随快照；访问器缺失时不可得。
+    assert.equal(provider.snapshot().subsessionGuardStats, undefined);
+    const denying = { ...review, subsessionGuardStats: () => ({ denied: 2, byTool: { subagent: 2 } }) };
+    const denyingSnapshot = createStatusProvider({ config: { ...soft, mode: 'hard' }, engine: denying }).snapshot();
+    assert.deepEqual(denyingSnapshot.subsessionGuardStats, { denied: 2, byTool: { subagent: 2 } });
 });

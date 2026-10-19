@@ -931,6 +931,58 @@ test('T-022 接线级递归守卫：收口评审生成的顾问子会话，其�
     assert.equal(subagents.startCalls, 2);
 });
 
+test('T-035 接线级执行面守卫：已登记顾问子会话的工具调用在 pre-execute 被否决（NG-1 能力面）', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n兜底直调意见。')]);
+    const subagents = fakeAdvisorSubagents();
+    const { ctx, subscriptions, provide } = makeCtx({ llm });
+    apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        mode: 'hard', // 硬模式：收口评审生效，发布顾问子会话进入登记表
+        gates: { loop: { enabled: true, threshold: 2 } },
+    });
+    provide('subagents', subagents);
+    const handler = subscriptions.find((s) => s.event === 'agent/turn-stopping').handler;
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'exec-1' } }); // 发布 → advisor-child-1 入登记表
+    await settle();
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    // 顾问子会话内委派（真机复现形状）：执行边界否决，短路在门引擎之前。
+    const denial = await preExecute({ token: 't1', callId: 'c1', name: 'subagent', arguments: {}, agent: { id: 'advisor-child-1' } }, () => ({ kind: 'allow' }));
+    assert.equal(denial.kind, 'deny');
+    assert.ok(denial.reason.includes('Tool execution is disabled'));
+    // 未登记会话照常走门引擎：同 exec 两次不拦（阈值 2 未达，门计数正常推进）。
+    const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'bash', arguments: { command: 'npm test' }, agent: { id: 'exec-1' } };
+    assert.equal((await preExecute(exec, () => ({ kind: 'allow' }))).kind, 'allow');
+    assert.equal((await preExecute(exec, () => ({ kind: 'allow' }))).kind, 'allow');
+    // 会话清理摘除登记后，同 id 的工具调用恢复门引擎路径（登记不泄漏）。
+    subscriptions.find((s) => s.event === 'session/disposed').handler({ id: 'advisor-child-1' });
+    const afterDispose = await preExecute({ token: 't2', callId: 'c2', name: 'subagent', arguments: {}, agent: { id: 'advisor-child-1' } });
+    assert.equal(afterDispose.kind, 'allow'); // 未登记 → 门引擎路径（未达阈值放行）
+});
+
+test('T-035 deny 短路不进循环门计数：同签名被否决调用零咨询（审核缺口 G1 回归）', async () => {
+    const llm = createFakeLlm([answer('Decision: proceed\n\n不应被调用的门评审。')]);
+    const subagents = fakeAdvisorSubagents();
+    const { ctx, subscriptions, provide } = makeCtx({ llm });
+    apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        mode: 'hard',
+        gates: { loop: { enabled: true, threshold: 2 } },
+    });
+    provide('subagents', subagents);
+    const handler = subscriptions.find((s) => s.event === 'agent/turn-stopping').handler;
+    await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'exec-1' } }); // 发布 → advisor-child-1 入登记表
+    await settle();
+    const preExecute = subscriptions.find((s) => s.event === 'tools/pre-execute').handler;
+    const exec = { token: 't1', callId: 'c1', rootCallId: 'r1', name: 'subagent', arguments: {}, agent: { id: 'advisor-child-1' } };
+    assert.equal((await preExecute(exec, () => ({ kind: 'allow' }))).kind, 'deny');
+    // 同签名第二次：守卫仍否决；若否决被错误计入循环门（阈值 2），此处将
+    // 触发门评审（llm.calls>=1）——零咨询即证明 deny 先于 recordCall 短路。
+    assert.equal((await preExecute(exec, () => ({ kind: 'allow' }))).kind, 'deny');
+    assert.equal(llm.calls.length, 0); // 否决不推进等价计数（审核 G1）
+});
+
 /** T-023 子会话日志夹具（共享单点：test/helpers.js::reviewerSubsessionEvents；实测形状）。 */
 function reviewSubsessionLog({ label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
     return reviewerSubsessionEvents({ label, prompt });
@@ -1017,4 +1069,37 @@ test('T-026 接线级守卫：硬模式工具面对一切会话关闭（含主�
     }
     assert.equal(llm.calls.length, 0); // 守卫拒绝：不发起咨询
     assert.deepEqual(services.status.snapshot().toolFaceStats, { refused: 2, byCode: { TOOL_FACE_CLOSED: 2 } });
+});
+
+test('T-035 接线级会话工作区 cwd：sessionQuery header.cwd 驱动仓库上下文采集（缺陷二回归）', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync('.idx-ws-');
+    try {
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        writeFileSync(join(dir, 'committed.js'), 'base\n');
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', 'committed.js'], { cwd: dir });
+        // 工作树弄脏：探针文件名须出现在仓库变更区——证明采集现场 = header.cwd。
+        writeFileSync(join(dir, 'probe-ws-marker.js'), 'drift');
+        const observeCalls = [];
+        const llm = createFakeLlm([answer('接线级意见。')]);
+        const { ctx } = makeCtx({ llm });
+        ctx.sessionQuery = {
+            observeSession: async (sessionId) => {
+                observeCalls.push(sessionId);
+                return { header: { cwd: dir }, events: [], [Symbol.dispose]() {} };
+            },
+        };
+        const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'soft' });
+        const allowed = await services.askAdvisor.execute({}, { agent: { id: 'main-1' } });
+        assert.equal(allowed.ok, true);
+        assert.ok(observeCalls.length >= 1 && observeCalls.every((id) => id === 'main-1')); // 钩子收到发起会话标识
+        const sent = llm.calls[0].options.messages[0].content[0].text;
+        assert.ok(sent.includes('<repository_changes'));
+        assert.ok(sent.includes('probe-ws-marker.js')); // header.cwd 现场的变更出境
+        assert.ok(!sent.includes('not-a-repository'));  // 不再误判为非仓库
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 });

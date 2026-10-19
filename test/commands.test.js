@@ -242,3 +242,12 @@ test('R-01-001/AC-09、R-01-009/AC-13 status 呈现工具面拒绝计数与 hard
     const softStatus = advisorStatusText({ ...snapshot, mode: 'soft', toolFaceStats: { refused: 1, byCode: { SESSION_EXEMPT: 1 } } });
     assert.doesNotMatch(softStatus, /守则: 停用/);
 });
+
+test('R-02-007/AC-05 status 呈现子会话工具否决计数（T-035；C-034）', () => {
+    const { controller } = makeController({ raw: { advisor: { provider: 'p', model: 'm' }, mode: 'hard' } });
+    const snapshot = controller.snapshotFor('s1');
+    // 否决计数：有访问器时呈现，无访问器时不呈现（非零值虚构禁令同口径）。
+    const deniedText = advisorStatusText({ ...snapshot, subsessionGuardStats: { denied: 2, byTool: { subagent: 2 } } });
+    assert.match(deniedText, /子会话工具否决: 2 次/);
+    assert.doesNotMatch(advisorStatusText(snapshot), /子会话工具否决/);
+});

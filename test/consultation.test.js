@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveAdvisorFlowConfig } from '../lib/config.js';
-import { createConsultationEngine, parseAdvice, ADVISOR_SYSTEM_PROMPT, ADVISOR_DECISION_SYSTEM } from '../lib/consultation.js';
+import { createConsultationEngine, parseAdvice, ADVISOR_SYSTEM_PROMPT, ADVISOR_DECISION_SYSTEM, ADVISOR_NO_DELEGATION_ADDENDUM } from '../lib/consultation.js';
 import { createUsageLedger } from '../lib/usage.js';
 import { createFakeLlm, answer, failure, hung, createManualTimers, pump } from './helpers.js';
 
@@ -367,7 +367,7 @@ test('R-02-004 咨询素材经隐私裁剪与脱敏后发送（引擎集成，R-
         getSessionEvents: () => [
             { type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'token: supersecret123' }] } } },
         ],
-        getCwd: () => process.cwd(),
+        getWorkspaceCwd: async () => process.cwd(),
         logger: quietLogger,
     });
     await engine.consult({
@@ -572,7 +572,7 @@ test('R-02-004/AC-05 获授权附件归属校验：符号链接与越界路径�
         const engine = createConsultationEngine({
             llm,
             config: resolvedConfig({ privacy: { trackedFileContent: true } }),
-            getCwd: () => dir,
+            getWorkspaceCwd: async () => dir,
             logger: quietLogger,
         });
         await engine.consult({ entry: 'tool', question: '初评' });
@@ -633,7 +633,7 @@ test('R-02-004/AC-05 附件预算与内容防线：submodule 160000 拒、\0 拒
         const engine = createConsultationEngine({
             llm,
             config: resolvedConfig({ privacy: { trackedFileContent: true, redactSecrets: true } }),
-            getCwd: () => dir,
+            getWorkspaceCwd: async () => dir,
             logger: quietLogger,
         });
         await engine.consult({ entry: 'tool', question: '初评' });
@@ -705,7 +705,8 @@ test('R-02-007/AC-02 presentation=subagent 时咨询经呈现缝发起：结算�
     assert.equal(presentations[0].entry, 'tool');
     assert.equal(presentations[0].parent.id, 'p1'); // 父会话 Agent 透传
     assert.ok(presentations[0].promptText.includes('这个方案稳吗？')); // 装配产物出境（R-02-006 契约不变）
-    assert.equal(presentations[0].persona, ADVISOR_SYSTEM_PROMPT); // 协议提示经 persona
+    // 协议提示经 persona，且 T-035 禁委派附加段一律附加（ADVISOR_SYSTEM_PROMPT 原文不动）。
+    assert.equal(presentations[0].persona, `${ADVISOR_SYSTEM_PROMPT} ${ADVISOR_NO_DELEGATION_ADDENDUM}`);
     assert.equal(presentations[0].agentOptions.provider, 'test');
     assert.equal(presentations[0].agentOptions.model, 'test-model');
     assert.ok(presentations[0].signal instanceof AbortSignal);
@@ -723,7 +724,55 @@ test('R-02-007/AC-02 presentation=subagent 时咨询经呈现缝发起：结算�
     const gateResult = await gateEngine.consult({ entry: 'gate', question: 'gq' });
     assert.equal(gateResult.ok, true);
     assert.equal(gateResult.decision, 'proceed');
-    assert.equal(gatePresentations[0].persona, ADVISOR_DECISION_SYSTEM);
+    // T-035（C-034）：gate 入口 persona 同样附加禁委派段（Decision 协议不豁免）。
+    assert.equal(gatePresentations[0].persona, `${ADVISOR_DECISION_SYSTEM} ${ADVISOR_NO_DELEGATION_ADDENDUM}`);
+});
+
+test('R-02-006 会话工作区 cwd（T-035）：getWorkspaceCwd 供给发起会话的工作区，仓库变更区落在该现场', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync('.tmp-workspace-');
+    try {
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        writeFileSync(join(dir, 'committed.js'), 'base\n');
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', 'committed.js'], { cwd: dir });
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'], { cwd: dir });
+        // 工作树弄脏：探针文件名必须出现在仓库变更区——证明采集现场是会话
+        // 工作区而非宿主进程 cwd（旧缺陷二下此文件不可见）。
+        writeFileSync(join(dir, 'probe-cwd-marker.js'), 'drift');
+        const seen = [];
+        const llm = createFakeLlm([answer('意见。')]);
+        const engine = createConsultationEngine({
+            llm,
+            config: resolvedConfig(),
+            getWorkspaceCwd: async (sessionId) => { seen.push(sessionId); return dir; },
+            logger: quietLogger,
+        });
+        await engine.consult({ entry: 'tool', question: 'q' });
+        const sent = llm.calls[0].options.messages[0].content[0].text;
+        assert.ok(sent.includes('<repository_changes'));
+        assert.ok(sent.includes('probe-cwd-marker.js')); // 会话工作区的变更出境
+        assert.ok(!sent.includes('not-a-repository'));   // 不再误判为非仓库
+        assert.deepEqual(seen, ['default']); // 钩子收到发起会话标识（sessionOf 兜底 'default'）
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('R-02-006 工作区 cwd 解析失败不阻断咨询：钩子抛错/缺失回落宿主进程 cwd（T-035 fail-open）', async () => {
+    const llm = createFakeLlm([answer('意见。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ privacy: { repoContext: 'off' } }),
+        getWorkspaceCwd: async () => { throw new Error('sessionQuery down'); },
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q' });
+    assert.equal(result.ok, true); // 红线：cwd 失败不阻断咨询
+    const sent = llm.calls[0].options.messages[0].content[0].text;
+    assert.ok(sent.includes('<repository_changes')); // 关闭档位注记照常出境
+    assert.ok(sent.includes('Do not assume the working tree is clean'));
 });
 
 test('R-02-007/AC-02 presentation=direct 时保持 llm.stream 直调：呈现缝不得被调用', async () => {

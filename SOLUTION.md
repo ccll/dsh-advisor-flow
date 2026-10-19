@@ -1,7 +1,7 @@
 ---
 doc-type: solution
 mutation: living
-核对日期: 2026-10-15
+核对日期: 2026-10-19
 owner: agent 主笔，项目属主审批
 ---
 
@@ -414,8 +414,8 @@ flowchart TD
 | R-02-003 | 配置与状态服务 | SOLUTION.md#配置与状态服务 | lib/status.js |
 | R-02-004 | 咨询服务 | SOLUTION.md#数据流与信任边界图 | lib/redact.js；lib/materials.js；lib/consultation.js（collectFileEntries） |
 | R-02-005 | 咨询服务 | SOLUTION.md#运行时、并发与失败语义 | lib/consultation.js；lib/gates/index.js |
-| R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js |
-| R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js |
+| R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js；lib/consultation.js（collectFileEntries、resolveWorkspaceCwd） |
+| R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js；lib/subsession-guard.js |
 | R-01-009 | 门控服务 | SOLUTION.md#门控服务 | lib/turn-review.js；lib/reviewer-classifier.js；lib/consultation.js；lib/delivery.js |
 
 ## 子系统与模块
@@ -428,6 +428,7 @@ flowchart TD
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
   - 子会话呈现缝（R-02-007）：呈现提供方经已注册名单解析（`subagents.list()`），无可用提供方即发布前失败——按降级语义走 llm.stream；`start()` 发布成功后的 run 失败一律映射诊断码，不得降级重发（AC-04）。
+  - 子会话 persona 附加禁委派段（T-035；C-034）：`ADVISOR_NO_DELEGATION_ADDENDUM` 独立常量附加于两类协议 persona 之尾（`ADVISOR_SYSTEM_PROMPT`/`ADVISOR_DECISION_SYSTEM` 为 pi 0.8.2 逐字冻结，本体不动）；指令面禁止委派，能力面由子会话执行面守卫兜底（双层防御）；直调形态无工具面，不附加。
   - `resolveModelInfo` 能力门控 effort：仅模型声明时发送（记适配：pi 无条件发送）。
   - `maxTokens`（缺省跟随宿主模型配置：resolveModelInfo.defaultMaxTokens，未声明省略参数；显式配置覆盖）与 `callTimeoutMs`（默认 600000，C-015）可配置；deadline 融合 dispose 信号，race 每 chunk。
   - 失败无重试：咨询失败（provider 错误/空回复/缺决策行/矛盾决策行/预算耗尽）直接上抛为门失败类别，按阻断模式处置。
@@ -443,6 +444,7 @@ flowchart TD
   - 消息布局与不可信注记、转义规则逐字对齐 pi `advisorMessageText`；空消息兜底一致。
   - tracked 移交验证：所列路径必须全部被顾问最近意见点名（词边界匹配），认领一次性消费 `lastAdvice`。
   - 会话脉络来源双轨：主轨 dsh-session-query（装配时查询当前会话条目）；备轨事件增量缓冲（observer 维护，压缩/重写重置）。
+  - 会话工作区 cwd（T-035；R-02-006）：仓库上下文采集与 tracked 附件归属校验以发起会话的工作区为根——`getWorkspaceCwd` 钩子经 sessionQuery 读会话 header.cwd（宿主进程 cwd 非会话现场，曾致 `not-a-repository` 恒注记）；钩子缺失/读取失败回落宿主进程 cwd 并 warn 留痕，不阻断咨询。
   - 会话脉络词汇识别：非表面事件跳过集以宿主运行时词汇表为权威——动态导入宿主已知事件词汇推导（宿主根包导出 `KNOWN_SESSION_EVENT_TYPES`；部署前提：项目 node_modules 以符号链接指向宿主树同包），导入失败回落兜底集（实弹观测伴生全集 + 实证炸点类型）；fail-closed 仅对宿主词汇也不认识的非 ignorable 事件生效。
 - 代码位置: lib/materials.js；lib/conversation-source.js；lib/git-context.js；lib/consultation.js（collectFileEntries）
 - 实现: 单端（宿主）
@@ -460,15 +462,16 @@ flowchart TD
 - 实现: 单端（宿主）
 
 ### 门控服务
-- 职责: 注册 `tools/pre-execute` waterfall 监听，对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）；接线无条件注册 `agent/turn-stopping` 收口评审监听，处置器按活配置判定（软模式短路，承接 R-01-009）
+- 职责: 注册 `tools/pre-execute` waterfall 监听——第一级为子会话执行面守卫（T-035，C-034），第二级对等价签名**连续**重复前置拦截、预通告、同步咨询（全量素材）、解析 `Decision` 三值决策并按阻断模式处置（承接 R-01-005）；接线无条件注册 `agent/turn-stopping` 收口评审监听，处置器按活配置判定（软模式短路，承接 R-01-009）
 - 关键内部结构:
   - 连续签名计数：本次签名 ≠ 上一次签名时计数归 1（pi 语义）；波动归一（timestamp/date/datetime→占位、correlationId/requestId/traceId→占位、临时路径归一、bash 命令空白归一）；`ask_advisor` 豁免。
+  - **子会话执行面守卫（T-035；C-034）**：waterfall 第一级——命中顾问子会话呈现登记表的调用，其一切工具调用（deny-all）在循环门计数之前被否决（`SUBSESSION_TOOL_DENIED`，否决契约 `{kind:'deny', reason}`）；判定失败 fail-open 放行，仅阳性判定否决（纪律对齐 C-025）；否决计数入状态快照。
   - 载体契约（dsh-tools 0.1.5-rc.2）：工具名 `exec.name`、参数 `exec.arguments`、会话 `exec.agent.id`。
   - 决策处置矩阵：proceed → steer 送达门结果 + 重置计数 + 放行；revise → steer 送达 + deny(意见全文)；blocked → 按阻断模式处置（warn-and-continue 放行 / block-tool 拦截 / block-session 会话封锁；blockOnBlocked 控制 stopSession）。
   - 门命中先发预通告（`Automatic Advisor loop review`）再咨询；门问句不携带当次参数；咨询失败按阻断模式处置；决策行解析含对抗性检查。
   - 门组件异常 fail-open（放行 + 记录）。
   - **收口评审（turn review，C-021）**：`mode=hard` 且启用时在回合收口前同步发起一次评审咨询（entry `turn-review`，Decision 协议）；评审对象是执行者回合与执行类子会话收口——顾问子会话豁免（命中呈现登记即跳过并留痕）与审核类子会话豁免（子会话自证且关键词命中即跳过并留痕，判定失败 fail-open，C-023），判定由共享审核类子会话分类器承载（与咨询工具面守卫共用同一实例与清单，C-025）；同回合同一收口事件至多一次（已评审标记放行后续派发，防评审—续跑循环）；裁决分流——proceed 放行收口（意见全文仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口（非阻断）；`failureMode` 不适用于收口缝；用量入台账、意见不入账本（与 gate 意见同口径）；载体契约 `{turn, signal, agent}`。
-- 代码位置: lib/gates/index.js；lib/turn-review.js；lib/reviewer-classifier.js
+- 代码位置: lib/gates/index.js；lib/turn-review.js；lib/reviewer-classifier.js；lib/subsession-guard.js
 - 实现: 单端（宿主）
 
 ### 执行者守则
@@ -509,7 +512,7 @@ flowchart TD
   - turnReviewExemptPatterns 兼作咨询工具面守卫的判定清单（C-025）：审核类子会话豁免与工具面守卫共用同一关键词语义，不新增键。
   - SettingsForms 适配（C-026）：插件模块导出 schemastery `Config`（宿主经 `entry.fiber.runtime.Config` 发现，describe/update 由此驱动）；schema 成员一律宽松 `z.any().volatile()`——volatile 承担编辑面判定，零校验零默认填充，校验单点仍在解析器；entry config 的 volatile cell 统一经 `unwrapVolatileConfig` 解包（cell 非透传 proxy，读值必须 `.get()`）；宿主热更新经 `loader/volatile-update` 事件桥接 live re-apply，读时求值点始终兜底且仅在 source 原文变化时应用（运行时写入不回退）。
   - 持久写缝：卡片保存走宿主客户端管线——一次 `settings.mutate(ns, ops)`（宿主 configForms 通道）；插件服务端写缝 `settings.update(ns, patch)`（SettingsForms volatile 写缝，落 profile patch 行配置）保留给 gateway/API 面；补丁按 schema 顶层声明键投影——宿主 validatePaths 拒绝 schema 外顶层键，未知键留在文档层（junk 保留语义不破坏）。
-  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数。
+  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数、子会话执行面否决计数。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）
 
@@ -588,9 +591,15 @@ flowchart TD
   - 判定前先应用文件配置（与包装引擎同一读时求值原语）——盘上 mode 切换后的首次调用按新档位判定。
   - 拒绝 reason 明示属预期、勿重试与替代路径；拒绝计数 info 留痕并入 `/advisor status`。
   - 硬模式下工具面关闭且收口评审是唯一自动 advisor 入口；拒绝审核类子会话自咨询，避免元评审与第二递归向量。
+- **子会话执行面守卫**（T-035；C-034）：
+  - 缺陷事实：宿主把委派工具（`subagent`、`list_subagent_models`）注册进被 spawn 子会话的 own 工具层——dsh-tools 语义「restriction 只过滤继承面（全局层与祖先层），own 层注册恒可见」，`toolFilter={allow:[]}` 剥不掉；真机实证（mailai-models 2026-10-19）顾问子会话据此把核验任务委派给持全量工具的子代理执行，NG-1/R-02-007/AC-05 被击穿。
+  - 插件侧防御双层：指令面——persona 附加禁委派段（禁止调用 subagent/list_subagent_models）；能力面——`tools/pre-execute` 第一级否决（对已登记顾问子会话内的一切工具调用 deny，与循环门同一 waterfall）。
+  - own 层工具的「出现」仍不可剥（宿主侧语义，东家裁定宿主不修）：AC-05 字面缺口残余，记 C-034；执行面否决使「可执行」归零，NG-1 的实质（不执行任何工具、不修改任何文件）恢复。
+  - scope 纪律：只认本插件呈现登记表；外来审核类子会话合法持有工具，不在此守卫管辖（误伤代价不可接受）。
+  - 否决 reason 三点式（禁令与理由/属预期勿重试/替代路径=以素材作答），计数按工具名累计入 `/advisor status`。
 - **abort 极性**：门咨询遇 caller 中止时按阻断模式处置（warn-and-continue 下放行）；pi 同场景为拦截，该偏离是否对齐待东家裁决。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
 - **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。
-- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）；工具面守卫对顾问子会话与审核类子会话拒绝工具咨询（第二递归向量不依赖 toolFilter 单点）。
+- **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）；工具面守卫对顾问子会话与审核类子会话拒绝工具咨询（第二递归向量不依赖 toolFilter 单点）；子会话执行面守卫在执行边界否决已登记顾问子会话内的一切工具调用（T-035——toolFilter 剥不掉的 own 层委派工具在执行边界被拦，第三防线）。
 - **会话封锁**：block-session 模式下 blocked 决策使会话进入封锁态——`blockOnBlocked`（默认 true）时宿主 `agents.cancel` 尽力停止当前执行，且后续所有工具调用一律拦截（拒绝原因 = 封锁原因），直至会话重建。
 - **恢复**：无独立暂停/停机态；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。
