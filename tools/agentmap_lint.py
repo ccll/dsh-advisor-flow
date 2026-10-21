@@ -2786,54 +2786,34 @@ def parse_commit_log_z(text: str) -> dict[str, tuple[str, list[str]]]:
     return commits
 
 
-def tasks_added_before_upgrade(root: Path, result: Result, upgrade_sha: str) -> set[str]:
-    """T-IDs whose task file was first committed before the v4 upgrade commit.
+def tasks_present_at_upgrade(root: Path, result: Result, upgrade_sha: str) -> set[str]:
+    """T-IDs whose task file exists in the v4 upgrade commit's tree.
 
-    存量 task 不迁移：升级前创建的 task 继续按登记时的 v3 语义校验，
-    升级不追溯；升级提交当刻或之后新建的 task 才按 v4 强制。升级提交
-    分支不可达的判定（returncode 非 0/1）视为仓库异常，fail-closed 报错。
+    存量 task 不迁移：升级提交 tree 里存在的 task 按登记时的 v3 语义
+    校验，升级不追溯；升级提交当刻或之后新建的 task 才按 v4 强制。
+
+    以 tree 内容而非提交历史判定，是因为「最早出现提交」会把 T-ID 复用
+    误伤成存量：task 文件删除后重建（历史残留提交仍在），或重建期间
+    文件处于未跟踪态，都会被旧历史判成升级前出生。tree 判定下重建文件
+    天然非 legacy；rename 而来的 task（历史 T-ID 化改名批次）与 merge
+    解冲突时凭空进入主线的 task，都以升级当刻的现名出现在 tree 里，
+    同样覆盖。
+
+    fallback（升级提交未入 git 史时以 HEAD 代之）语义不变：HEAD tree
+    里的已提交 task 全部按存量放行，未提交的新 task 仍按 v4 校验。
     """
     try:
-        # name-only 全量触碰记录（限定 tasks/ 路径）：不用 --diff-filter=A，
-        # 因为 rename 而来的 task 文件（历史 T-ID 化改名）没有 A 记录——
-        # name-only 对 rename 显示新路径，rename 检测关闭时显示 A 新路径，
-        # 两种形态都能定位「该 T-ID 身份的最早出现提交」；first_add 保留
-        # 最早一条（log 自新到旧，not in 保留首见）。merge 提交默认不产
-        # diff，解冲突时凭空进入主线的 task 文件（--diff-filter=A、
-        # --follow、parent 侧均查不到）靠 --diff-merges=first-parent 露出；
-        # parent 分支正常引入的文件由普通提交覆盖，不重复计数。
-        text = run_git(
-            root,
-            ["log", "--diff-merges=first-parent", "--format=%H%x00%B%x00",
-             "--name-only", "-z", "--", "tasks/"],
+        listing = run_git(
+            root, ["ls-tree", "-r", "--name-only", upgrade_sha, "--", "tasks/"]
         )
     except GitCommandError as error:
-        git_data_error(result, "task history lookup failed", error)
+        git_data_error(result, "task tree lookup failed", error)
         return set()
-    first_add: dict[str, str] = {}
-    for sha, (_body, files) in parse_commit_log_z(text).items():
-        for name in files:
-            match = re.match(r"tasks/(T-\d{3})-", name)
-            if match and match.group(1) not in first_add:
-                first_add[match.group(1)] = sha
     legacy: set[str] = set()
-    for task_id, sha in first_add.items():
-        completed = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", sha, upgrade_sha],
-            cwd=root, capture_output=True, check=False,
-        )
-        # 祖先判定含相等：升级提交自身携带的 task（安装/升级时 scaffold
-        # 自带示例）属存量，按 v3 语义放行；同提交新建 task 逃避 v4 的
-        # 损失面远小于 fresh install 首跑即红的误伤面。
-        if completed.returncode == 0:
-            legacy.add(task_id)
-        elif completed.returncode != 1:
-            git_data_error(
-                result,
-                "task history lookup failed",
-                str(completed.stderr),
-            )
-            return set()
+    for path in listing.splitlines():
+        match = re.match(r"tasks/(T-\d{3})-", path)
+        if match:
+            legacy.add(match.group(1))
     return legacy
 
 
@@ -4006,19 +3986,13 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
     # v4 升级边界：规范版本行首次登记为 4 的提交。升级前已存在的 task
     # （文件首次提交早于该提交且为其祖先）按 v3 语义校验，升级不追溯。
     if result.spec_version >= 4:
-        upgrade_commits = run_git(
-            root,
-            ["log", "--format=%H", "-S", "agentmap 规范版本: 4", "--", "CONVENTIONS.md"],
-        ).split()
-        if upgrade_commits:
-            result.legacy_tasks = tasks_added_before_upgrade(
-                root, result, upgrade_commits[0]
-            )
-        else:
-            # 升级刚落盘尚未提交（bootstrap 对齐版本后立即 lint 的窗口）：
-            # v4 生效点视为下一个提交，所有已提交 task 均先于它，按 v3 语义；
-            # 未提交的新 task 仍按 v4 强制。
-            result.legacy_tasks = tasks_added_before_upgrade(root, result, "HEAD")
+        # 升级刚落盘尚未提交（bootstrap 对齐版本后立即 lint 的窗口）时
+        # v4_effective_commit 返回 None：v4 生效点视为下一个提交，HEAD
+        # tree 里的已提交 task 均按存量放行，未提交的新 task 仍按 v4 强制。
+        upgrade_commit = v4_effective_commit(root, result)
+        result.legacy_tasks = tasks_present_at_upgrade(
+            root, result, upgrade_commit or "HEAD"
+        )
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
     check_id_formats(root, result)
