@@ -301,7 +301,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "76159d1ac615e319c851079960568e036c5e09ce00b45c1ff9cfb2a916b814a8",
+    "AGENTS.md": "13876f16031b0e6d7d49d88836068b4597935c0d6485a2bd0bf3094ecddadfca",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
@@ -356,6 +356,12 @@ class Result:
     risk_counts: dict[str, int] = field(default_factory=dict)
     legacy_cutoff: date | None = None
     spec_version: int = 0
+    # v4 升级边界（升级提交前首次出现的 task），lint() 早期算一次共享。
+    legacy_tasks: set[str] = field(default_factory=set)
+    # 运行上下文：--staged/--pre-push 场景下累计审计触发的阻断语义
+    # 收窄（见 check_v4_tiering），由 lint() 主流程设置。
+    staged: bool = False
+    pre_push: bool = False
 
 
 def normalize_text(text: str) -> str:
@@ -2445,7 +2451,7 @@ def code_review_start(root: Path, result: Result) -> int | None:
 
 
 def agentmap_spec_version(root: Path, result: Result) -> int:
-    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化。
+    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档。
 
     Result.spec_version 记录首读结果作为缓存，lint() 在 check_system_files
     之前调用一次，后续调用方直接命中缓存。
@@ -2466,18 +2472,763 @@ def agentmap_spec_version(root: Path, result: Result) -> int:
     if match is None:
         result.warnings.append(
             "CONVENTIONS.md: missing agentmap 规范版本, linting with v1 rules; "
-            "bootstrap upgrade registers 规范版本: 3"
+            "bootstrap upgrade registers 规范版本: 4"
         )
         return 1
     version = int(match.group(1))
-    if version not in (1, 2, 3):
-        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1, 2 or 3")
+    if version not in (1, 2, 3, 4):
+        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3 or 4")
         return 1
     result.spec_version = version
     return version
 
 
 REVIEW_EVIDENCE_LABELS = ("审核方", "目的理解", "执行方式", "问题与修复", "复审结论")
+
+V4_REVIEW_LINE_RE = re.compile(
+    r"^-[ \t]*review:[ \t]*([^｜\n]+)｜([^｜\n]+)｜(\S.*)$"
+)
+
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+# 行注释前缀按扩展名；未知扩展名不剥离（一切计量误差偏向高估：不剥即多计）。
+COMMENT_LINE_PREFIXES = {
+    ".py": ("#",), ".pyi": ("#",), ".pyw": ("#",),
+    ".sh": ("#",), ".bash": ("#",), ".zsh": ("#",),
+    ".yaml": ("#",), ".yml": ("#",), ".toml": ("#",),
+    ".ini": ("#",), ".cfg": ("#",), ".conf": ("#",),
+    ".rb": ("#",), ".r": ("#",), ".pl": ("#",), ".pm": ("#",),
+    ".dockerfile": ("#",),
+    ".js": ("//",), ".jsx": ("//",), ".mjs": ("//",), ".cjs": ("//",),
+    ".ts": ("//",), ".tsx": ("//",),
+    ".c": ("//",), ".h": ("//",), ".cc": ("//",), ".cpp": ("//",), ".hpp": ("//",),
+    ".java": ("//",), ".cs": ("//",), ".go": ("//",), ".rs": ("//",),
+    ".swift": ("//",), ".kt": ("//",), ".kts": ("//",), ".scala": ("//",),
+    ".php": ("//",), ".dart": ("//",), ".zig": ("//",), ".proto": ("//",),
+    ".sql": ("--",), ".lua": ("--",), ".hs": ("--",),
+    ".erl": ("%",), ".hrl": ("%",),
+    ".el": (";",), ".lisp": (";",), ".cl": (";",), ".clj": (";",),
+    ".sbt": ("//",), ".properties": ("#",), ".env": ("#",),
+}
+
+# 块注释对按扩展名；仅当整行 strip 后以 open 序列开头才进入块状态，
+# 行内块注释不识别（该行按代码计，误差偏高）。
+COMMENT_BLOCK_PAIRS = {
+    ".c": (("/*", "*/"),), ".h": (("/*", "*/"),), ".cc": (("/*", "*/"),),
+    ".cpp": (("/*", "*/"),), ".hpp": (("/*", "*/"),),
+    ".java": (("/*", "*/"),), ".cs": (("/*", "*/"),),
+    ".js": (("/*", "*/"),), ".jsx": (("/*", "*/"),), ".mjs": (("/*", "*/"),),
+    ".cjs": (("/*", "*/"),), ".ts": (("/*", "*/"),), ".tsx": (("/*", "*/"),),
+    ".go": (("/*", "*/"),), ".rs": (("/*", "*/"),),
+    ".swift": (("/*", "*/"),), ".kt": (("/*", "*/"),), ".kts": (("/*", "*/"),),
+    ".scala": (("/*", "*/"),), ".php": (("/*", "*/"),), ".dart": (("/*", "*/"),),
+    ".css": (("/*", "*/"),), ".scss": (("/*", "*/"),), ".less": (("/*", "*/"),),
+    ".proto": (("/*", "*/"),), ".sass": (("/*", "*/"),),
+    ".html": (("<!--", "-->"),), ".htm": (("<!--", "-->"),),
+    ".xml": (("<!--", "-->"),), ".md": (("<!--", "-->"),),
+    ".vue": (("<!--", "-->"),), ".svelte": (("<!--", "-->"),),
+}
+
+
+def _strip_semantic(lines: list[str], suffix: str) -> int:
+    """Count diff payload lines that are neither blank nor comment.
+
+    Docstrings stay counted by design; unknown suffixes count every line
+    (measurement error must lean toward over-counting, never under).
+    """
+    prefixes = COMMENT_LINE_PREFIXES.get(suffix, ())
+    pairs = COMMENT_BLOCK_PAIRS.get(suffix, ())
+    kept = 0
+    closer: str | None = None
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if closer is not None:
+            if closer in line:
+                rest = line.split(closer, 1)[1].strip()
+                closer = None
+                if rest and not rest.startswith(prefixes):
+                    kept += 1
+            continue
+        opened = None
+        for pair in pairs:
+            if line.startswith(pair[0]):
+                opened = pair
+                break
+        if opened is not None:
+            if opened[1] not in line[len(opened[0]):]:
+                closer = opened[1]
+            continue
+        if prefixes and line.startswith(prefixes):
+            continue
+        kept += 1
+    return kept
+
+
+def _excluded_path(path: str, globs: list[str]) -> bool:
+    for pattern in globs:
+        if pattern.endswith("/"):
+            if path.startswith(pattern) or path.startswith(pattern.rstrip("/") + "/"):
+                return True
+        elif fnmatchcase(path, pattern) or fnmatchcase(path.rsplit("/", 1)[-1], pattern):
+            return True
+    return False
+
+
+# agentmap 系统托管文件：bootstrap 写盘维护的文件。它们的改动是系统
+# 升级而非业务评审负担，不计入语义行计量——否则每次升级提交自己
+# 就把累计审计窗口顶过阈值（docsim 首跑 732 行误报）。
+SYSTEM_MANAGED_PATHS = (
+    "AGENTS.md",
+    "CONVENTIONS.md",
+    "tools/agentmap_lint.py",
+    "tools/agentmap_validate_commit_msg.py",
+)
+
+
+def _is_system_managed(path: str) -> bool:
+    if path.startswith(".githooks/"):
+        return True
+    return path in SYSTEM_MANAGED_PATHS
+
+
+def parse_semantic_diff(
+    diff_text: str, exclude_globs: list[str], split_commits: bool = False
+) -> tuple[int, set[str], list[int]]:
+    """Parse `git diff -M -U0` (or `git log -p -M -U0`) into semantic line counts.
+
+    Returns (total, touched files, per-commit totals). With split_commits the
+    input carries `commit <sha>` section headers from `git log -p`; each
+    section's semantic total is appended separately so the cumulative window
+    counts every commit's own diff. Rename-only entries produce no +/- lines
+    and therefore contribute 0, which is the intended rename forgiveness.
+    Unparsable `diff --git` lines drop that file's section (over-count lean
+    is violated only by ignoring content we cannot locate, which is rarer
+    than misattributing it).
+    """
+    total = 0
+    files: set[str] = set()
+    commit_totals: list[int] = []
+    current: str | None = None
+    suffix = ""
+    plus: list[str] = []
+    minus: list[str] = []
+
+    def flush() -> None:
+        nonlocal total
+        if current is None:
+            return
+        files.add(current)
+        if not _excluded_path(current, exclude_globs) and not _is_system_managed(
+            current
+        ):
+            total += _strip_semantic(plus, suffix) + _strip_semantic(minus, suffix)
+
+    for line in diff_text.splitlines():
+        if line.startswith("commit "):
+            flush()
+            plus = []
+            minus = []
+            if split_commits:
+                commit_totals.append(total)
+                total = 0
+            continue
+        if line.startswith("diff --git "):
+            flush()
+            plus = []
+            minus = []
+            match = re.match(r"diff --git a/(.*) b/(.*)$", line)
+            if match:
+                current = match.group(2)
+                suffix = Path(current).suffix.lower()
+            else:
+                current = None
+            continue
+        if line.startswith(
+            (
+                "index ", "old mode ", "new mode ", "deleted file mode ",
+                "new file mode ", "similarity ", "dissimilarity ",
+                "rename from ", "rename to ", "copy from ", "copy to ",
+                "Binary files", "GIT binary patch", "--- ", "+++ ",
+            )
+        ):
+            continue
+        if line.startswith("@@"):
+            continue
+        if line.startswith("+"):
+            plus.append(line[1:])
+        elif line.startswith("-"):
+            minus.append(line[1:])
+        # context / "\ No newline" / log message lines are ignored
+    flush()
+    return total, files, commit_totals
+
+
+def semantic_diff_range(
+    root: Path,
+    result: Result,
+    base: str,
+    head: str,
+    exclude_globs: list[str],
+) -> tuple[int, set[str]] | None:
+    """Semantic lines and touched files for one commit range (net diff)."""
+    try:
+        text = run_git(root, ["diff", "-M", "-U0", f"{base}..{head}"])
+    except GitCommandError as error:
+        git_data_error(result, f"semantic diff {base[:7]}..{head[:7]} failed", error)
+        return None
+    total, files, _ = parse_semantic_diff(text, exclude_globs)
+    return total, files
+
+
+def window_semantic_lines(
+    root: Path,
+    result: Result,
+    base: str,
+    head: str,
+    exclude_globs: list[str],
+) -> int | None:
+    """Cumulative per-commit semantic lines for every non-merge commit in base..head.
+
+    The window metric is the sum of each commit's own diff (every change
+    pays its review cost once), not the net range diff.
+    """
+    if base == EMPTY_TREE_SHA:
+        args = ["log", "-p", "-M", "-U0", "--no-merges", head]
+    else:
+        args = ["log", "-p", "-M", "-U0", "--no-merges", f"{base}..{head}"]
+    try:
+        text = run_git(root, args)
+    except GitCommandError as error:
+        git_data_error(result, "semantic window scan failed", error)
+        return None
+    if not text.strip():
+        return 0
+    # split_commits 把每提交累计 push 进 commit_totals 后归零 total：
+    # 窗口口径取逐提交之和（含开头首个 commit 行 append 的 0），total
+    # 只剩输出最末节（倒序下最早提交）的行数，不能直接用。
+    total, _files, per_commit = parse_semantic_diff(
+        text, exclude_globs, split_commits=True
+    )
+    return sum(per_commit) if per_commit else total
+
+
+def spec_version_origin_commit(root: Path, result: Result) -> str | None:
+    """Commit that first registered the 规范版本 line in CONVENTIONS.md.
+
+    The 起点 window starts AFTER this commit so the bootstrap install
+    commit (thousands of scaffold lines) never trips the 累计审计 window
+    on day one.
+    """
+    try:
+        shas = run_git(
+            root,
+            [
+                "log", "--reverse", "--format=%H",
+                "-S", "agentmap 规范版本", "--", "CONVENTIONS.md",
+            ],
+        ).split()
+    except GitCommandError as error:
+        git_data_error(result, "spec version origin lookup failed", error)
+        return None
+    return shas[0] if shas else None
+
+
+def v4_effective_commit(root: Path, result: Result) -> str | None:
+    """Commit that first registered `规范版本: 4` (the v4 upgrade commit).
+
+    引用/短路纪律是 v4 引入的，其扫描窗口以本提交为起点；pickaxe
+    零命中说明 v4 升级尚未入史（worktree 态），调用方应以 HEAD 兜底
+    （纪律窗口为空，不对 v3 历史刷误报）。与 spec_version_origin_commit
+    相互独立：后者定位「规范版本行首次引入」（可为 v2 升级提交），
+    服务于复位点=起点 的累计审计窗口。
+    """
+    try:
+        shas = run_git(
+            root,
+            [
+                "log", "--reverse", "--format=%H",
+                "-S", "agentmap 规范版本: 4", "--", "CONVENTIONS.md",
+            ],
+        ).split()
+    except GitCommandError as error:
+        git_data_error(result, "v4 origin lookup failed", error)
+        return None
+    return shas[0] if shas else None
+
+
+def parse_commit_log_z(text: str) -> dict[str, tuple[str, list[str]]]:
+    """Parse `git log --format=%H%x00%B%x00 --name-only -z` into sha -> (body, files).
+
+    NUL 分隔让 body（可含换行）与文件名各自成为完整 token，避免
+    `%B` 正文换行与 name-only 换行混排导致的行级错位。
+    """
+    commits: dict[str, tuple[str, list[str]]] = {}
+    sha: str | None = None
+    body_seen = False
+    for token in text.split("\x00"):
+        stripped = token.strip()
+        if re.fullmatch(r"[0-9a-f]{40}", stripped):
+            # 新提交的 sha 既出现在流的开头，也出现在上一提交文件列表
+            # 之后；两处都必须切换，否则整条历史被并进第一个提交。
+            sha = stripped
+            body_seen = False
+            commits[sha] = ("", [])
+            continue
+        if sha is None or not stripped:
+            continue
+        if not body_seen:
+            commits[sha] = (stripped, [])
+            body_seen = True
+            continue
+        commits[sha][1].append(stripped)
+    return commits
+
+
+def tasks_added_before_upgrade(root: Path, result: Result, upgrade_sha: str) -> set[str]:
+    """T-IDs whose task file was first committed before the v4 upgrade commit.
+
+    存量 task 不迁移：升级前创建的 task 继续按登记时的 v3 语义校验，
+    升级不追溯；升级提交当刻或之后新建的 task 才按 v4 强制。升级提交
+    分支不可达的判定（returncode 非 0/1）视为仓库异常，fail-closed 报错。
+    """
+    try:
+        # name-only 全量触碰记录（限定 tasks/ 路径）：不用 --diff-filter=A，
+        # 因为 rename 而来的 task 文件（历史 T-ID 化改名）没有 A 记录——
+        # name-only 对 rename 显示新路径，rename 检测关闭时显示 A 新路径，
+        # 两种形态都能定位「该 T-ID 身份的最早出现提交」；first_add 保留
+        # 最早一条（log 自新到旧，not in 保留首见）。merge 提交默认不产
+        # diff，解冲突时凭空进入主线的 task 文件（--diff-filter=A、
+        # --follow、parent 侧均查不到）靠 --diff-merges=first-parent 露出；
+        # parent 分支正常引入的文件由普通提交覆盖，不重复计数。
+        text = run_git(
+            root,
+            ["log", "--diff-merges=first-parent", "--format=%H%x00%B%x00",
+             "--name-only", "-z", "--", "tasks/"],
+        )
+    except GitCommandError as error:
+        git_data_error(result, "task history lookup failed", error)
+        return set()
+    first_add: dict[str, str] = {}
+    for sha, (_body, files) in parse_commit_log_z(text).items():
+        for name in files:
+            match = re.match(r"tasks/(T-\d{3})-", name)
+            if match and match.group(1) not in first_add:
+                first_add[match.group(1)] = sha
+    legacy: set[str] = set()
+    for task_id, sha in first_add.items():
+        completed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, upgrade_sha],
+            cwd=root, capture_output=True, check=False,
+        )
+        # 祖先判定含相等：升级提交自身携带的 task（安装/升级时 scaffold
+        # 自带示例）属存量，按 v3 语义放行；同提交新建 task 逃避 v4 的
+        # 损失面远小于 fresh install 首跑即红的误伤面。
+        if completed.returncode == 0:
+            legacy.add(task_id)
+        elif completed.returncode != 1:
+            git_data_error(
+                result,
+                "task history lookup failed",
+                str(completed.stderr),
+            )
+            return set()
+    return legacy
+
+
+def task_commit_span(root: Path, task_id: str, evidence: str) -> tuple[str, str] | None:
+    """(base, close) for a task: parent of its earliest cited commit, and that
+    commit itself.
+
+    语义行数与复位点窗口都以此为准：实测区间是 `base..close`（该 task
+    自身 name 下的改动，到关闭提交为止），窗口区间是 `close..HEAD`（复位
+    点收尾提交之后的新增）。返回 None 表示证据里没有可解析的 commit。
+    """
+    hashes = []
+    for line in re.findall(r"^-\s*commit:\s*(\S.*)$", evidence, re.MULTILINE):
+        match = re.match(r"[0-9a-f]{7,40}\b", line)
+        if match:
+            hashes.append(match.group(0))
+    if not hashes:
+        return None
+    try:
+        order = run_git(root, ["rev-list", "--topo-order", "--reverse", "HEAD"]).split()
+    except GitCommandError:
+        return None
+    positions = []
+    for cited in hashes:
+        for index, sha in enumerate(order):
+            if sha.startswith(cited) or cited.startswith(sha):
+                positions.append(index)
+                break
+    if not positions:
+        return None
+    earliest = order[min(positions)]
+    try:
+        base = run_git(root, ["rev-parse", f"{earliest}~"]).strip()
+    except GitCommandError:
+        base = EMPTY_TREE_SHA  # root commit: window starts from the empty tree
+    return base, earliest
+
+
+def agentmap_v4_params(root: Path, result: Result) -> dict | None:
+    """v4 本地参数：语义行阈值/排除路径/累计审计间隔与复位点/关键路径。
+
+    Non-v4 repositories return None. Missing registrations report an error
+    and fall back to the documented default so lint keeps auditing the rest.
+    """
+    if agentmap_spec_version(root, result) < 4:
+        return None
+    path = root / "CONVENTIONS.md"
+    if not path.is_file():
+        return None
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return None
+
+    # 登记行允许行尾 HTML 注释（模板与升级登记都带说明），解析前剥掉。
+    HTML_COMMENT_RE = re.compile(r"<!--.*?-->")
+
+    def number(key: str, default: int) -> int:
+        match = re.search(rf"^-\s*{key}:\s*(\d+)", text, re.MULTILINE)
+        if match:
+            return int(match.group(1))
+        result.errors.append(
+            f"CONVENTIONS.md: missing {key} (v4 default {default})"
+        )
+        return default
+
+    def glob_list(key: str, required: bool) -> list[str]:
+        match = re.search(rf"^-\s*{key}:\s*(\S.*)$", text, re.MULTILINE)
+        if not match:
+            if required:
+                result.errors.append(f"CONVENTIONS.md: missing {key} (v4 registers it)")
+            return []
+        value = HTML_COMMENT_RE.sub("", match.group(1)).strip()
+        if value.startswith("无"):
+            return []
+        return [
+            item.strip().strip("`").strip("'").strip('"')
+            for item in value.split(",")
+            if item.strip().strip("`").strip("'").strip('"')
+        ]
+
+    params = {
+        "line_threshold": number("语义行阈值", 50),
+        "task_interval": number("累计审计 task 间隔", 10),
+        "line_interval": number("累计审计行数间隔", 300),
+        "exclude_globs": glob_list("语义行排除路径", False),
+        "critical_globs": glob_list("关键路径", True),
+    }
+    reset = re.search(r"^-\s*累计审计复位点:\s*(\S.*)$", text, re.MULTILINE)
+    if reset is None:
+        result.errors.append(
+            "CONVENTIONS.md: missing 累计审计复位点 (v4 registers 起点 initially)"
+        )
+        params["reset_task"] = None
+        params["reset_origin"] = True
+    else:
+        value = HTML_COMMENT_RE.sub("", reset.group(1)).strip()
+        task_match = re.match(r"T-(\d{3})", value)
+        if task_match:
+            params["reset_task"] = f"T-{task_match.group(1)}"
+            params["reset_origin"] = False
+        elif value.startswith("起点"):
+            params["reset_task"] = None
+            params["reset_origin"] = True
+        else:
+            result.errors.append(
+                f"CONVENTIONS.md: 累计审计复位点 must be 起点 or T-nnn, got {value}"
+            )
+            params["reset_task"] = None
+            params["reset_origin"] = True
+    return params
+
+
+RISK_FACE_WORDS = ("契约", "资金", "数据迁移", "对外接口", "鉴权")
+
+DOC_PATH_PREFIXES = (
+    "tasks/", "PRD.md", "SOLUTION.md", "DOMAIN.md", "CONVENTIONS.md",
+    "AGENTS.md", "RATIONALE.md", "README", "docs/",
+)
+
+
+def staged_closes_completed_task(root: Path, result: Result) -> bool:
+    """True 当暂存变更把某个 task 的状态置为 completed（task 关闭提交）。
+
+    累计审计触发的阻断语义只针对 task 关闭提交（设计：触发后阻断
+    下一个 task 关闭）。--staged 场景下升级提交、普通修复提交不是
+    task 关闭，阻断它们无法推进审计，反而把解除触发所需的审计
+    task 提交本身也锁死。git 数据不可读时按 True 处理（fail-closed：
+    宁可误拦一次普通提交，不放过一次该拦的 task 关闭）。
+    """
+    try:
+        paths = run_git(
+            root, ["diff", "--cached", "--name-only", "--", "tasks/"]
+        ).splitlines()
+    except GitCommandError as error:
+        git_data_error(result, "staged task lookup failed", error)
+        return True
+    for path in paths:
+        if not re.match(r"tasks/T-\d{3}-.+\.md$", path):
+            continue
+        try:
+            patch = run_git(root, ["diff", "--cached", "--", path])
+        except GitCommandError as error:
+            git_data_error(result, "staged task lookup failed", error)
+            return True
+        if re.search(r"^\+.*状态:\s*completed\s*$", patch, re.MULTILINE):
+            return True
+    return False
+
+
+def check_v4_tiering(root: Path, result: Result) -> None:
+    """v4 档位一致性、升档条件、累计审计触发与提交引用信号。
+
+    档位一致性 = 实测档 ≤ 声明档：实测语义行数超阈值或命中升档条件
+    （风险面词、关键路径 glob）而声明 minor 的，直接 error。窗口审计
+    触发后阻断所有后续 task 关闭（lint 失败即拦截关闭提交）。
+    """
+    params = agentmap_v4_params(root, result)
+    if params is None:
+        return
+    tasks_dir = root / "tasks"
+    if not tasks_dir.is_dir():
+        return
+    head = "HEAD"
+    task_states: dict[str, str] = {}
+    task_texts: dict[str, str] = {}
+    task_evidence: dict[str, str] = {}
+    task_risk: dict[str, str] = {}
+    audit_tasks: set[str] = set()
+    for path in sorted(tasks_dir.rglob("*.md")):
+        name_match = TASK_NAME_RE.match(path.name)
+        if not name_match:
+            continue
+        task_id = name_match.group(1)
+        text = read_text_checked(path, result, path.relative_to(root).as_posix())
+        if text is None:
+            continue
+        task_texts[task_id] = text
+        task_states[task_id] = task_state(text) or ""
+        task_risk[task_id] = ""
+        risk_match = re.search(r"^风险等级:\s*(minor|major)\s*$", text, re.MULTILINE)
+        if risk_match:
+            task_risk[task_id] = risk_match.group(1)
+        if re.search(r"^类型:\s*累计审计\s*$", text, re.MULTILINE):
+            audit_tasks.add(task_id)
+        if task_states[task_id] == "completed":
+            terminal = re.search(r"^## 终态与证据\s*$([\s\S]*)", text, re.MULTILINE)
+            if terminal:
+                task_evidence[task_id] = terminal.group(1)
+
+    # 累计审计复位点：登记的 task 必须存在于 tasks/（升级登记指向升级前
+    # 最后一个 completed task；审计 task 收尾提交后更新为审计 task 自身），
+    # 否则窗口按起点计算（窗口偏长 = 偏触发 = 保守方向）。
+    reset_task = params["reset_task"]
+    reset_valid = False
+    if reset_task is not None:
+        if reset_task in task_states:
+            reset_valid = True
+        else:
+            result.errors.append(
+                f"CONVENTIONS.md: 累计审计复位点 {reset_task} does not match any task"
+            )
+    window_completed = [
+        task_id
+        for task_id, state in task_states.items()
+        if state == "completed"
+        and task_id not in audit_tasks
+        and (not reset_valid or task_id > reset_task)
+    ]
+
+    # 窗口语义行：复位点（或起点）以来全部提交的逐提交累计。
+    if reset_valid and reset_task is not None:
+        reset_span = task_commit_span(root, reset_task, task_evidence.get(reset_task, ""))
+        if reset_span is None:
+            result.errors.append(
+                f"CONVENTIONS.md: 累计审计复位点 {reset_task} has no resolvable commit"
+            )
+            base = EMPTY_TREE_SHA
+        else:
+            # 窗口自复位点收尾提交之后起算（close..HEAD 不含收尾提交本身）。
+            base = reset_span[1]
+    else:
+        base = spec_version_origin_commit(root, result)
+        if base is None:
+            base = EMPTY_TREE_SHA
+    window_lines = window_semantic_lines(
+        root, result, base, head, params["exclude_globs"]
+    )
+    if window_lines is not None:
+        if (
+            len(window_completed) >= params["task_interval"]
+            or window_lines >= params["line_interval"]
+        ):
+            # 阻断语义只针对 task 关闭提交；pre-push 与 --staged 的非
+            # 关闭提交降级为 warning（拦截它们无法推进审计，只会把
+            # 解除触发所需的提交也锁死）。全量手动跑保持 error——
+            # 那是 agent 关闭 task 前的自查信号。
+            blocking = True
+            if result.staged:
+                blocking = staged_closes_completed_task(root, result)
+            elif result.pre_push:
+                blocking = False
+            message = (
+                f"累计审计触发: 自复位点起 completed task {len(window_completed)}"
+                f">={params['task_interval']} 或窗口语义行 {window_lines}"
+                f">={params['line_interval']}；先完成累计审计 task 并登记新复位点"
+            )
+            if blocking:
+                result.errors.append(message)
+            else:
+                result.warnings.append(message)
+
+    # 提交引用信号：一次 git log 取全部提交正文与触碰文件。
+    # --diff-merges=first-parent：merge 默认不产 diff，其正文里的 T-ID
+    # 引用与触碰文件会漏检；merge 相对第一 parent 的 diff 恰好补上
+    # 「merge 时凭空进入主线」的改动，parent 分支侧改动由普通提交覆盖。
+    try:
+        bodies_text = run_git(
+            root, ["log", "--diff-merges=first-parent", "--format=%H%x00%B%x00",
+                   "--name-only", "-z"]
+        )
+    except GitCommandError as error:
+        git_data_error(result, "commit reference scan failed", error)
+        return
+    commit_bodies: dict[str, str] = {}
+    commit_files: dict[str, list[str]] = {}
+    for sha, (body, files) in parse_commit_log_z(bodies_text).items():
+        commit_bodies[sha] = body
+        commit_files[sha] = files
+
+    # 引用/短路纪律是 v4 引入的，扫描范围限 v4 生效点之后——v3 历史
+    # 提交无此纪律，全史扫描会对存量仓库刷误报。生效点=pickaxe 命中
+    # 的 v4 升级提交；升级未提交时（fallback HEAD）为 HEAD 本身，纪律
+    # 窗口为空。注意与累计审计窗口（复位点起算）相互独立：后者有意
+    # 把升级前积累的改动计入，前者只约束 v4 生效后的新提交。
+    v4_origin = v4_effective_commit(root, result)
+    if v4_origin is None:
+        v4_origin = head
+    try:
+        discipline_shas = set(
+            run_git(root, ["rev-list", f"{v4_origin}..{head}"]).split()
+        )
+    except GitCommandError as error:
+        git_data_error(result, "discipline window lookup failed", error)
+        return
+
+    threshold = params["line_threshold"]
+    for task_id in sorted(task_states):
+        if task_id in audit_tasks:
+            continue
+        state = task_states[task_id]
+        if state != "completed":
+            continue
+        evidence = task_evidence.get(task_id, "")
+        span = task_commit_span(root, task_id, evidence)
+        if span is None:
+            result.errors.append(
+                f"tasks/{task_id}-*: completed task has no resolvable commit "
+                "range for 语义行数 measurement"
+            )
+            continue
+        base_commit, close_commit = span
+        measured = semantic_diff_range(
+            root, result, base_commit, close_commit, params["exclude_globs"]
+        )
+        if measured is None:
+            continue
+        semantic_lines, touched = measured
+        declared = task_risk.get(task_id, "")
+        # 档位一致性 = 实测档 ≤ 声明档
+        if declared == "minor":
+            if semantic_lines > threshold:
+                result.errors.append(
+                    f"tasks/{task_id}-*: declared minor but {semantic_lines} "
+                    f"semantic lines > 阈值 {threshold}; upgrade to major"
+                )
+            risk_face = re.search(
+                r"^风险面:\s*(\S.*)$", task_texts.get(task_id, ""), re.MULTILINE
+            )
+            if risk_face and any(word in risk_face.group(1) for word in RISK_FACE_WORDS):
+                result.errors.append(
+                    f"tasks/{task_id}-*: 风险面 declares "
+                    f"{risk_face.group(1)}; 命中升档条件, upgrade to major"
+                )
+            critical_hits = sorted(
+                path for path in touched
+                if any(
+                    fnmatchcase(path, pattern)
+                    for pattern in params["critical_globs"]
+                )
+            )
+            if critical_hits:
+                result.errors.append(
+                    f"tasks/{task_id}-*: touches 关键路径 "
+                    f"{', '.join(critical_hits)}; upgrade to major"
+                )
+        declared_lines = re.search(
+            r"^-\s*语义行数:\s*(\d+)\s*$", evidence, re.MULTILINE
+        )
+        if declared_lines is None:
+            # v3 存量 task（升级边界前）无 v4 证据行纪律，不追溯。
+            if task_id not in result.legacy_tasks:
+                result.errors.append(
+                    f"tasks/{task_id}-*: completed task needs 语义行数: <n> evidence"
+                )
+        elif int(declared_lines.group(1)) != semantic_lines:
+            result.warnings.append(
+                f"tasks/{task_id}-*: 语义行数 declares "
+                f"{declared_lines.group(1)}, lint measures {semantic_lines} "
+                "(lint 以实测为准)"
+            )
+        # 轻量 review 行可解析（minor 档）
+        if declared == "minor":
+            review_lines = re.findall(
+                r"^-[ \t]*review:[ \t]*(\S.*)$", evidence, re.MULTILINE
+            )
+            for line in review_lines:
+                if not V4_REVIEW_LINE_RE.match(f"- review: {line}"):
+                    result.errors.append(
+                        f"tasks/{task_id}-*: minor review line must be "
+                        "`- review: <审核方>｜<目的理解>｜<结论>`"
+                    )
+        # 提交引用信号（warning 级；v3 存量 task 无此纪律）
+        if task_id in result.legacy_tasks:
+            continue
+        window_bodies = [
+            commit_bodies[sha] for sha in discipline_shas if sha in commit_bodies
+        ]
+        if not any(task_id in body for body in window_bodies):
+            result.warnings.append(
+                f"tasks/{task_id}-*: no commit references its T-ID; "
+                "attach the T-ID to commits or confirm 短路"
+            )
+    # 短路改动信号：触碰代码面的提交正文无 T-ID 且无 review: 行
+    for sha, body in sorted(commit_bodies.items()):
+        if sha not in discipline_shas:
+            continue
+        if re.search(r"\bT-\d{3}\b", body):
+            continue
+        if re.search(r"^-[ \t]*review:", body, re.MULTILINE) or re.search(
+            r"^review:", body, re.MULTILINE
+        ):
+            continue
+        code_files = [
+            path for path in commit_files.get(sha, [])
+            if path
+            and not (
+                path.startswith(DOC_PATH_PREFIXES)
+                or path.rsplit("/", 1)[-1].startswith(DOC_PATH_PREFIXES)
+            )
+        ]
+        if code_files:
+            result.warnings.append(
+                f"commit {sha[:7]} touches code without a T-ID reference "
+                "or review: line; attach review: for 短路 changes"
+            )
 
 
 def check_review_evidence(root: Path, result: Result, path: Path, evidence: str) -> None:
@@ -2522,12 +3273,12 @@ def check_task_sections(
     root: Path, result: Result, path: Path, text: str, require_matrix: bool, risk_level: str
 ) -> None:
     relative = path.relative_to(root).as_posix()
-    # micro 档只保留 背景与目标：差距评估/收敛方案/测试计划对行为不变的
-    # 变更是仪式性写作，强制非空只会诱导编造内容；micro 的判断点改为
+    # micro/minor 档只保留 背景与目标：差距评估/收敛方案/测试计划对行为不变的
+    # 变更是仪式性写作，强制非空只会诱导编造内容；micro/minor 的判断点改为
     # 终态证据中的 风险自评 行（见 completed 证据检查）。
     required_sections = (
         ("背景与目标",)
-        if risk_level == "micro"
+        if risk_level in ("micro", "minor")
         else ("背景与目标", "差距评估", "收敛方案", "测试计划")
     )
     for heading in required_sections:
@@ -2637,6 +3388,7 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
     matrix_start = verification_matrix_start(root, result)
     review_start = code_review_start(root, result)
     spec_version = agentmap_spec_version(root, result)
+    legacy_tasks = result.legacy_tasks if spec_version >= 4 else set()
     for path in sorted(tasks_dir.rglob("*.md")):
         name_match = TASK_NAME_RE.match(path.name)
         relative = path.relative_to(root)
@@ -2696,18 +3448,50 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
             task_ids.append(task_id)
             result.task_line_counts[task_id] = len(text.splitlines())
             within_scope = matrix_start is not None and int(task_id[2:]) >= matrix_start
-            allowed_risk = "micro|standard|high" if spec_version >= 2 else "standard|high"
-            risk = re.findall(rf"^风险等级:\s*({allowed_risk})\s*$", text, re.MULTILINE)
-            risk_level = risk[0] if len(risk) == 1 else "standard"
-            # The declared tier is self-reported, so --report publishes the
-            # distribution as the spot-check handle: an implausible cluster of
-            # micro tasks is the signal to sample tasks for 矩阵/自查 compliance.
-            result.risk_counts[risk[0] if len(risk) == 1 else "未标注"] = (
-                result.risk_counts.get(risk[0] if len(risk) == 1 else "未标注", 0) + 1
+            legacy_v3 = spec_version >= 4 and task_id in legacy_tasks
+            if spec_version >= 4 and not legacy_v3:
+                allowed_risk = "minor|major"
+            elif spec_version >= 2:
+                allowed_risk = "micro|standard|high"
+            else:
+                allowed_risk = "standard|high"
+            is_audit = spec_version >= 4 and bool(
+                re.search(r"^类型:\s*累计审计\s*$", text, re.MULTILINE)
             )
+            risk = re.findall(rf"^风险等级:\s*({allowed_risk})\s*$", text, re.MULTILINE)
+            if is_audit:
+                # 累计审计 task 免分档（无风险等级行），但证据规格按
+                # major 写死：矩阵、五标签、自查清单全部要求；不进
+                # --report 风险分布（免分档的 task 无档位可言）。
+                risk_level = "major"
+            else:
+                risk_level = risk[0] if len(risk) == 1 else "standard"
+                # The declared tier is self-reported, so --report publishes the
+                # distribution as the spot-check handle: an implausible cluster of
+                # micro tasks is the signal to sample tasks for 矩阵/自查 compliance.
+                result.risk_counts[risk[0] if len(risk) == 1 else "未标注"] = (
+                    result.risk_counts.get(risk[0] if len(risk) == 1 else "未标注", 0) + 1
+                )
             require_matrix = within_scope
             require_review = review_start is not None and int(task_id[2:]) >= review_start
-            if spec_version >= 2:
+            if spec_version >= 4 and not legacy_v3:
+                # v4: minor/major 两档；档位由语义行数与升档条件机械确定
+                # （数值一致性由 check_v4_tiering 以实测复核），本处只按
+                # 声明档挂证据要求。
+                if (
+                    not is_audit
+                    and within_scope
+                    and len(risk) != 1
+                    and not (old is not None and task_state(old) in TERMINAL_STATES)
+                ):
+                    result.errors.append(
+                        f"{task_label}: needs exactly one 风险等级: minor or major"
+                    )
+                require_matrix = within_scope and risk_level != "minor"
+                require_review = require_review and risk_level in ("minor", "major")
+                require_review_labels = require_review and risk_level == "major"
+                require_self_check = require_matrix
+            elif spec_version >= 2 or legacy_v3:
                 # Tasks already terminal at HEAD predate the v2 风险等级 regime
                 # and are immutable, so the authoring requirement only binds
                 # active and newly written tasks.
@@ -2758,9 +3542,9 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 labels = ["实现", "测试", "commit"]
                 if old is None or task_state(old) not in TERMINAL_STATES:
                     labels.append("SOLUTION 对照")
-                if risk_level == "micro":
-                    # micro 免矩阵/免审核/免自查清单，风险自评行是它唯一的
-                    # 判断点：一句话说明为何行为不变、为何 micro 足够
+                if risk_level == "micro" and spec_version < 4:
+                    # v2/v3 micro 免矩阵/免审核/免自查清单，风险自评行是它
+                    # 唯一的判断点；v4 minor 由轻量双轴 review 行取代。
                     labels.append("风险自评")
                 for label in labels:
                     if not re.search(rf"^-\s*{label}:\s*\S", evidence, re.MULTILINE):
@@ -3211,11 +3995,30 @@ def strict_test_anchors(root: Path, result: Result, forced: bool) -> bool:
     return forced
 
 
-def lint(root: Path, strict_tests: bool = False) -> Result:
+def lint(root: Path, strict_tests: bool = False, staged: bool = False,
+         pre_push: bool = False) -> Result:
     result = Result()
+    result.staged = staged
+    result.pre_push = pre_push
     changed = git_changed_paths(root, result)
     result.legacy_cutoff = legacy_cutoff(root, result)
-    agentmap_spec_version(root, result)
+    result.spec_version = agentmap_spec_version(root, result)
+    # v4 升级边界：规范版本行首次登记为 4 的提交。升级前已存在的 task
+    # （文件首次提交早于该提交且为其祖先）按 v3 语义校验，升级不追溯。
+    if result.spec_version >= 4:
+        upgrade_commits = run_git(
+            root,
+            ["log", "--format=%H", "-S", "agentmap 规范版本: 4", "--", "CONVENTIONS.md"],
+        ).split()
+        if upgrade_commits:
+            result.legacy_tasks = tasks_added_before_upgrade(
+                root, result, upgrade_commits[0]
+            )
+        else:
+            # 升级刚落盘尚未提交（bootstrap 对齐版本后立即 lint 的窗口）：
+            # v4 生效点视为下一个提交，所有已提交 task 均先于它，按 v3 语义；
+            # 未提交的新 task 仍按 v4 强制。
+            result.legacy_tasks = tasks_added_before_upgrade(root, result, "HEAD")
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
     check_id_formats(root, result)
@@ -3225,6 +4028,7 @@ def lint(root: Path, strict_tests: bool = False) -> Result:
     check_traceability(root, result)
     check_core_document_budget(root, result)
     check_tasks(root, result, changed)
+    check_v4_tiering(root, result)
     check_receipts(root, result, changed)
     check_test_anchors(root, result, strict_test_anchors(root, result, strict_tests))
     check_code_anchors(root, result, code_anchors_enabled(root, result))
@@ -3259,7 +4063,7 @@ def print_result(result: Result, report: bool) -> None:
             print(
                 "AgentMap 风险分布: "
                 f"{distribution} (共 {sum(result.risk_counts.values())} task；"
-                "等级为风险自评，micro 免验证矩阵，此分布是抽查抓手)"
+                "等级由语义行数与升档条件机械定档，minor 免验证矩阵，此分布是抽查抓手)"
             )
     if result.warnings:
         print("agentmap lint warnings:")
@@ -4982,9 +5786,9 @@ def main() -> int:
     try:
         if args.staged:
             with staged_checkout(root) as snapshot:
-                result = lint(snapshot, strict_tests=args.strict_tests)
+                result = lint(snapshot, strict_tests=args.strict_tests, staged=True)
         else:
-            result = lint(root, strict_tests=args.strict_tests)
+            result = lint(root, strict_tests=args.strict_tests, pre_push=args.pre_push)
         if args.pre_push:
             stdin_text = sys.stdin.read()
             if not stdin_text.strip():
