@@ -8,7 +8,7 @@ mutation: lifecycle
 # T-037 累计审计：工作系统 v4 升级与租约形状修复窗口
 
 类型: 累计审计
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -62,18 +62,17 @@ mutation: lifecycle
 
 ## 终态与证据
 
-- 实现: 双轴审计子代理并行完成（Standards 轴 6ffed9a3、Spec 轴 2e51b3fb，独立上下文、非只读 diff）；窗口五提交全部纳入，发现三条硬违规与三条记档项，整改已落盘。
-- 测试: npm test 346/346 全绿；agentmap lint、anchor-coverage 93/93、expected-fail 账本 346、client-bundle fresh（整改提交后复跑绿）。
+- 状态: completed
 - 实现: 双轴审计子代理并行完成（Standards 轴 6ffed9a3、Spec 轴 2e51b3fb，独立上下文、非只读 diff）；窗口五提交全部纳入，发现三条硬违规与三条记档项，整改已落盘。
 - 测试: npm test 346/346 全绿；agentmap lint、anchor-coverage 93/93、expected-fail 账本 346、client-bundle fresh（整改提交后复跑绿）。
 - SOLUTION 对照: SOLUTION.md#子会话审核豁免 与 c01ba34 实现一致；账本口径 327→340→346 连续无断档；复位点语义经本次收尾提交更新后与文档条款一致；无差异。
 - 语义行数: 407
-- commit:
+- commit: 125e6bfd7b35d906774671e6fbaff05d007492b2（审计执行与整改落盘提交）
 - review:
   - 审核方: 窗口双轴独立子代理（Standards 轴 6ffed9a3、Spec 轴 2e51b3fb，与实现及彼此互不共用上下文）
   - 目的理解: 窗口审计提供跨改动视角——裁决单改动审核看不到的三层漂移（文档—工具—代码）；窗口=T-035 复位点收尾提交之后全部提交；预期产出为按严重度排序的发现清单与整改闭环。
   - 执行方式: 累计审计 task（类型: 累计审计，免风险分级、证据按 major 规格）；两轴独立子代理并行；评审基线=eaba60c..HEAD 五提交 diff，标准源=AGENTS.md/CONVENTIONS.md 成文纪律 + Fowler 味道基线，spec 源=各提交声明目的与任务书。
-  - 问题与修复:
+  - 问题与修复: 三条硬违规（按严重度）——文实矛盾以检查为准修正文字、系统托管豁免补登记、无 task 短路改检查工具记档处置；明细见下列细目。
     - 硬违规 1（fada2fb，文实矛盾）：成文规定 major 证据为五标签，而机械核验要求所有需审 task 先有字面 `- review:` 行（T-036 五标签齐备仍报缺失）→ 按「冲突时以检查为准并修正文字」落项目层：CONVENTIONS 代码审核章补机读锚点条文（决策记 RATIONALE C-035；AGENTS.md 属 canonical 托管文件不可手改，原方案修正落点由 AGENTS.md 改为项目层）。
     - 硬违规 2（同根）：lint 内置语义行系统托管豁免未登记，触发口径与文档不一致（本窗口工作系统本体 ~1400 行不计入 300 行口径）→ CONVENTIONS 语义行排除路径登记系统托管豁免（见 C-035）；后果已核验：窗口语义行 407≈配置账本 2 行 + T-036 实现 ~405。
     - 硬违规 3（记档处置）：c5b3400 为无 task 短路改动且改检查工具本身（28+/54−），违反短路评审不豁免纪律（流程纪律，lint 仅 warning）；历史提交不可改写，处置=本累计审计自身即对该改动的独立双轴复审，本行即记档收口。
