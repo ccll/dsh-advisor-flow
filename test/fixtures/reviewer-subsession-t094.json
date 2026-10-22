@@ -1,0 +1,105 @@
+{
+  "header": {
+    "type": "session",
+    "version": 4,
+    "id": "00000000-0000-4000-8000-000000000094",
+    "createdAt": 1792561670762,
+    "cwd": "/home/user/proj/demo-lab",
+    "parentSession": "session-11111111-2222-4333-8444-555555555555",
+    "isSeeded": false,
+    "origin": "subagent",
+    "delegationDepth": 1,
+    "agentPreset": "standard"
+  },
+  "events": [
+    {
+      "type": "subagent/descriptor",
+      "seq": 0,
+      "time": 1792561670771,
+      "data": {
+        "version": 3,
+        "mode": "continuable",
+        "provider": "spawn",
+        "label": "T-094 轻量独立代码评审",
+        "agentProvider": "gpu",
+        "agentModel": "glm-5.3-flash-512k",
+        "agentReasoningEffort": "max"
+      }
+    },
+    {
+      "type": "sandbox/mode",
+      "seq": 1,
+      "time": 1792561670771,
+      "data": {
+        "mode": "danger-full-access",
+        "source": "delegation"
+      }
+    },
+    {
+      "type": "approval/policy",
+      "seq": 2,
+      "time": 1792561670771,
+      "data": {
+        "policy": "never",
+        "source": "delegation"
+      }
+    },
+    {
+      "type": "permission/preset",
+      "seq": 3,
+      "time": 1792561670771,
+      "data": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "type": "subagent/model-selection-policy",
+      "seq": 4,
+      "time": 1792561670786,
+      "data": {
+        "allowedModels": [
+          {
+            "provider": "gpu",
+            "model": "glm-5.3-flash-512k"
+          }
+        ]
+      }
+    },
+    {
+      "type": "agent/inbox/spliced",
+      "seq": 5,
+      "time": 1792561670793,
+      "data": {
+        "target": "next-turn",
+        "start": 0,
+        "inserted": [
+          {
+            "content": [
+              {
+                "type": "text",
+                "text": "你是独立代码评审方(reviewer),对 AgentMap 任务 T-094 做 standard 档轻量评审。你与实现方不同上下文,独立性不打折。\n\n## 目的理解(评审前必须先建立,并在你的结论第一段复述)\n被评审变更的目的:<占位——自托管服务此前桌面布局导致移动端不可用,本变更为其补响应式适配>。\n\n## 评审范围(repo: /home/user/proj/demo-lab)\n- static/style.css —— 尾部新增移动端媒体查询块,注释声明桌面规则零改动\n- static/index.html —— 最小 class 标注改动\n- PRD.md 新增验收点一行\n- SOLUTION.md 子系统新增条目\n- tasks/T-094-example.md(新建 task)\n\n## 评审要求\n1. 不得只读 diff:对变更的关键断言对照实际文件核验,发现逐条给 file_path:line_number 依据。\n2. 输出以 findings 为主体:按严重度排序,每条带 file_path:line_number;无发现时明确写\"无发现\",并列残余风险与测试缺口。结论分 blocking / non-blocking 两档。总结性内容放在发现之后。\n3. 你只读不写:不要修改任何文件。\n\nrepo 根: /home/user/proj/demo-lab。可用 git diff 查看未提交改动。"
+              },
+              {
+                "type": "text",
+                "text": "Your parent agent id is \"session-11111111-2222-4333-8444-555555555555\". Before you finish, send your result to that agent with send_message({ agent_id: \"session-11111111-2222-4333-8444-555555555555\", message: \"<self-contained result>\" }). The parent shares your workspace but does not automatically receive your transcript, tool output, or reasoning. Send earlier messages as well when a finding changes what the parent should do next; sending a message does not end your turn."
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "role": "user",
+            "id": "00000000-0000-4000-8000-000000000001"
+          }
+        ]
+      }
+    },
+    {
+      "type": "turn/start",
+      "seq": 6,
+      "time": 1792561670794,
+      "data": {
+        "turn": 1
+      }
+    }
+  ]
+}

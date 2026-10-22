@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import pluginModule, { apply, name, inject, Config } from '../lib/index.js';
 import { ADVICE_SOURCE_KIND } from '../lib/delivery.js';
-import { createFakeLlm, answer, failure, createFakeSubagents, reviewerSubsessionEvents } from './helpers.js';
+import { createFakeLlm, answer, failure, createFakeSubagents, reviewerSubsessionLease } from './helpers.js';
 
 const endpoints = [];
 
@@ -983,9 +983,9 @@ test('T-035 deny 短路不进循环门计数：同签名被否决调用零咨询
     assert.equal(llm.calls.length, 0); // 否决不推进等价计数（审核 G1）
 });
 
-/** T-023 子会话日志夹具（共享单点：test/helpers.js::reviewerSubsessionEvents；实测形状）。 */
+/** T-023 子会话租约夹具（共享单点：test/helpers.js::reviewerSubsessionLease；T-036 租约形状）。 */
 function reviewSubsessionLog({ label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
-    return reviewerSubsessionEvents({ label, prompt });
+    return reviewerSubsessionLease({ label, prompt });
 }
 
 test('T-023 接线级豁免：审核子会话（真实形状日志）收口不评审；缓存复用与 disposed 复位', async () => {
@@ -995,7 +995,7 @@ test('T-023 接线级豁免：审核子会话（真实形状日志）收口不�
     ctx.sessionQuery = {
         observeSession: async (sessionId) => {
             observeCalls.push(sessionId);
-            return { events: reviewSubsessionLog(), [Symbol.dispose]() {} };
+            return { ...reviewSubsessionLog(), [Symbol.dispose]() {} };
         },
     };
     apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'hard' });
@@ -1011,7 +1011,7 @@ test('T-023 接线级豁免：审核子会话（真实形状日志）收口不�
     await settle();
     assert.equal(observeCalls.length, 1);
     assert.equal(llm.calls.length, 0);
-    // 会话清理摘除缓存：同 id 收口重新判定（getEvents 再次调用）。
+    // 会话清理摘除缓存：同 id 收口重新判定（observeSessionLease 再次调用）。
     const disposedHandler = subscriptions.find((s) => s.event === 'session/disposed').handler;
     disposedHandler({ id: 'review-child' });
     await handler({ turn: 'turn-1', signal: undefined, agent: { id: 'review-child' } });
@@ -1039,7 +1039,7 @@ test('T-026 接线级守卫：软模式审核子会话工具调用被拒（零�
             if (sessionId !== 'review-child') {
                 return undefined; // 缝对其余会话不可得 → 分类器 fail-open 放行
             }
-            return { events: reviewerSubsessionEvents(), [Symbol.dispose]() {} };
+            return { ...reviewerSubsessionLease(), [Symbol.dispose]() {} };
         },
     };
     const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' }, mode: 'soft' });

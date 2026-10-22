@@ -4,7 +4,7 @@ import { createTurnReview, TURN_REVIEW_QUESTION } from '../lib/turn-review.js';
 import { createReviewerClassifier } from '../lib/reviewer-classifier.js';
 import { createAdviceDelivery, GUIDELINE_REMINDER_TEXT } from '../lib/delivery.js';
 import { DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS } from '../lib/config.js';
-import { reviewerSubsessionEvents } from './helpers.js';
+import { reviewerSubsessionLease } from './helpers.js';
 
 /**
  * 收口评审（R-01-009；C-021）行为面：
@@ -20,7 +20,7 @@ import { reviewerSubsessionEvents } from './helpers.js';
 const payload = (turn, sessionId = 's1') => ({ turn, signal: undefined, agent: { id: sessionId } });
 
 /** 收口评审夹具：可编程裁决与咨询行为 + 送达/日志捕获。 */
-function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled, isAdvisorSubsession, getEvents, config } = {}) {
+function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl, budgetExhausted, sessionEnabled, isAdvisorSubsession, getLease, config } = {}) {
     const logs = { error: [], info: [], warn: [] };
     const logger = {
         error: (message, fields) => logs.error.push({ message, fields }),
@@ -44,7 +44,7 @@ function makeReview({ mode = 'hard', enabled = true, outcomes = [], consultImpl,
     // T-026：豁免判定由共享分类器承载（生产接线同型——分类器与守卫共用）。
     const classifier = createReviewerClassifier({
         getConfig: () => (config ?? { enabled, mode }),
-        getEvents,
+        getLease,
         logger,
     });
     const review = createTurnReview({
@@ -232,8 +232,8 @@ test('R-01-009/AC-04 提醒送达失败 contained：无 agent 时返回 false �
     assert.equal(delivery.steerReminder('missing'), false);
 });
 
-/** T-023 子会话事件流夹具（共享单点：test/helpers.js::reviewerSubsessionEvents）。 */
-const subsessionLog = reviewerSubsessionEvents;
+/** T-023 子会话租约夹具（共享单点：test/helpers.js::reviewerSubsessionLease，T-036 租约形状）。 */
+const subsessionLog = reviewerSubsessionLease;
 
 /** T-023 豁免判定夹具：config 携带默认豁免清单。 */
 const exemptConfig = (extra = {}) => ({ enabled: true, mode: 'hard', turnReviewExemptPatterns: DEFAULT_TURN_REVIEW_EXEMPT_PATTERNS, ...extra });
@@ -242,7 +242,7 @@ test('T-023 审核类子会话豁免：自证 + label 或首条提示词命中�
     // 创建标签命中（prompt 不含关键词）
     const byLabel = makeReview({
         config: exemptConfig(),
-        getEvents: async () => subsessionLog({ label: 'Standards review of T-032', prompt: '请独立完成差异核对并汇报。' }),
+        getLease: async () => subsessionLog({ label: 'Standards review of T-032', prompt: '请独立完成差异核对并汇报。' }),
     });
     await byLabel.review.handleTurnStopping(payload('turn-1', 'sub-1'));
     assert.equal(byLabel.consultCalls.length, 0);
@@ -250,14 +250,14 @@ test('T-023 审核类子会话豁免：自证 + label 或首条提示词命中�
     // 首条提示词命中（label 不含关键词）
     const byPrompt = makeReview({
         config: exemptConfig(),
-        getEvents: async () => subsessionLog({ label: '数据整理', prompt: 'Please REVIEW the diff before reporting.' }),
+        getLease: async () => subsessionLog({ label: '数据整理', prompt: 'Please REVIEW the diff before reporting.' }),
     });
     await byPrompt.review.handleTurnStopping(payload('turn-1', 'sub-2'));
     assert.equal(byPrompt.consultCalls.length, 0); // 大小写不敏感命中
     // 双源不命中：执行类子会话照常评审
     const worker = makeReview({
         config: exemptConfig(),
-        getEvents: async () => subsessionLog({ label: '数据整理', prompt: '搜索仓库中的相关实现并汇报结论。' }),
+        getLease: async () => subsessionLog({ label: '数据整理', prompt: '搜索仓库中的相关实现并汇报结论。' }),
     });
     await worker.review.handleTurnStopping(payload('turn-1', 'sub-3'));
     assert.equal(worker.consultCalls.length, 1);
@@ -267,28 +267,29 @@ test('T-023 主会话不豁免：header 无 subagent origin（根会话与 fork 
     // 根会话：无 header origin 字段（undefined），prompt 含 review
     const root = makeReview({
         config: exemptConfig(),
-        getEvents: async () => subsessionLog({ header: { type: 'session', seq: 0, id: 'root-1' }, label: undefined, prompt: 'review this repo for issues' }),
+        getLease: async () => reviewerSubsessionLease({ header: { type: 'session', id: 'root-1' }, label: undefined, prompt: 'review this repo for issues' }),
     });
     await root.review.handleTurnStopping(payload('turn-1', 'root-1'));
     assert.equal(root.consultCalls.length, 1); // 主会话是评审对象本位：照常评审
     // fork 形态：isSeeded 但无 origin 字段
     const fork = makeReview({
         config: exemptConfig(),
-        getEvents: async () => subsessionLog({ header: { type: 'session', seq: 0, id: 'f-1', isSeeded: true }, label: 'fork review', prompt: 'review the diff' }),
+        getLease: async () => subsessionLog({ header: { type: 'session', id: 'f-1', isSeeded: true }, label: 'fork review', prompt: 'review the diff' }),
     });
     await fork.review.handleTurnStopping(payload('turn-1', 'f-1'));
     assert.equal(fork.consultCalls.length, 1); // fork 不是 subagent，照常评审
 });
 
 test('T-023 豁免判定 fail-open：读取抛错/缝缺失/空流一律照常评审（R-01-009/AC-12）', async () => {
-    const throwing = makeReview({ config: exemptConfig(), getEvents: async () => { throw new Error('seam down'); } });
+    const throwing = makeReview({ config: exemptConfig(), getLease: async () => { throw new Error('seam down'); } });
     await throwing.review.handleTurnStopping(payload('turn-1'));
     assert.equal(throwing.consultCalls.length, 1);
     assert.ok(throwing.logs.info.some((row) => row.message.includes('check failed'))); // 判定失败留痕（丢弃可见性同口径）
-    const noSeam = makeReview({ config: exemptConfig() }); // getEvents 未注入
+    const noSeam = makeReview({ config: exemptConfig() }); // getLease 未注入
     await noSeam.review.handleTurnStopping(payload('turn-1'));
     assert.equal(noSeam.consultCalls.length, 1);
-    const emptyLog = makeReview({ config: exemptConfig(), getEvents: async () => [] });
+    // 空事件流租约：header 自证成立但双源皆缺 → 判定 false 照常评审。
+    const emptyLog = makeReview({ config: exemptConfig(), getLease: async () => ({ header: { type: 'session', id: 'sub-1', origin: 'subagent' }, events: [] }) });
     await emptyLog.review.handleTurnStopping(payload('turn-1'));
     assert.equal(emptyLog.consultCalls.length, 1);
 });
@@ -299,7 +300,7 @@ test('T-023 判定缓存：同会话判定复用零重读，patterns 变更触�
     const config = { enabled: true, mode: 'hard', turnReviewExemptPatterns: ['review'] };
     const { review } = makeReview({
         config,
-        getEvents: async () => { reads += 1; return events; },
+        getLease: async () => { reads += 1; return events; },
     });
     await review.handleTurnStopping(payload('turn-1', 'sub-9'));
     assert.equal(reads, 1); // 首次判定读取
@@ -315,7 +316,7 @@ test('T-023 豁免清单为空时豁免关闭：零日志读取直接照常评�
     let reads = 0;
     const { review, consultCalls } = makeReview({
         config: { enabled: true, mode: 'hard', turnReviewExemptPatterns: [] },
-        getEvents: async () => { reads += 1; return subsessionLog({}); },
+        getLease: async () => { reads += 1; return subsessionLog({}); },
     });
     await review.handleTurnStopping(payload('turn-1'));
     assert.equal(consultCalls.length, 1);
@@ -327,7 +328,7 @@ test('T-023 失败判定不缓存：首判读取失败照常评审，次轮成�
     let reads = 0;
     const undefinedSeam = makeReview({
         config: exemptConfig(),
-        getEvents: async () => { reads += 1; return reads === 1 ? undefined : subsessionLog({}); },
+        getLease: async () => { reads += 1; return reads === 1 ? undefined : subsessionLog({}); },
     });
     await undefinedSeam.review.handleTurnStopping(payload('turn-1', 'sub-8'));
     assert.equal(undefinedSeam.consultCalls.length, 1); // 首判失败：照常评审
@@ -338,7 +339,7 @@ test('T-023 失败判定不缓存：首判读取失败照常评审，次轮成�
     let throws = 0;
     const throwingSeam = makeReview({
         config: exemptConfig(),
-        getEvents: async () => {
+        getLease: async () => {
             throws += 1;
             if (throws === 1) {
                 throw new Error('seam down');
@@ -358,7 +359,7 @@ test('T-023 标签与提示词分离匹配：跨源拼接不构成命中（R-01-
     // 分离匹配下两源均不含完整清单词 → 照常评审
     const boundary = makeReview({
         config: exemptConfig({ turnReviewExemptPatterns: ['review'] }),
-        getEvents: async () => subsessionLog({ label: '粗 修 re', prompt: 'view the diff' }),
+        getLease: async () => subsessionLog({ label: '粗 修 re', prompt: 'view the diff' }),
     });
     await boundary.review.handleTurnStopping(payload('turn-1', 'sub-7'));
     assert.equal(boundary.consultCalls.length, 1);

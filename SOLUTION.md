@@ -1,7 +1,7 @@
 ---
 doc-type: solution
 mutation: living
-核对日期: 2026-10-19
+核对日期: 2026-10-22
 owner: agent 主笔，项目属主审批
 ---
 
@@ -578,11 +578,12 @@ flowchart TD
   - 豁免阻断「评审产生子会话 → 子会话收口再评审」的无界递归。
 - **子会话审核豁免**（C-023）：
   - 审核类子会话不是评审对象（R-01-009/AC-11）：审核者本身是质量闸门，元评审冗余且落在 code-review 高频路径。
-  - 判定双条件同时满足才豁免：子会话自证（该会话日志 header `origin === 'subagent'`）且豁免模式清单命中其创建标签或首条 `agent/inbox/spliced` 提示词文本（大小写不敏感的子串匹配）。
-  - 判定源为会话自身日志（`sessionQuery.observeSession`）：`subagent/descriptor` 事件承载创建标签（`data.label`）；首条提示词经 `agent/inbox/spliced` 承载（子会话日志无 `user/message` 事件）。
+  - 判定双条件同时满足才豁免：子会话自证（sessionQuery 租约 header `origin === 'subagent'`）且豁免模式清单命中其创建标签或首条 `agent/inbox/spliced` 提示词文本（大小写不敏感的子串匹配）。
+  - 判定源为 sessionQuery 租约（T-036）：租约归一形态 `{events, header}`——header 是租约独立属性（子会话自证 origin 在此），事件流为裸 log 切片、不含自证事件（持久化文件首行 header 形状只是序列化产物）；`subagent/descriptor` 事件承载创建标签（`data.label`）；首条提示词经 `agent/inbox/spliced` 承载（子会话日志无 `user/message` 事件）。
   - fork 会话 header 无 `origin` 字段，不判为子会话（`origin === 'subagent'` 严格相等判定绕开 seed 回放边界）。
-  - 判定失败 fail-open（R-01-009/AC-12）：缝缺失、读取失败、解析失败一律不豁免（照常评审）；只凭阳性判定豁免。
+  - 判定失败 fail-open（R-01-009/AC-12）：缝缺失、读取失败、解析失败、畸形租约（header 缺失）一律不豁免（照常评审）；只凭阳性判定豁免。
   - 豁免判定按会话缓存（仅缓存成功读取的判定，失败不缓存、次轮收口重判）；缓存随 `session/disposed` 摘除。
+  - 租约形状金丝雀（T-036）：激活期以合成租约样本（header 独立 + descriptor seq0）验证分类器判 true，未命中即 `degradations.reviewerClassifier` 显性化 + warn——T-094 豁免结构性恒死（自证源错挂持久化文件形状，生产租约 header 为独立属性）的同类回归哨兵。
   - 豁免清单为配置键 `turnReviewExemptPatterns`（非空字符串数组；空数组 = 豁免关闭；默认双语预置 review/审核/审查/评审/复审/审计，C-023，T-033 增补「复审」）。
   - 豁免面按内容关键词收窄：执行类子会话（搜索、计划、判断）照常评审，仅审核类跳过（C-023）。
 - **咨询工具面守卫**（C-025）：

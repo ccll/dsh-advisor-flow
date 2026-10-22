@@ -9,7 +9,7 @@ import {
 } from '../lib/tool-guard.js';
 import { DEFAULT_INTERVENTION_MODE } from '../lib/config.js';
 import { createReviewerClassifier } from '../lib/reviewer-classifier.js';
-import { reviewerSubsessionEvents } from './helpers.js';
+import { reviewerSubsessionLease } from './helpers.js';
 
 /**
  * 咨询工具面守卫（T-026；R-01-001/AC-09、AC-10；C-025）：
@@ -42,7 +42,7 @@ const softConfig = (extra = {}) => ({ enabled: true, mode: 'soft', turnReviewExe
 test('R-01-001/AC-09 软模式拒绝审核类子会话：共享分类器阳性即拒（真实分类器 + 实测形状日志）', async () => {
     const classifier = createReviewerClassifier({
         getConfig: () => softConfig(),
-        getEvents: async () => reviewerSubsessionEvents(),
+        getLease: async () => reviewerSubsessionLease(),
         logger: quietLogger,
     });
     const { guard, logs } = makeGuard({ config: softConfig(), classifier });
@@ -70,7 +70,7 @@ test('R-01-001/AC-09 软模式拒绝已登记顾问子会话（呈现登记表�
 test('R-01-001/AC-09 软模式放行主会话与执行类子会话（判定面收敛，不外溢）', async () => {
     const classifier = createReviewerClassifier({
         getConfig: () => softConfig(),
-        getEvents: async () => reviewerSubsessionEvents({ header: { type: 'session', seq: 0, id: 'main-1' }, label: '数据整理', prompt: '搜索实现并汇报。' }),
+        getLease: async () => reviewerSubsessionLease({ header: { type: 'session', id: 'main-1' }, label: '数据整理', prompt: '搜索实现并汇报。' }),
         logger: quietLogger,
     });
     const { guard } = makeGuard({ config: softConfig(), classifier });

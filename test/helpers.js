@@ -5,6 +5,10 @@
  * `resolveModelInfo`.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 /**
  * One program drives one `llm.stream` call (consumed in call order):
  * - `chunks`: array of chunks to yield (`text-delta` / `usage` / `finish`);
@@ -197,9 +201,28 @@ export function createFakeSubagents({ providers = [eligibleSpawnProvider()], run
 }
 
 /**
- * 审核类子会话事件流夹具（T-023/T-026 共用单点；实测形状：header origin
- * 顶层承载子会话自证、`agent/inbox/spliced` 承载首条提示词、
- * `subagent/descriptor` 承载创建标签）。
+ * 审核类子会话租约夹具（T-023/T-026/T-036 共用单点；sessionQuery 租约形状
+ * ——T-094 豁免恒死根因的形状锚：header 是租约独立属性、事件流为裸 log
+ * 切片（seq===index 自 0 连续，无 type:'session' 自证事件），
+ * `subagent/descriptor` 承载创建标签（生产 seq 0）、`agent/inbox/spliced`
+ * 承载首条提示词）。消费方：subsessionExemptFrom（收租约对象）。
+ */
+export function reviewerSubsessionLease({ header = { type: 'session', id: 'sub-1', origin: 'subagent' }, label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
+    const events = [];
+    if (label !== undefined) {
+        events.push({ type: 'subagent/descriptor', seq: 0, data: { mode: 'one-shot', label } });
+    }
+    if (prompt !== undefined) {
+        events.push({ type: 'agent/inbox/spliced', seq: 1, data: { target: 'next-turn', inserted: [{ content: [{ type: 'text', text: prompt }] }] } });
+    }
+    return { header, events };
+}
+
+/**
+ * 历史「文件形状」夹具（T-036 结构性死路防回归专用）：header 作为自证事件
+ * 塞进事件流（seq0）且 descriptor 占 seq6——宿主 seq===index 校验下不可能
+ * 的持久化序列化形状。仅供断言该形状不再构成豁免判定的输入（旧数组形状
+ * 判 false 的防回归锚）；生产/新用例一律用 reviewerSubsessionLease。
  */
 export function reviewerSubsessionEvents({ header = { type: 'session', seq: 0, id: 'sub-1', origin: 'subagent' }, label = 'Standards review of T-032', prompt = 'Review the changes since main.' } = {}) {
     const events = [];
@@ -213,4 +236,14 @@ export function reviewerSubsessionEvents({ header = { type: 'session', seq: 0, i
         events.push({ type: 'subagent/descriptor', seq: 6, data: { mode: 'one-shot', label } });
     }
     return events;
+}
+
+/**
+ * 真实 T-094 会话租约回归锚（T-036）：生产持久化日志实测形状归一为
+ * sessionQuery 租约对象——header 独立于事件流、descriptor 占 seq 0、
+ * 事件流不含 type:'session' 自证事件。豁免判定的生产形状锚点。
+ */
+export function readReviewLogFixture() {
+    const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'reviewer-subsession-t094.json'), 'utf8');
+    return JSON.parse(raw);
 }
