@@ -9,7 +9,7 @@ mutation: lifecycle
 
 风险等级: major
 风险面: 对外接口（分类器缝与纯函数签名变更——插件内单消费点，无对外契约）
-状态: active
+状态: completed
 
 ## 背景与目标
 
@@ -64,4 +64,16 @@ mutation: lifecycle
 
 ## 终态与证据
 
-- （关闭时填写）
+- 状态: completed
+- 实现: lib/reviewer-classifier.js（纯函数收租约 `lease`、缝更名 `getLease`、header 缺失畸形租约 fail-open+info 且不缓存、REVIEWER_LEASE_CANARY 金丝雀样本）；lib/index.js:89-116 observeSessionLease 归一 `{events, header}`（header 于 finally dispose 前取出）+ getSessionEvents 薄包装、:241 接线、:286-296 激活期金丝雀（判 false 即 `degradations.reviewerClassifier='reviewer-shape-canary-failed'` + warn）。
+- 测试: npm test 346/346 全绿（duration 2.7s）；新增 T-036 用例六例——租约形状金丝雀、真实 T-094 回归锚（test/fixtures/reviewer-subsession-t094.json，标识脱敏）、根因形态（header 缺失 false+info+不缓存）、畸形租约（events 非数组）、含 false 缓存、旧文件形状结构性死路防回归；agentmap lint passed（with warnings）、anchor-coverage 93/93、expected-fail 账本 346 passed、client-bundle fresh。
+- SOLUTION 对照: SOLUTION.md#子会话审核豁免 已同步租约形状语义（判定源/归一形态/fail-open 枚举/金丝雀条目），核对日期更新 2026-10-22；DOMAIN 登记「会话租约（Session Lease）」；无差异。
+- commit: c01ba34befd647eb3f379a69bf97fed43be6e1e1
+- 语义行数: 403
+- 风险自评: （major 档升档面为插件内单消费点的接口签名变更，无对外契约与数据迁移；行为面收敛于既有 R-01-009/AC-11/AC-12 承诺，豁免阳性面未扩大）
+- review:
+  - 审核方: 两轴独立子代理（Standards 轴 de3d6908、Spec 轴 ce4fa175，独立上下文，均对照代码库核验非只读 diff）
+  - 目的理解: 评审类子会话豁免承诺（PRD R-01-009/AC-11）自 T-026 起结构性未兑现——根因为分类器自证源错挂持久化文件形状；预期行为为租约形状下自证+命中即豁免、失败 fail-open 不缓存；验证方式为单测 + 真实日志回归锚 + 门禁。
+  - 执行方式: `code-review` skill 两轴并行子代理审核；评审基线 fixed point=HEAD（c5b3400）、diff=git diff HEAD 工作树未提交改动 + 未跟踪任务书与夹具；范围覆盖 lib/reviewer-classifier.js、lib/index.js、test/helpers.js 与四个测试文件、SOLUTION/DOMAIN 文书。
+  - 问题与修复: ① DOMAIN「租约」未登记 → DOMAIN.md 术语表登记「会话租约（Session Lease）」并改写子会话自证条目；② test/helpers.js::reviewerSubsessionEvents 零消费方且死路用例未落地 → 补『T-036 结构性死路防回归』用例钉死旧数组形状判 false，夹具转役专用锚；③ helpers inboxSeq 参数无调用方 → 移除参数硬编码 seq 1；④ 同形异名 getObservation/observeSessionLease 与参数 observation → 统一为租约称谓（lease/getLease）；⑤ 夹具含真实 UUID/路径/提示词 → 占位化脱敏、结构逐键不变；⑥（Spec 轴）expected-fail 计数口径 → baselineExecuted 340→346 与实测自洽。
+  - 复审结论: 两轴均无 blocking finding；非阻塞六项全部修复或收口，金丝雀盲区（不覆盖生产缝接线与运行时缺 header 租约）记为已知残余风险——接线回归由接线级桩测试钉住、缺 header 租约 fail-open 不缓存逐轮重判，不构成 blocking。复审后全量测试 346/346 绿。
