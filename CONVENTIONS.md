@@ -26,10 +26,10 @@ owner: agent 主笔，项目属主审批
 
 - agentmap 规范版本: 4
 - 语义行阈值: 50 <!-- 代码审核分档阈值：task 的语义行数（剥离注释与空行后的 diff 增删合计）≤此值为 minor 档 -->
-- 语义行排除路径: `*-lock.*`, `yarn.lock`, `*.min.js`, `*.min.css`, `dist/`, `build/`, `*.snap`, `*.pb.go`, `*_pb2.py` <!-- 语义行数不计入这些 lockfile 与生成物路径（glob） -->
+- 语义行排除路径: `*-lock.*`, `yarn.lock`, `*.min.js`, `*.min.css`, `dist/`, `build/`, `*.snap`, `*.pb.go`, `*_pb2.py` <!-- 语义行数不计入这些 lockfile 与生成物路径（glob） -->；另约定：系统托管文件（AGENTS.md、CONVENTIONS.md、tools/agentmap_lint.py、tools/agentmap_validate_commit_msg.py、.githooks/**）免计语义行（内置豁免，防升级提交自触发累计审计窗口；见 C-035）
 - 累计审计 task 间隔: 10 <!-- 自累计审计复位点起 completed task 达此数即须开累计审计 task -->
 - 累计审计行数间隔: 300 <!-- 窗口全部提交（含短路改动）语义行合计达此数即须开累计审计 task，与 task 间隔先到先触发 -->
-- 累计审计复位点: T-035 <!-- 升级登记：窗口自升级前最后一个 completed task 起算；每次累计审计收尾提交更新 -->
+- 累计审计复位点: T-035 <!-- 升级登记：窗口自升级前最后一个 completed task 起算；每次累计审计收尾提交更新；本次复位点登记于本审计收尾提交 -->
 - 关键路径: 无 <!-- glob 列表，diff 命中即须 major 档；示例：`src/auth/**`, `src/billing/**`；「无」表示未登记 -->
 - 核心文档上限: 30000 token
 - 核心文档分片方案: SOLUTION.md 按子系统专题下钻分片，重组 task 立项时定具体落点（现况 111133 B > 30000 token × 3 B = 90000 B，超限为告警；重组完成后删除本行以恢复硬校验）
