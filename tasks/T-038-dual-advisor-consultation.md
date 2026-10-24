@@ -66,7 +66,7 @@ mutation: lifecycle
 - 实现: 可选 secondaryAdvisor；tool/manual 双发；批次并行/独立结果/分别用量/批次合计；legacy 与自动入口单发；设置卡与迁移文档同步；生产接线字符串失败通告修复。
 - 测试: 基线 346/346；主会话复跑 378/378；client bundle 重建、git diff --check、AgentMap lint（仅存量警告）通过；Herdr 双答与一家超时 PASS（receipts/T-038-dual-advisor-consultation.md）。
 - SOLUTION 对照: R-01-010 的产品契约、咨询服务、配置与状态服务、工具/命令/设置卡及运行时语义已对照实现；核对日期 2026-10-24。
-- commit: 实现提交后登记；设置卡浏览器未验证（receipts/T-038-browser-settings.md），task 保持 active。
+- commit: a6c8890；设置卡浏览器未验证（receipts/T-038-browser-settings.md），task 保持 active。
 - review: Standards agent-2 PASS；Spec agent-3 PASS（blocking 修复后复审）。
 - 审核方: 独立 K2.8 子代理 agent-2（Standards）与 agent-3（Spec），均非实现上下文。
 - 目的理解: secondaryAdvisor 仅 tool/manual 双顾问并行，相同素材、独立展示/记账、部分可用；legacy 与 gate/turn-review 单发不变。
