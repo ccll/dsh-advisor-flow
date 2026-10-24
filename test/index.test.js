@@ -586,7 +586,7 @@ test('R-02-001/AC-01 SettingsForms 契约：default 导出承载 Config，每顶
     // 宿主发现点：runtime.Config = default.Config（cordis unwrapExports 取 default）
     assert.equal(pluginModule.Config, Config);
     const dict = Config.dict ?? {};
-    assert.equal(Object.keys(dict).length, 16, 'Config 声明 16 个顶层键（与 config.js 字段表双清单对齐；enabled 已退役，T-031）');
+    assert.equal(Object.keys(dict).length, 17, 'Config 声明 17 个顶层键（与 config.js 字段表双清单对齐；enabled 已退役 T-031，secondaryAdvisor 新增 R-01-010）');
     for (const [key, child] of Object.entries(dict)) {
         assert.equal(child.meta?.volatile, true, `${key} 必须 volatile（0.2.0 编辑面判定）`);
     }
@@ -1102,4 +1102,96 @@ test('T-035 接线级会话工作区 cwd：sessionQuery header.cwd 驱动仓库�
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+
+test('R-01-010/AC-08 wiring 手动双顾问部分失败：成功意见与带模型失败标记均经 agents.get().steer 实际送达', async () => {
+    const llm = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'primary down' }),
+        answer('副顾问手动意见。'),
+    ]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx } = makeCtx({ llm, agents });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        secondaryAdvisor: { provider: 'test2', model: 'm2' },
+    });
+    services.commandController.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && services.commandController.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(steered.length, 2); // 成功意见 + 失败标记分别 steer，不汇总
+    const texts = steered.map((message) => message.content[0].text);
+    // 成功意见：record 形态保持现有 adviceId 回查行格式（双顾问带模型分块行）
+    const success = texts.find((text) => text.includes('副顾问手动意见。'));
+    assert.ok(success, '成功意见经 steer 实际送达');
+    assert.match(success, /^Advisor \(test2\/m2\)\n\n副顾问手动意见。\n（adviceId: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}）$/);
+    // 失败标记：字符串通告原样 steer（含失败方路由与原因——blocking 修复面）
+    const failureNotice = texts.find((text) => text.includes('Manual Advisor consultation failed'));
+    assert.ok(failureNotice, '失败方标记经 steer 实际送达（不得静默丢弃）');
+    assert.equal(failureNotice, 'Manual Advisor consultation failed: [test/m] primary down');
+    for (const message of steered) {
+        assert.equal(message.source.kind, ADVICE_SOURCE_KIND); // dsh 0.2.0 v4 直接来源
+    }
+});
+
+test('R-01-010/AC-04 wiring 手动双顾问两家均失败：非阻断通告字符串经 steer 实际送达（含两家原因）', async () => {
+    const llm = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'primary down' }),
+        failure({ code: 'ETIMEOUT', message: 'secondary down' }),
+    ]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx } = makeCtx({ llm, agents });
+    const services = apply(ctx, {
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        secondaryAdvisor: { provider: 'test2', model: 'm2' },
+    });
+    services.commandController.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && services.commandController.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(steered.length, 1);
+    const text = steered[0].content[0].text;
+    assert.match(text, /^Manual Advisor consultation failed: /); // 既有失败通告形态
+    assert.ok(text.includes('primary down'));
+    assert.ok(text.includes('secondary down')); // 两家原因均可诊断
+});
+
+test('R-01-002/AC-03 wiring 手动单顾问（legacy）失败：失败通告字符串经 steer 实际送达（pi 文案逐字）', async () => {
+    const llm = createFakeLlm([failure(new Error('no provider adapter for route'))]);
+    const steered = [];
+    const agents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => steered.push(message) } : undefined),
+    };
+    const { ctx } = makeCtx({ llm, agents });
+    const services = apply(ctx, { enabled: true, advisor: { provider: 'test', model: 'm' } });
+    services.commandController.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && services.commandController.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(steered.length, 1);
+    assert.equal(steered[0].content[0].text, 'Manual Advisor consultation failed: no provider adapter for route'); // pi 文案逐字
+    assert.equal(steered[0].source.kind, ADVICE_SOURCE_KIND);
+    // 对照：成功意见保持既有 record 送达格式（adviceId 回查行、无模型分块行）
+    const okLlm = createFakeLlm([answer('legacy 成功意见。')]);
+    const okSteered = [];
+    const okAgents = {
+        get: (sessionId) => (sessionId === 's1' ? { id: 's1', steer: (message) => okSteered.push(message) } : undefined),
+    };
+    const okCtx = makeCtx({ llm: okLlm, agents: okAgents });
+    const okServices = apply(okCtx.ctx, { enabled: true, advisor: { provider: 'test', model: 'm' } });
+    okServices.commandController.startManual('s1', undefined);
+    for (let i = 0; i < 50 && okServices.commandController.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(okSteered.length, 1);
+    assert.match(okSteered[0].content[0].text, /^legacy 成功意见。\n（adviceId: [0-9a-f-]{36}）$/); // record 成功格式不变
+    assert.ok(!okSteered[0].content[0].text.startsWith('Advisor (')); // 旧路径无模型分块行
 });

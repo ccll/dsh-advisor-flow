@@ -196,3 +196,9 @@ test('R-02-001/AC-01 configForms.get 无控制器：告警一条、不注册、�
     assert.equal(warnings.length, 1, '降级告警恰好一条');
     assert.match(warnings[0], /advisor-flow 控制器/, '告警指明控制器缺失');
 });
+
+test('R-01-010 client bundle 含副顾问配置段（构建产物与源码同步，T-038 重建守卫）', () => {
+    const text = readFileSync(join(here, '../lib/client.js'), 'utf8');
+    assert.ok(text.includes('secondaryAdvisor'), 'bundle 必须包含副顾问配置段（npm run build:client 重建后同步）');
+    assert.ok(text.includes('advisor-secondary-provider'));
+});

@@ -131,6 +131,72 @@ test('R-01-001/AC-09、AC-10 拒绝码渲染：SESSION_EXEMPT 与 TOOL_FACE_CLOS
     }
 });
 
+test('R-01-010/AC-01、AC-03 配置副顾问时工具 value 为 {ok:true,batchId,results}；未配置时旧 value 契约逐字不变', async () => {
+    const dualLlm = createFakeLlm([answer('主顾问意见。'), answer('副顾问意见。')]);
+    const dualResolved = resolveAdvisorFlowConfig({
+        enabled: true,
+        advisor: { provider: 'test', model: 'm' },
+        secondaryAdvisor: { provider: 'test2', model: 'm2' },
+    });
+    assert.equal(dualResolved.ok, true, dualResolved.error ?? '');
+    const dualEngine = createConsultationEngine({ llm: dualLlm, config: dualResolved.config, logger: quietLogger });
+    const dualTool = createAskAdvisorTool({ engine: dualEngine });
+    const dual = await dualTool.execute({ question: '这个方案稳吗？' });
+    assert.equal(dual.ok, true);
+    assert.match(dual.batchId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(dual.results.length, 2);
+    assert.equal(dual.results[0].text, '主顾问意见。');
+    assert.equal(dual.results[0].model, 'test/m');
+    assert.equal(dual.results[1].text, '副顾问意见。');
+    assert.equal(dual.results[1].model, 'test2/m2');
+    assert.equal(dualLlm.calls.length, 2);
+    assert.match(dual.results[0].adviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/); // 每家独立意见 UUID
+    assert.match(dual.results[1].adviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.notEqual(dual.results[1].adviceId, dual.results[0].adviceId);
+
+    // 旧契约：无副顾问时 value 形态逐字不变（无 batchId/results 键）
+    const legacyLlm = createFakeLlm([answer('旧形态意见。')]);
+    const legacyResolved = resolveAdvisorFlowConfig({ enabled: true, advisor: { provider: 'test', model: 'm' } });
+    const legacyEngine = createConsultationEngine({ llm: legacyLlm, config: legacyResolved.config, logger: quietLogger });
+    const legacyTool = createAskAdvisorTool({ engine: legacyEngine });
+    const legacy = await legacyTool.execute({ question: 'q' });
+    assert.equal(legacy.ok, true);
+    assert.deepEqual(Object.keys(legacy).sort(), ['adviceId', 'model', 'ok', 'text']);
+    assert.equal(legacy.batchId, undefined);
+    assert.equal(legacy.results, undefined);
+    assert.equal(legacyLlm.calls.length, 1);
+});
+
+test('R-01-010/AC-03 双顾问 render 按模型分块展示：成功块附 adviceId、失败块带 code/reason 标记与批次行；旧 render 形态回归', () => {
+    const tool = createAskAdvisorTool({ engine: { consult: async () => ({ ok: true }) } });
+    const batchId = '11111111-2222-4333-8444-555555555555';
+    const blocks = tool.output.render({}, {
+        ok: true,
+        batchId,
+        results: [
+            { ok: true, adviceId: 'aaaaaaaa-0000-4000-8000-000000000001', text: '主顾问意见。', model: 'test/m' },
+            { ok: false, code: 'ADVISOR_TIMEOUT', reason: 'advisor call timed out after 100ms', model: 'test2/m2' },
+        ],
+    });
+    assert.deepEqual(blocks, [
+        { type: 'text', text: 'Advisor (test/m)\n\n主顾问意见。\n（adviceId: aaaaaaaa-0000-4000-8000-000000000001）' },
+        { type: 'text', text: 'Advisor (test2/m2) failed (ADVISOR_TIMEOUT): advisor call timed out after 100ms' },
+        { type: 'text', text: `（batchId: ${batchId}）` },
+    ]);
+    // output schema 增补 batchId/results（宿主注册契约 output {schema, render} 不变）
+    assert.equal(tool.output.schema.properties.batchId.type, 'string');
+    assert.equal(tool.output.schema.properties.results.type, 'array');
+    assert.equal(tool.output.schema.additionalProperties, false);
+    // 旧单顾问 render 逐字回归
+    const legacyBlocks = tool.output.render({}, { ok: true, adviceId: 'adv-1', text: '意见正文。', model: 'test/m' });
+    assert.deepEqual(legacyBlocks, [{ type: 'text', text: 'Advisor (test/m)\n\n意见正文。\n（adviceId: adv-1）' }]);
+    // 双顾问全失败经工具面沿用旧失败渲染（{ok:false,code,reason} 无 results 时不走分块）
+    const bothFailed = tool.output.render({}, { ok: false, code: 'ADVISOR_FAILED', reason: 'primary down（副顾问亦失败：secondary down）' });
+    assert.equal(bothFailed[0].type, 'text');
+    assert.ok(bothFailed[0].text.includes('ADVISOR_FAILED'));
+    assert.ok(bothFailed[0].text.includes('primary down'));
+});
+
 /**
  * 宿主 tools.register 的注册校验桩（dsh-tools 0.1.5-rc.2 实测形状）：
  * 定义必须有 `output { schema, render }`，缺失即 TypeError。

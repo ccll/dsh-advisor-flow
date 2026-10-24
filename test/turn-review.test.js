@@ -364,3 +364,27 @@ test('T-023 标签与提示词分离匹配：跨源拼接不构成命中（R-01-
     await boundary.review.handleTurnStopping(payload('turn-1', 'sub-7'));
     assert.equal(boundary.consultCalls.length, 1);
 });
+
+test('R-01-010/AC-06 配置副顾问时收口评审仍只调用主顾问（引擎集成：单发主路由，无副顾问调用）', async () => {
+    const { createConsultationEngine } = await import('../lib/consultation.js');
+    const { resolveAdvisorFlowConfig } = await import('../lib/config.js');
+    const { createFakeLlm, answer } = await import('./helpers.js');
+    const resolved = resolveAdvisorFlowConfig({
+        advisor: { provider: 'test', model: 'm' },
+        secondaryAdvisor: { provider: 'test2', model: 'm2' },
+        mode: 'hard',
+    });
+    assert.equal(resolved.ok, true, resolved.error ?? '');
+    const llm = createFakeLlm([answer('Decision: proceed\n\n本轮行为可收口。')]);
+    const engine = createConsultationEngine({ llm, config: resolved.config, logger: { info() {}, warn() {}, debug() {} } });
+    const { review, consultCalls } = makeReview({
+        config: resolved.config,
+        consultImpl: (request) => engine.consult(request),
+    });
+    await review.handleTurnStopping(payload('turn-1'));
+    assert.equal(consultCalls.length, 1);
+    assert.equal(consultCalls[0].entry, 'turn-review');
+    assert.equal(llm.calls.length, 1); // 收口评审单发
+    assert.equal(llm.calls[0].options.provider, 'test');
+    assert.equal(llm.calls[0].options.model, 'm');
+});

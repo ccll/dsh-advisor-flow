@@ -107,3 +107,19 @@ test('R-02-001/AC-01 installAdvisorFlowSettings：source 每调用解包 cell；
     );
     assert.deepEqual(resilient.source(), {});
 });
+
+test('R-01-010 SettingsForms schema 登记 secondaryAdvisor 顶层键（编辑面判定与写缝投影承接）', () => {
+    const dict = AdvisorFlowConfigSchema.dict ?? {};
+    assert.equal(dict.secondaryAdvisor?.meta?.volatile, true, 'secondaryAdvisor 必须 volatile（可编辑顶层键）');
+    // 写缝投影：secondaryAdvisor 进补丁、未知顶层键被剥离
+    const projected = projectSchemaKeys(AdvisorFlowConfigSchema, {
+        advisor: { provider: 'p', model: 'm' },
+        secondaryAdvisor: { provider: 'p2', model: 'm2' },
+        junkKey: 1,
+    });
+    assert.deepEqual(Object.keys(projected).sort(), ['advisor', 'secondaryAdvisor']);
+    assert.deepEqual(projected.secondaryAdvisor, { provider: 'p2', model: 'm2' });
+    // resolve 装载契约：secondaryAdvisor 整值 cell 化、零校验（垃圾值不炸行装载）
+    const { value } = AdvisorFlowConfigSchema['~standard'].validate({ secondaryAdvisor: 42 });
+    assert.equal(value.secondaryAdvisor.get(), 42);
+});

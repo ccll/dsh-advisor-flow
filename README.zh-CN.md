@@ -54,21 +54,26 @@ dsh plugin --profile web add github:ccll/dsh-advisor-flow
 
 配置位于 `settings.yaml` 的 `advisor-flow` 命名空间，也可在 web 设置卡编辑。变更即时生效、无需重启。要点：
 
-- 启用前提：`advisor-flow.enabled: true` 且 `advisor.provider` / `advisor.model` 配齐；配置不齐时功能整体禁用，原因可经 `/advisor status` 查询。
-- `mode` —— 介入强度：`hard`（默认；每次回合收口前强制发起收口评审）或 `soft`（仅守则建议，pi 行为）。
-- `advisor.callTimeoutMs`：单次咨询整体超时，默认 600000ms（10 分钟）。
-- `advisor.maxTokens`：单次咨询输出上限，缺省跟随宿主对所选模型的配置。
+- 启用前提：`advisor.provider` / `advisor.model` 配齐；配置不齐时功能整体禁用，原因可经 `/advisor status` 查询。遗留 `enabled` 键会被忽略。
+- 可选双顾问：把 `secondaryAdvisor.provider` / `secondaryAdvisor.model` 配为不同路由。`ask_advisor` 与 `/advisor-manual` 会以相同脱敏素材并行咨询两家，独立展示回答与失败标记，按顾问记录用量并提供批次合计；一个批次只消耗一个既有咨询额度。自动门与收口评审仍只使用 `advisor`。
+- 不配 `secondaryAdvisor` 即保持旧单顾问行为；副顾问半配或与主顾问同路由会被拒绝。两个顾问段均支持 `reasoningEffort`、`maxTokens` 与 `callTimeoutMs`。
+- `mode` —— 介入强度：`soft`（默认；仅守则建议，pi 行为）或 `hard`（每次回合收口前强制发起收口评审）。
+- `advisor.callTimeoutMs`：单次顾问调用整体超时，默认 600000ms（10 分钟）。
+- `advisor.maxTokens`：单次顾问调用输出上限，缺省跟随宿主对所选模型的配置。
 - 循环门阈值默认 3（下界 2）；三类守则与循环门默认开启；脱敏默认关闭（建议在设置卡开启，开启后密钥形状值以占位符外发）。
 - `privacy.repoContext`（`off | summary | full`，默认 `summary`）、`privacy.fileContent` / `privacy.untrackedContent` / `privacy.trackedFileContent`（默认 `false`）、经 `toolPolicies` 配置 per-tool 披露策略。
 - 完整键位以 `lib/config.js`（命名空间契约的 SSOT）为准，`SOLUTION.md#产品契约` 逐键记载默认值。
 
 ```yaml
 advisor-flow:
-  enabled: true
   advisor:
     provider: deepseek-official
     model: deepseek-reasoner
-  mode: hard
+  # 可选：删除此段即恢复旧单顾问咨询。
+  secondaryAdvisor:
+    provider: minimax-cn
+    model: MiniMax-M3
+  mode: soft
   gates:
     plan: { enabled: true }
     failure: { enabled: true }

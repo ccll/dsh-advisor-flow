@@ -839,3 +839,327 @@ test('R-02-007/AC-03 呈现缝缺席（presentSubsession 未注入）时降级�
     assert.equal(result.ok, true);
     assert.equal(llm.calls.length, 1); // 默认 presentation=subagent 但缝缺席 → 直调兜底
 });
+
+// ---- R-01-010 双顾问并行咨询（C-036）---------------------------------------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+test('R-01-010/AC-01 未配置副顾问时 tool/manual 入口保持旧单发行为与结果形态', async () => {
+    const llm = createFakeLlm([answer('旧行为意见。')]);
+    const engine = createConsultationEngine({ llm, config: resolvedConfig(), logger: quietLogger });
+    const result = await engine.consult({ entry: 'tool', question: 'q', session: 's1' });
+    assert.equal(result.ok, true);
+    assert.equal(llm.calls.length, 1); // 单发
+    assert.equal(result.batchId, undefined); // 旧形态无批次
+    assert.equal(result.results, undefined);
+    assert.match(result.adviceId, UUID_RE);
+});
+
+test('R-01-010/AC-02、AC-03 双顾问批次：素材只装配一次，两家并行收到字节级相同 outbound；批次 UUID 与独立意见 UUID 按主副顺序分列', async () => {
+    let sessionEventQueries = 0;
+    const llm = createFakeLlm([
+        { ...answer('主顾问意见。'), hangUntilReleased: true },
+        { ...answer('副顾问意见。'), hangUntilReleased: true },
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        getSessionEvents: () => { sessionEventQueries += 1; return []; },
+        logger: quietLogger,
+    });
+    const pending = engine.consult({ entry: 'tool', question: '这个方案稳吗？', session: 's1' });
+    await pump(4);
+    // 两家并行在飞：两家 llm.stream 均已发起而两家均未结算
+    assert.equal(llm.calls.length, 2);
+    assert.equal(sessionEventQueries, 1); // 素材只装配一次（两家共享）
+    const [primaryCall, secondaryCall] = llm.calls;
+    assert.equal(primaryCall.options.provider, 'test');
+    assert.equal(primaryCall.options.model, 'test-model');
+    assert.equal(secondaryCall.options.provider, 'second');
+    assert.equal(secondaryCall.options.model, 'm2');
+    const primaryOutbound = primaryCall.options.messages[0].content[0].text;
+    const secondaryOutbound = secondaryCall.options.messages[0].content[0].text;
+    assert.equal(secondaryOutbound, primaryOutbound); // 完全相同的请求内容（AC-02）
+    assert.ok(primaryOutbound.includes('这个方案稳吗？'));
+    assert.ok(primaryOutbound.length > 0);
+    llm.release(0);
+    llm.release(1);
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.match(result.batchId, UUID_RE); // 批次 UUID
+    assert.equal(result.results.length, 2);
+    assert.equal(result.results[0].ok, true);
+    assert.equal(result.results[0].text, '主顾问意见。');
+    assert.equal(result.results[0].model, 'test/test-model');
+    assert.equal(result.results[1].ok, true);
+    assert.equal(result.results[1].text, '副顾问意见。');
+    assert.equal(result.results[1].model, 'second/m2');
+    assert.match(result.results[0].adviceId, UUID_RE);
+    assert.match(result.results[1].adviceId, UUID_RE);
+    assert.notEqual(result.results[1].adviceId, result.results[0].adviceId); // 意见 UUID 独立
+});
+
+test('R-01-010/AC-03 意见分歧不汇总：两家意见原样分列返回，无第三次汇总调用', async () => {
+    const llm = createFakeLlm([answer('应当先补测试。'), answer('应当直接合并。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q', session: 's1' });
+    assert.equal(result.ok, true);
+    assert.equal(llm.calls.length, 2); // 无第三次模型汇总
+    assert.equal(result.results[0].text, '应当先补测试。');
+    assert.equal(result.results[1].text, '应当直接合并。');
+    assert.equal(result.summary, undefined); // 不产生汇总/权重/裁决字段
+    assert.equal(result.synthesis, undefined);
+    assert.equal(result.verdict, undefined);
+});
+
+test('R-01-010/AC-04 部分失败：一家失败显式标记（code/reason/model），另一家成功意见保留', async () => {
+    const llm = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'primary down' }),
+        answer('副顾问独立意见。'),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q', session: 's1' });
+    assert.equal(result.ok, true); // 至少一家成功即保留全部独立结果
+    assert.equal(result.results.length, 2);
+    assert.equal(result.results[0].ok, false);
+    assert.equal(result.results[0].code, 'ADVISOR_FAILED');
+    assert.match(result.results[0].reason, /primary down/);
+    assert.equal(result.results[0].model, 'test/test-model'); // 失败方明确标记
+    assert.equal(result.results[1].ok, true);
+    assert.equal(result.results[1].text, '副顾问独立意见。');
+    assert.equal(result.results[1].model, 'second/m2');
+});
+
+test('R-01-010/AC-04 两家均失败保持 {ok:false,code,reason} 非阻断：原因可诊断且主循环继续', async () => {
+    const llm = createFakeLlm([
+        failure({ code: 'ECONNRESET', message: 'primary down' }),
+        failure({ code: 'ETIMEOUT', message: 'secondary down' }),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q', session: 's1' });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ADVISOR_FAILED');
+    assert.match(result.reason, /primary down/); // 主顾问失败原因可诊断
+    assert.match(result.reason, /secondary down/); // 副顾问失败亦留痕
+    assert.equal(result.results, undefined); // 两家失败沿用旧失败形态
+    assert.equal(llm.calls.length, 2);
+    // 非阻断保证：下一次咨询照常工作
+    const recovered = createConsultationEngine({ llm: createFakeLlm([answer('恢复后的意见。')]), config: resolvedConfig(), logger: quietLogger });
+    assert.equal((await recovered.consult({ entry: 'tool', question: 'q2' })).ok, true);
+});
+
+test('R-01-010/AC-04 一家超时另一家保留：超时方标记 ADVISOR_TIMEOUT，独立 deadline 各自结算', async () => {
+    const llm = createFakeLlm([hung(), answer('副顾问及时意见。')]);
+    const timers = createManualTimers();
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({
+            advisor: { callTimeoutMs: 100 },
+            secondaryAdvisor: { provider: 'second', model: 'm2' }, // 副顾问 deadline 缺省 600000
+        }),
+        timers,
+        clock: timers.clock,
+        logger: quietLogger,
+    });
+    const pending = engine.consult({ entry: 'tool', question: 'q', session: 's1' });
+    await pump(4);
+    timers.advance(100); // 仅主顾问 deadline 到期
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.equal(result.results[0].ok, false);
+    assert.equal(result.results[0].code, 'ADVISOR_TIMEOUT');
+    assert.match(result.results[0].reason, /timed out/);
+    assert.equal(result.results[1].ok, true);
+    assert.equal(result.results[1].text, '副顾问及时意见。');
+});
+
+test('R-01-010/AC-05 一个批次只消耗一个既有预算额度；批次在队列中只占一个槽位', async () => {
+    const engine = createConsultationEngine({
+        llm: createFakeLlm([answer('主意见。'), answer('副意见。')]),
+        config: resolvedConfig({
+            budget: { maxPerSession: 1 },
+            secondaryAdvisor: { provider: 'second', model: 'm2' },
+        }),
+        logger: quietLogger,
+    });
+    const batch = await engine.consult({ entry: 'tool', session: 's1', question: 'q1' });
+    assert.equal(batch.ok, true);
+    assert.equal(batch.results.length, 2);
+    const over = await engine.consult({ entry: 'tool', session: 's1', question: 'q2' });
+    assert.equal(over.ok, false);
+    assert.equal(over.code, 'ADVISOR_BUDGET_EXHAUSTED'); // 一个批次 = 一个既有额度
+    assert.equal(engine.remainingCalls('s1'), 0);
+});
+
+test('R-01-010/AC-05 双顾问用量按 model 记录并归批次；批次合计 token/durationMs/cost，缺项 unavailable', async () => {
+    const ledger = createUsageLedger({ clock: () => 1000 });
+    const llm = createFakeLlm([
+        answer('主意见。', { usage: { inputTokens: 10, outputTokens: 5 } }),
+        answer('副意见。', { usage: { inputTokens: 20, outputTokens: 8 } }),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        usageLedger: ledger,
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', session: 's1', question: 'q' });
+    assert.equal(result.ok, true);
+    const records = ledger.records();
+    assert.equal(records.length, 2);
+    assert.equal(records[0].model, 'test/test-model');
+    assert.equal(records[1].model, 'second/m2');
+    assert.equal(records[0].batchId, result.batchId); // 批次 UUID 关联
+    assert.equal(records[1].batchId, result.batchId);
+    assert.equal(typeof records[0].durationMs, 'number');
+    assert.equal(records[0].cost, 'unavailable'); // 提供方未给出 → unavailable 而非零
+    const batches = ledger.batches();
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].batchId, result.batchId);
+    assert.equal(batches[0].calls, 2);
+    assert.equal(batches[0].inputTokens, 30);
+    assert.equal(batches[0].outputTokens, 13);
+    assert.ok(typeof batches[0].durationMs === 'number' && batches[0].durationMs >= 0); // 批次合计含 durationMs
+    assert.equal(batches[0].cost, 'unavailable');
+    assert.equal(ledger.totals().total.calls, 2); // 台账按两家真实调用累计
+});
+
+test('R-01-010/AC-06 自动门与收口评审入口恒为主顾问单发（配置副顾问也不双发、不增费用）', async () => {
+    const llm = createFakeLlm([
+        answer('Decision: proceed\n\n门放行。'),
+        answer('Decision: proceed\n\n收口放行。'),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        logger: quietLogger,
+    });
+    const gate = await engine.consult({ entry: 'gate', session: 's1', question: 'gq' });
+    assert.equal(gate.ok, true);
+    assert.equal(gate.decision, 'proceed');
+    assert.equal(llm.calls.length, 1); // 门入口单发
+    const turn = await engine.consult({ entry: 'turn-review', session: 's1', question: 'tq' });
+    assert.equal(turn.ok, true);
+    assert.equal(llm.calls.length, 2); // 收口评审单发（累计仍一咨询一调用）
+    for (const call of llm.calls) {
+        assert.equal(call.options.provider, 'test'); // 全部主路由
+        assert.equal(call.options.model, 'test-model');
+    }
+});
+
+test('R-01-010/AC-09 双顾问素材沿用既有隐私分级与脱敏管线，不扩大披露；相同字节外发', async () => {
+    const llm = createFakeLlm([answer('主意见。'), answer('副意见。')]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({
+            secondaryAdvisor: { provider: 'second', model: 'm2' },
+            privacy: { repoContext: 'off', redactSecrets: true },
+        }),
+        getSessionEvents: () => [
+            { type: 'user/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'token: supersecret123' }] } } },
+        ],
+        logger: quietLogger,
+    });
+    const result = await engine.consult({ entry: 'tool', question: '评审', session: 's1' });
+    assert.equal(result.ok, true);
+    const [primaryCall, secondaryCall] = llm.calls;
+    const primarySent = primaryCall.options.messages[0].content[0].text;
+    const secondarySent = secondaryCall.options.messages[0].content[0].text;
+    assert.equal(secondarySent, primarySent); // 相同且经脱敏的同一产物外发
+    for (const sent of [primarySent, secondarySent]) {
+        assert.ok(!sent.includes('supersecret123')); // 脱敏先于出境（R-02-004 管线不扩大）
+        assert.ok(sent.includes('token: [REDACTED]'));
+        assert.ok(sent.includes('<repository_changes')); // 隐私分级注记照常
+    }
+});
+
+test('R-01-010 tracked 移交校验：最近意见按主副顺序合并为校验源，一次认领仍只消费一次；各 adviceId 独立回写', async () => {
+    const llm = createFakeLlm([
+        answer('请检查 test/consultation.test.js 的当前内容再下结论。'),
+        answer('请检查 test/commands.test.js 的当前内容再下结论。'),
+        answer('复查主意见。'),
+        answer('复查副意见。'),
+    ]);
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({
+            secondaryAdvisor: { provider: 'second', model: 'm2' },
+            privacy: { trackedFileContent: true },
+        }),
+        getWorkspaceCwd: async () => process.cwd(),
+        logger: quietLogger,
+    });
+    const first = await engine.consult({ entry: 'tool', session: 's1', question: '初评' });
+    assert.equal(first.ok, true);
+    assert.equal(first.results.length, 2);
+    // 两家分别点名的 tracked 文件可经一次移交一并外发（合并意见为校验源）
+    const second = await engine.consult({
+        entry: 'tool',
+        session: 's1',
+        question: '复查',
+        includeTrackedFiles: ['test/consultation.test.js', 'test/commands.test.js'],
+    });
+    assert.equal(second.ok, true);
+    const sent = llm.calls[2].options.messages[0].content[0].text;
+    assert.ok(sent.includes('<file path="test/consultation.test.js">'));
+    assert.ok(sent.includes('<file path="test/commands.test.js">'));
+    // 一次认领一次性消费：再次移交即拒绝
+    const consumed = await engine.consult({
+        entry: 'tool',
+        session: 's1',
+        question: '再复查',
+        includeTrackedFiles: ['test/consultation.test.js'],
+    });
+    assert.equal(consumed.ok, false);
+    assert.match(consumed.reason, /Tracked file handoff requires/);
+    // 各 adviceId 独立回写：主、副意见分别 reserve/commit 一次性
+    const primaryAdvice = engine.reserveAdvice(first.results[0].adviceId);
+    assert.ok(primaryAdvice?.advice.includes('test/consultation.test.js'));
+    assert.equal(engine.commitAdvice(first.results[0].adviceId), true);
+    assert.equal(engine.commitAdvice(first.results[0].adviceId), false); // 一次性
+    const secondaryAdvice = engine.reserveAdvice(first.results[1].adviceId);
+    assert.ok(secondaryAdvice?.advice.includes('test/commands.test.js'));
+    assert.equal(engine.commitAdvice(first.results[1].adviceId), true);
+});
+
+test('R-01-010/AC-02 双顾问子会话呈现：两家各自呈现、独立句柄与结算，prompt 为同一装配产物', async () => {
+    const llm = createFakeLlm([]); // 直调不应被触发
+    const presentations = [];
+    const engine = createConsultationEngine({
+        llm,
+        config: resolvedConfig({ secondaryAdvisor: { provider: 'second', model: 'm2' } }),
+        logger: quietLogger,
+        presentSubsession: async (request) => {
+            presentations.push(request);
+            return request.agentOptions.provider === 'test'
+                ? { kind: 'answered', text: '主顾问子会话意见。', usage: { inputTokens: 1 } }
+                : { kind: 'answered', text: '副顾问子会话意见。', usage: { outputTokens: 2 } };
+        },
+    });
+    const result = await engine.consult({ entry: 'tool', question: 'q', session: 's1', parent: { id: 'p1' } });
+    assert.equal(result.ok, true);
+    assert.equal(llm.calls.length, 0);
+    assert.equal(presentations.length, 2); // 两家各自呈现（无第三次）
+    assert.equal(presentations[0].agentOptions.provider, 'test');
+    assert.equal(presentations[0].agentOptions.model, 'test-model');
+    assert.equal(presentations[1].agentOptions.provider, 'second');
+    assert.equal(presentations[1].agentOptions.model, 'm2');
+    assert.equal(presentations[1].promptText, presentations[0].promptText); // 同一装配产物
+    assert.ok(presentations[0].signal instanceof AbortSignal);
+    assert.ok(presentations[1].signal instanceof AbortSignal);
+    assert.notEqual(presentations[0].signal, presentations[1].signal); // 独立 deadline/abort 信号
+    assert.equal(result.results[0].text, '主顾问子会话意见。');
+    assert.equal(result.results[1].text, '副顾问子会话意见。');
+});

@@ -255,6 +255,72 @@ test('R-01-009/AC-02 mode 缺省 soft（开箱温和，pi 行为；C-032 废弃 
     assert.equal(result.config.mode, 'soft'); // 与 DEFAULT_INTERVENTION_MODE 一致（解析层单点缺省）
 });
 
+test('R-01-010/AC-07 secondaryAdvisor 半配、同路由、非法值与非对象形态拒绝且原因可诊断；合法配置字段齐备解析', () => {
+    // 半配：仅 provider / 仅 model 均拒绝
+    const halfProvider = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p2' } });
+    assert.equal(halfProvider.ok, false);
+    assert.match(halfProvider.error, /secondaryAdvisor/);
+    const halfModel = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { model: 'm2' } });
+    assert.equal(halfModel.ok, false);
+    assert.match(halfModel.error, /secondaryAdvisor/);
+    // 与主顾问同 provider/model 路由拒绝
+    const sameRoute = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p', model: 'm' } });
+    assert.equal(sameRoute.ok, false);
+    assert.match(sameRoute.error, /secondaryAdvisor/);
+    // 同 provider 不同 model 合法（路由按 provider+model 对判定）
+    const sameProviderOtherModel = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p', model: 'm2' } });
+    assert.equal(sameProviderOtherModel.ok, true);
+    // 非法字段值拒绝（复用主顾问字段表）
+    const invalidTimeout = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p2', model: 'm2', callTimeoutMs: 0 } });
+    assert.equal(invalidTimeout.ok, false);
+    assert.match(invalidTimeout.error, /secondaryAdvisor\.callTimeoutMs/);
+    const invalidMaxTokens = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p2', model: 'm2', maxTokens: -1 } });
+    assert.equal(invalidMaxTokens.ok, false);
+    assert.match(invalidMaxTokens.error, /secondaryAdvisor\.maxTokens/);
+    // 非对象形态拒绝
+    const notObject = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: 'p2/m2' });
+    assert.equal(notObject.ok, false);
+    assert.match(notObject.error, /secondaryAdvisor/);
+
+    // 合法配置：字段齐备、effort/maxTokens/callTimeoutMs 独立解析
+    const valid = resolveAdvisorFlowConfig({
+        advisor: { provider: 'p', model: 'm', reasoningEffort: 'low' },
+        secondaryAdvisor: { provider: 'p2', model: 'm2', reasoningEffort: 'high', maxTokens: 4096, callTimeoutMs: 30000 },
+    });
+    assert.equal(valid.ok, true);
+    assert.equal(valid.config.secondaryAdvisor.provider, 'p2');
+    assert.equal(valid.config.secondaryAdvisor.model, 'm2');
+    assert.equal(valid.config.secondaryAdvisor.reasoningEffort, 'high');
+    assert.equal(valid.config.secondaryAdvisor.maxTokens, 4096);
+    assert.equal(valid.config.secondaryAdvisor.callTimeoutMs, 30000);
+    // callTimeoutMs 缺省填默认（独立 deadline 缺省同主顾问口径）
+    const defaulted = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p2', model: 'm2' } });
+    assert.equal(defaulted.ok, true);
+    assert.equal(defaulted.config.secondaryAdvisor.callTimeoutMs, DEFAULT_CALL_TIMEOUT_MS);
+    // 未知子键警告保留透传（与主顾问段同语义）
+    const stray = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: 'p2', model: 'm2', strayKey: 1 } });
+    assert.equal(stray.ok, true);
+    assert.ok(stray.warnings.includes('secondaryAdvisor.strayKey'));
+    assert.equal(stray.config.secondaryAdvisor.strayKey, 1);
+});
+
+test('R-01-010/AC-01 未配置副顾问（含双空段）时旧单顾问配置、派生启用与返回行为不变', () => {
+    const legacy = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' } });
+    assert.equal(legacy.ok, true);
+    assert.equal(legacy.config.secondaryAdvisor, undefined); // 缺省不启用双发
+    assert.equal(legacy.config.enabled, true); // primary 派生启用规则不变
+    // 设置卡「留空整段」语义：provider/model 均空（null）= 未配置副顾问
+    const emptySecondary = resolveAdvisorFlowConfig({ advisor: { provider: 'p', model: 'm' }, secondaryAdvisor: { provider: null, model: null } });
+    assert.equal(emptySecondary.ok, true);
+    assert.equal(emptySecondary.config.secondaryAdvisor, undefined);
+    assert.equal(emptySecondary.config.enabled, true);
+    // 主顾问缺失时派生禁用不变——即使副顾问路由齐备也不反向启用
+    const missingPrimary = resolveAdvisorFlowConfig({ secondaryAdvisor: { provider: 'p2', model: 'm2' } });
+    assert.equal(missingPrimary.ok, true);
+    assert.equal(missingPrimary.config.enabled, false);
+    assert.equal(missingPrimary.config.reason, 'missing-advisor-model');
+});
+
 test('R-02-001/AC-04 T-023 turnReviewExemptPatterns 解析：默认双语预置（C-023）、显式覆盖、空数组关闭、非法拒绝', () => {
     const base = { advisor: { provider: 'p', model: 'm' } };
     const def = resolveAdvisorFlowConfig(base);
