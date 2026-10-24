@@ -1012,3 +1012,64 @@ test('R-02-001/AC-01 控制器 dispose 后订阅终止：publish 与宿主旧引
     assert.deepEqual(controller.getState().config, before, 'dispose 后 load 不复活订阅');
     assert.equal(controller.getState().dirty, false);
 });
+
+test('R-01-010 副顾问区控件渲染并写入 secondaryAdvisor 段；保存经一次 mutate 落盘（留空整段即单顾问）', async () => {
+    const { controller, container, rawRef, form } = await renderedCard({ raw: { advisor: { provider: 'p', model: 'm' } } });
+    // 副顾问区五个控件齐备（provider/model/effort/maxTokens/callTimeoutMs）
+    for (const id of ['advisor-secondary-provider', 'advisor-secondary-model', 'advisor-secondary-reasoning-effort', 'advisor-secondary-max-tokens', 'advisor-secondary-call-timeout-ms']) {
+        assert.ok(findById(container, id), `副顾问控件 ${id} 存在`);
+    }
+    const html = JSON.stringify(container);
+    assert.ok(html.includes('副顾问'), '副顾问区标题呈现');
+    assert.ok(html.includes('advisor-secondary-provider'));
+    assert.ok(html.includes('advisor-secondary-call-timeout-ms'));
+    assert.ok(!html.includes('reasoningEffort'), 'camelCase 连写词不出现在卡片文案（含副顾问区）');
+    // 编辑副顾问段 → 保存（留空主顾问区不动）
+    controller.setField('secondaryAdvisor.provider', 'p2');
+    controller.setField('secondaryAdvisor.model', 'm2');
+    controller.setField('secondaryAdvisor.reasoningEffort', 'high');
+    controller.setField('secondaryAdvisor.callTimeoutMs', 30000);
+    const saved = await controller.save();
+    assert.equal(saved.ok, true);
+    const nested = nestOps(form.mutations.at(-1));
+    assert.deepEqual(nested.secondaryAdvisor, {
+        provider: 'p2',
+        model: 'm2',
+        reasoningEffort: 'high',
+        callTimeoutMs: 30000,
+    });
+    // 留空整段（provider/model 双清）→ 解析后副顾问缺省，单顾问行为不变
+    controller.setField('secondaryAdvisor.provider', null);
+    controller.setField('secondaryAdvisor.model', null);
+    const cleared = await controller.save();
+    assert.equal(cleared.ok, true);
+    const raw = rawRef.current;
+    assert.equal(raw.secondaryAdvisor.provider, null);
+    assert.equal(raw.secondaryAdvisor.model, null);
+    const { resolveAdvisorFlowConfig } = await import('../../lib/config.js');
+    const resolved = resolveAdvisorFlowConfig(raw);
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.config.secondaryAdvisor, undefined); // 双空段 = 未配置副顾问
+    assert.equal(resolved.config.enabled, true); // 主顾问派生启用不受影响
+});
+
+test('R-01-010/AC-07 设置卡镜像校验：半配与同路由副顾问草稿在保存前阻断并给出可诊断原因', async () => {
+    const { controller } = await renderedCard({ raw: { advisor: { provider: 'p', model: 'm' } } });
+    // 半配：仅 provider
+    controller.setField('secondaryAdvisor.provider', 'p2');
+    let state = controller.getState();
+    assert.match(state.validationError, /secondaryAdvisor/);
+    assert.equal(await controller.save().then((s) => s.ok), false); // 保存被阻断
+    // 同路由：与主顾问一致
+    controller.discard();
+    controller.setField('secondaryAdvisor.provider', 'p');
+    controller.setField('secondaryAdvisor.model', 'm');
+    state = controller.getState();
+    assert.match(state.validationError, /secondaryAdvisor/);
+    const saved = await controller.save();
+    assert.equal(saved.ok, false);
+    assert.match(saved.error, /secondaryAdvisor/); // 原因可诊断
+    // 修复为合法路由 → 校验通过
+    controller.setField('secondaryAdvisor.model', 'm2');
+    assert.equal(controller.getState().validationError, undefined);
+});

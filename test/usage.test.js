@@ -136,3 +136,46 @@ test('T-014 Scout 二次调用计入用量台账（scout 计量）', () => {
     assert.equal(totals.byEntry.scout.calls, 1);
     assert.equal(totals.total.calls, 1);
 });
+
+test('R-01-010/AC-05 台账记录携带 batchId/model/durationMs；批次合计按 batchId 聚合，缺项 unavailable 而非零', () => {
+    const ledger = createUsageLedger({ clock: () => 1000 });
+    ledger.record({ adviceId: 'a1', entry: 'tool', session: 's1', batchId: 'b-1', model: 'p/m1', durationMs: 120, inputTokens: 3 });
+    ledger.record({ adviceId: 'a2', entry: 'tool', session: 's1', batchId: 'b-1', model: 'p/m2', durationMs: 80, outputTokens: 2 });
+    ledger.record({ adviceId: 'a3', entry: 'tool', session: 's1', model: 'p/m1', durationMs: 50 }); // 旧单顾问形态：无批次
+    const [r1, , r3] = ledger.records();
+    assert.equal(r1.batchId, 'b-1');
+    assert.equal(r1.model, 'p/m1');
+    assert.equal(r1.durationMs, 120);
+    assert.equal(r1.inputTokens, 3);
+    assert.equal(r1.cost, 'unavailable');
+    assert.equal(r3.batchId, 'unavailable'); // 旧形态记录批次不可得（unavailable 而非零）
+    assert.equal(r3.model, 'p/m1'); // 按顾问记录 model 与批次无关
+    assert.equal(r3.durationMs, 50);
+    const batches = ledger.batches();
+    assert.equal(batches.length, 1);
+    assert.deepEqual(batches[0], {
+        batchId: 'b-1',
+        calls: 2,
+        inputTokens: 3,
+        outputTokens: 2,
+        cacheReadTokens: 'unavailable',
+        cacheWriteTokens: 'unavailable',
+        totalTokens: 'unavailable',
+        reasoningTokens: 'unavailable',
+        durationMs: 200, // 批次 durationMs 合计
+        cost: 'unavailable',
+    });
+    // 另一批次独立聚合
+    ledger.record({ adviceId: 'a4', entry: 'manual', session: 's1', batchId: 'b-2', model: 'p/m1', durationMs: 10, cost: 0.5 });
+    assert.equal(ledger.batches().length, 2);
+    // JSONL 落盘纯增量：新字段进盘，旧行字段不变（旧 JSONL 可读）
+    const lines = [];
+    const jsonl = createUsageLedger({ path: '/tmp/advisor-usage-r01010.jsonl', fs: { appendFileSync: (path, line) => lines.push(line) } });
+    jsonl.record({ adviceId: 'a1', entry: 'tool', batchId: 'b-1', model: 'p/m1', durationMs: 5 });
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.batchId, 'b-1');
+    assert.equal(parsed.model, 'p/m1');
+    assert.equal(parsed.durationMs, 5);
+    assert.equal(parsed.adviceId, 'a1');
+    assert.equal(parsed.entry, 'tool');
+});

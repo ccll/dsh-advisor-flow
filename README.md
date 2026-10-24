@@ -54,21 +54,26 @@ No host source patches and no postinstall scripts — plugin integration is decl
 
 Configuration lives in the `advisor-flow` namespace of `settings.yaml` and can also be edited in the web settings card. Changes apply live, no restart needed. Highlights:
 
-- Enable prerequisites: `advisor-flow.enabled: true` plus `advisor.provider` / `advisor.model`; with an incomplete configuration the whole feature stays disabled and the reason is queryable via `/advisor status`.
-- `mode` — intervention strength: `hard` (default; forces a completion review before every turn closes) or `soft` (guidelines only, pi behavior).
-- `advisor.callTimeoutMs` — overall timeout for one consultation, default 600000 ms (10 minutes).
-- `advisor.maxTokens` — output cap for one consultation; by default it follows the host's configured cap for the selected model.
+- Enable prerequisites: `advisor.provider` / `advisor.model`; with an incomplete configuration the whole feature stays disabled and the reason is queryable via `/advisor status`. The legacy `enabled` key is ignored.
+- Optional dual consultation: set `secondaryAdvisor.provider` / `secondaryAdvisor.model` to a different route. `ask_advisor` and `/advisor-manual` then call both advisors in parallel with the same redacted materials, show independent answers and failure markers, and record per-advisor usage plus batch totals. One batch consumes one existing consultation allowance. Automatic gates and completion reviews still use only `advisor`.
+- Omit `secondaryAdvisor` to keep the legacy single-advisor behavior. Incomplete or duplicate secondary routes are rejected. Both advisor sections support `reasoningEffort`, `maxTokens`, and `callTimeoutMs`.
+- `mode` — intervention strength: `soft` (default; guidelines only, pi behavior) or `hard` (forces a completion review before every turn closes).
+- `advisor.callTimeoutMs` — overall timeout for one advisor call, default 600000 ms (10 minutes).
+- `advisor.maxTokens` — output cap for one advisor call; by default it follows the host's configured cap for the selected model.
 - Loop-gate threshold defaults to 3 (minimum 2); the three guidelines and the loop gate are on by default; secret redaction is off by default (enable it in the settings card — recommended, secret-shaped values are then sent as placeholders).
 - `privacy.repoContext` (`off | summary | full`, default `summary`), `privacy.fileContent` / `privacy.untrackedContent` / `privacy.trackedFileContent` (default `false`), per-tool disclosure policies via `toolPolicies`.
 - For the full key list, `lib/config.js` is the source of truth for the namespace contract, and `SOLUTION.md#产品契约` documents every key with its default.
 
 ```yaml
 advisor-flow:
-  enabled: true
   advisor:
     provider: deepseek-official
     model: deepseek-reasoner
-  mode: hard
+  # Optional: remove this section for legacy single-advisor consultations.
+  secondaryAdvisor:
+    provider: minimax-cn
+    model: MiniMax-M3
+  mode: soft
   gates:
     plan: { enabled: true }
     failure: { enabled: true }

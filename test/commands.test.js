@@ -11,6 +11,7 @@ import {
 import { createConsultationEngine } from '../lib/consultation.js';
 import { createUsageLedger } from '../lib/usage.js';
 import { createStatusProvider } from '../lib/status.js';
+import { isRecord } from '../lib/util.js';
 import { createFakeLlm, answer, failure } from './helpers.js';
 
 /** Build a controller wired to a real engine + fake llm + recorder delivery. */
@@ -250,4 +251,109 @@ test('R-02-007/AC-05 status 呈现子会话工具否决计数（T-035；C-034）
     const deniedText = advisorStatusText({ ...snapshot, subsessionGuardStats: { denied: 2, byTool: { subagent: 2 } } });
     assert.match(deniedText, /子会话工具否决: 2 次/);
     assert.doesNotMatch(advisorStatusText(snapshot), /子会话工具否决/);
+});
+
+test('R-01-010/AC-08 手动双顾问咨询成功：两家意见分别 steer 送达（按模型标识、独立 adviceId，不汇总）', async () => {
+    const { controller, llm, delivered } = makeController({
+        raw: { advisor: { provider: 'test', model: 'm' }, secondaryAdvisor: { provider: 'test2', model: 'm2' } },
+        programs: [
+            answer('主顾问手动意见。', { usage: { inputTokens: 1 } }),
+            answer('副顾问手动意见。', { usage: { inputTokens: 2 } }),
+        ],
+    });
+    controller.startManual('s1', '焦点审查');
+    for (let i = 0; i < 50 && controller.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(llm.calls.length, 2);
+    const advices = delivered.filter((entry) => isRecord(entry.advice));
+    assert.equal(advices.length, 2); // 分别送达，不汇总
+    assert.ok(advices[0].advice.text.includes('主顾问手动意见。'));
+    assert.ok(advices[1].advice.text.includes('副顾问手动意见。'));
+    assert.equal(advices[0].advice.model, 'test/m');
+    assert.equal(advices[1].advice.model, 'test2/m2');
+    assert.match(advices[0].advice.adviceId, /^[0-9a-f-]{36}$/);
+    assert.notEqual(advices[1].advice.adviceId, advices[0].advice.adviceId);
+});
+
+test('R-01-010/AC-04、AC-08 手动双顾问部分失败：成功意见照常送达，失败方以含模型与原因的标记送达', async () => {
+    const { controller, delivered } = makeController({
+        raw: { advisor: { provider: 'test', model: 'm' }, secondaryAdvisor: { provider: 'test2', model: 'm2' } },
+        programs: [failure({ code: 'ECONNRESET', message: 'primary down' }), answer('副顾问意见。')],
+    });
+    controller.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && controller.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const advices = delivered.filter((entry) => isRecord(entry.advice));
+    assert.equal(advices.length, 1);
+    assert.ok(advices[0].advice.text.includes('副顾问意见。'));
+    const notice = delivered.find((entry) => typeof entry.advice === 'string');
+    assert.ok(notice, '失败方标记经唤醒式消息送达');
+    assert.match(notice.advice, /Manual Advisor consultation failed/);
+    assert.match(notice.advice, /test\/m/); // 失败方路由标记
+    assert.match(notice.advice, /primary down/);
+});
+
+test('R-01-010/AC-04 手动双顾问两家均失败：保持既有失败通告形态（含原因），主循环继续', async () => {
+    const { controller, delivered } = makeController({
+        raw: { advisor: { provider: 'test', model: 'm' }, secondaryAdvisor: { provider: 'test2', model: 'm2' } },
+        programs: [failure({ code: 'ECONNRESET', message: 'primary down' }), failure({ code: 'ETIMEOUT', message: 'secondary down' })],
+    });
+    controller.startManual('s1', '焦点');
+    for (let i = 0; i < 50 && controller.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const advices = delivered.filter((entry) => isRecord(entry.advice));
+    assert.equal(advices.length, 0); // 无成功意见送达
+    const notice = delivered.find((entry) => typeof entry.advice === 'string');
+    assert.ok(notice);
+    assert.match(notice.advice, /^Manual Advisor consultation failed: /); // pi 文案形态不变
+    assert.match(notice.advice, /primary down/);
+    assert.match(notice.advice, /secondary down/); // 副顾问失败原因可诊断
+});
+
+test('R-01-010/AC-08 手动双顾问取消：收束两家在飞调用、无用量副作用、状态收敛', async () => {
+    const hangProgram = { hangUntilReleased: true, chunks: [{ type: 'text-delta', text: 'x' }, { type: 'finish', reason: { kind: 'stop' } }] };
+    const { controller, usageLedger, llm } = makeController({
+        raw: { advisor: { provider: 'test', model: 'm' }, secondaryAdvisor: { provider: 'test2', model: 'm2' } },
+        programs: [{ ...hangProgram }, { ...hangProgram }],
+    });
+    const started = controller.startManual('s1', '审查');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 先取消再断言：失败态也不得悬挂在飞调用（deadline timer 必须被清理）
+    assert.equal(controller.cancelManual('s1'), true);
+    const result = await started.promise;
+    llm.release(0);
+    llm.release(1);
+    assert.equal(result.ok, false); // 取消终态
+    assert.equal(controller.manualRunning('s1'), false);
+    assert.equal(usageLedger.totals().total.calls, 0); // 取消不留用量记录
+    assert.equal(llm.calls.length, 2); // 两家均在飞后被一并收束
+    assert.ok(llm.calls.every((call) => call.returned === true)); // 在飞流均被收束，不悬挂
+});
+
+test('R-01-010/AC-05 status 呈现副顾问路由与批次合计用量（按顾问分列 + batchId 合计）', async () => {
+    const { controller } = makeController({
+        raw: { advisor: { provider: 'test', model: 'm' }, secondaryAdvisor: { provider: 'test2', model: 'm2' } },
+        programs: [
+            answer('主意见。', { usage: { inputTokens: 3, outputTokens: 2 } }),
+            answer('副意见。', { usage: { inputTokens: 4, outputTokens: 1 } }),
+        ],
+    });
+    controller.startManual('s1', '用量验收');
+    for (let i = 0; i < 50 && controller.manualRunning('s1'); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const snapshot = controller.snapshotFor('s1');
+    assert.equal(snapshot.secondaryAdvisor.provider, 'test2');
+    assert.equal(snapshot.secondaryAdvisor.model, 'm2');
+    assert.equal(snapshot.usageBatches.length, 1);
+    assert.equal(snapshot.usageBatches[0].calls, 2);
+    assert.equal(snapshot.usageBatches[0].inputTokens, 7);
+    assert.equal(snapshot.usageBatches[0].outputTokens, 3);
+    const text = advisorStatusText(snapshot);
+    assert.match(text, /模型: test\/m/);
+    assert.match(text, /副顾问: test2\/m2/);
+    assert.match(text, /批次 [0-9a-f-]{36}: calls=2 .*inputTokens=7/); // 批次合计
 });

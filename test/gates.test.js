@@ -438,3 +438,33 @@ test('R-01-005/AC-09 门命中先送达预通告：评审请求发出前会话�
     assert.ok(delivered[0].text.startsWith('Automatic Advisor loop review\nLoop gate: bash repeated')); // pi details.question 并入文本
     assert.ok(delivered.length >= 2);
 });
+
+test('R-01-010/AC-06 配置副顾问时循环门仍只触发主顾问单发（引擎集成：一次评审仅一次主路由调用）', async () => {
+    const { createConsultationEngine } = await import('../lib/consultation.js');
+    const { resolveAdvisorFlowConfig } = await import('../lib/config.js');
+    const { createFakeLlm, answer } = await import('./helpers.js');
+    const resolved = resolveAdvisorFlowConfig({
+        advisor: { provider: 'test', model: 'm' },
+        secondaryAdvisor: { provider: 'test2', model: 'm2' },
+        gates: { loop: { enabled: true, threshold: 2 } },
+        failureMode: 'block-tool',
+    });
+    assert.equal(resolved.ok, true, resolved.error ?? '');
+    const llm = createFakeLlm([answer('Decision: proceed\n\n重复调用已评审，放行。')]);
+    const engine = createConsultationEngine({ llm, config: resolved.config, logger: { info() {}, warn() {}, debug() {} } });
+    const { engine: gate, consultCalls } = makeGate({
+        loop: { enabled: true, threshold: 2 },
+        failureMode: 'block-tool',
+        consultImpl: (request) => engine.consult(request),
+    });
+    const exec = hostExec('bash', { command: 'npm test' }, 'sess-1', 'c1');
+    await gate.handlePreExecute(exec, async () => ({ kind: 'allow' }));
+    await gate.handlePreExecute(exec, async () => ({ kind: 'allow' }));
+    const decision = await gate.handlePreExecute(exec, async () => ({ kind: 'allow' }));
+    assert.equal(decision.kind, 'allow');
+    assert.equal(consultCalls.length, 1); // 门触发一次评审
+    assert.equal(consultCalls[0].entry, 'gate');
+    assert.equal(llm.calls.length, 1); // 仅一次模型调用且走主路由（无副顾问调用、不翻倍费用）
+    assert.equal(llm.calls[0].options.provider, 'test');
+    assert.equal(llm.calls[0].options.model, 'm');
+});

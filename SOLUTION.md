@@ -1,7 +1,7 @@
 ---
 doc-type: solution
 mutation: living
-核对日期: 2026-10-22
+核对日期: 2026-10-24
 owner: agent 主笔，项目属主审批
 ---
 
@@ -355,9 +355,7 @@ flowchart TD
 - **咨询工具** `ask_advisor`（文案与参数面逐字对齐 pi 0.8.2，英文原文）：
   - 入参：`question?`、`draft?`、`gitContext?`（none|summary|full，执行者只可收窄）、`includeTrackedFiles?`（tracked 相对路径清单，需顾问点名 + 全局授权）、`includeUntracked?`（新文件清单，需授权）、`force?`（不实现——依附 Jev 筛查，NG-6）。
   - 工具描述/参数描述/pi `promptGuidelines` 文案：从 pi 0.8.2 源程序化提取，逐字等值断言（deviation 零容忍）。
-  - 返回：文本 = `Advisor ({model})
-
-{markdown}` + adviceId（UUID 形态）回查行；空意见按失败处置（诊断码）。
+  - 返回：单顾问文本 = `Advisor ({model})\n\n{markdown}` + adviceId（UUID 形态）回查行；空意见按失败处置（诊断码）。配置副顾问时 value 为 `{ok:true,batchId,results:[{ok:true,adviceId,text,model}|{ok:false,code,reason,model},…]}`，render 按模型分块展示；至少一家成功即保留成功意见与另一家失败标记，两家均失败沿用 `{ok:false,code,reason}`（R-01-010）。
   - 失败诊断码：`NO_ADVISOR_MODEL` / `ADVISOR_TIMEOUT` / `ADVISOR_FAILED` / `ADVISOR_GATE_INVALID` / `ADVISOR_BUDGET_EXHAUSTED` / `SESSION_EXEMPT` / `TOOL_FACE_CLOSED`（工具面守卫拒绝码，C-025；reason 明示属预期、勿重试与替代路径）。
 - **回写工具** `record_advisor_outcome`：
   - 入参：`adviceId`、`adoption`（followed/not-followed/unknown）、`validationStatus`（passed/failed/not-run/unknown）。
@@ -370,6 +368,7 @@ flowchart TD
   - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 扩展项）。
 - **设置命名空间** `advisor-flow`（profile 行配置 entry config，宿主 SettingsForms 经模块 `Config` 导出驱动 describe/update（C-026）；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017；mode 缺省经 C-032 回归 soft，与 pi 一致）：
   - 咨询功能启用状态由配置派生：`advisor.provider` 与 `advisor.model` 齐备即启用，任一缺失即整体禁用且状态可查询（R-02-001/AC-03/AC-13；无独立启用开关）；settings.yaml 遗留 `enabled` 键按弃用处理——告警并忽略，停用走宿主插件级开关（C-030）。`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
+  - `secondaryAdvisor`（可选；R-01-010，C-036）：字段与 `advisor` 相同，仅用于 tool/manual 双顾问；缺失时旧单顾问行为不变，半配、非法值或与主顾问相同 provider/model 路由时拒绝。主、副顾问分别应用自己的 effort、maxTokens 与 callTimeoutMs；自动门与收口评审不读取此键。
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
   - `gates.loop`：`enabled`（默认 true）、`threshold`（默认 3，下界 2）
@@ -417,14 +416,18 @@ flowchart TD
 | R-02-006 | 咨询服务 | SOLUTION.md#咨询服务 | lib/materials.js；lib/git-context.js；lib/observer.js；lib/consultation.js（collectFileEntries、resolveWorkspaceCwd） |
 | R-02-007 | 咨询服务 | SOLUTION.md#咨询服务 | lib/subsession.js；lib/consultation.js；lib/subsession-guard.js |
 | R-01-009 | 门控服务 | SOLUTION.md#门控服务 | lib/turn-review.js；lib/reviewer-classifier.js；lib/consultation.js；lib/delivery.js |
+| R-01-010 | 咨询服务 | SOLUTION.md#咨询服务；SOLUTION.md#运行时、并发与失败语义 | lib/config.js；lib/consultation.js；lib/tools/ask-advisor.js；lib/commands.js；lib/usage.js；lib/status.js；lib/client/ |
 
 ## 子系统与模块
 
 ### 咨询服务
-- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、子会话呈现缝发起（`subagents.start` one-shot 顾问子会话，缝缺失或发布前失败降级 llm.stream 直调；承接 R-02-007）、reasoningEffort 能力门控、回复协议英文提示词（按需咨询 Verdict 行 / 循环门与收口评审 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-01-009、R-02-004、R-02-005、R-02-006、R-02-007）
+- 职责: 顾问模型调用的唯一入口——经素材装配器的上下文组装（六区共享预算、先脱敏后截断）、子会话呈现缝发起（`subagents.start` one-shot 顾问子会话，缝缺失或发布前失败降级 llm.stream 直调；承接 R-02-007）、reasoningEffort 能力门控、回复协议英文提示词（按需咨询 Verdict 行 / 循环门与收口评审 Decision 行）、决策行对抗性解析、UUID adviceId 分配、意见账本（issue/reserve/commit/release）、用量记录（承接 R-01-001、R-01-002、R-01-008、R-01-009、R-01-010、R-02-004、R-02-005、R-02-006、R-02-007）
 - 关键内部结构:
   - 入口枚举 `entry ∈ tool|manual|gate|turn-review`；`turn-review` 为收口评审入口（C-021），Decision 协议问句聚焦执行者本轮行为，素材六区契约不变。
-  - `turn-review` 意见不入意见账本、用量照常入台账（与 gate 意见同口径）。
+  - 双顾问批次（R-01-010）：tool/manual 且 secondaryAdvisor 齐备时，素材只装配一次，主、副顾问共享相同 outbound 并行调用；各自生成 adviceId、history、usage 与子会话生命周期，batchId 只关联结果。至少一家成功即返回独立 results，两家失败收敛既有失败形状；无二次装配、第三次汇总或互相可见的回答。
+  - 批次计数：一个 consult 仍只占一个 FIFO 槽并消耗一个 `budget.maxPerSession` 额度；usage 另按两家真实模型调用记录 token、durationMs、cost 与 batch totals。
+  - 最近意见：双顾问成功文本按主、副顺序合并为 tracked 移交校验源，各 adviceId 分别入账；一次 tracked 认领仍只消费最近批次一次。
+  - `turn-review` 意见不入意见账本、用量照常入台账（与 gate 意见同口径）；gate/turn-review 即使配置副顾问也保持主顾问单发。
 - 关键内部结构:
   - LLM 服务从应用根解析（`ctx.root?.get('llm') ?? ctx.llm`），防隔离作用域 NO_ADAPTER。
   - 子会话呈现缝（R-02-007）：呈现提供方经已注册名单解析（`subagents.list()`），无可用提供方即发布前失败——按降级语义走 llm.stream；`start()` 发布成功后的 run 失败一律映射诊断码，不得降级重发（AC-04）。
@@ -512,13 +515,14 @@ flowchart TD
   - turnReviewExemptPatterns 兼作咨询工具面守卫的判定清单（C-025）：审核类子会话豁免与工具面守卫共用同一关键词语义，不新增键。
   - SettingsForms 适配（C-026）：插件模块导出 schemastery `Config`（宿主经 `entry.fiber.runtime.Config` 发现，describe/update 由此驱动）；schema 成员一律宽松 `z.any().volatile()`——volatile 承担编辑面判定，零校验零默认填充，校验单点仍在解析器；entry config 的 volatile cell 统一经 `unwrapVolatileConfig` 解包（cell 非透传 proxy，读值必须 `.get()`）；宿主热更新经 `loader/volatile-update` 事件桥接 live re-apply，读时求值点始终兜底且仅在 source 原文变化时应用（运行时写入不回退）。
   - 持久写缝：卡片保存走宿主客户端管线——一次 `settings.mutate(ns, ops)`（宿主 configForms 通道）；插件服务端写缝 `settings.update(ns, patch)`（SettingsForms volatile 写缝，落 profile patch 行配置）保留给 gateway/API 面；补丁按 schema 顶层声明键投影——宿主 validatePaths 拒绝 schema 外顶层键，未知键留在文档层（junk 保留语义不破坏）。
-  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数、子会话执行面否决计数。
+  - `secondaryAdvisor` 同时登记解析器与 SettingsForms schema，持久写缝与旧键迁移按既有顶层段合并；状态快照含主、副路由。
+  - 状态快照含启用态、路由、门状态、pending、最近活动、用量摘要、逐次明细、剩余次数、决策统计、工具面守卫拒绝计数、子会话执行面否决计数；双顾问 usage record 增 `batchId`、`model`、`durationMs`，按顾问分列并以 batchId 计算 token/cost/duration 合计，缺项仍记 unavailable 而非零。
 - 代码位置: lib/config.js、lib/settings.js、lib/gateway.js、lib/usage.js、lib/status.js
 - 实现: 单端（宿主）+ client 卡片（lib/client/）
 
 ### 咨询工具
 - 职责: 注册 `ask_advisor` 工具面（六参数英文 schema），参数校验、错误转译与执行面守卫判定（承接 R-01-001）
-- 关键内部结构: 工具体仅转发咨询服务；`output {schema, render}` 强制；value 契约 `{ok:true,adviceId,text}|{ok:false,code,reason}`；render 前缀 `Advisor (model)`。
+- 关键内部结构: 工具体仅转发咨询服务；`output {schema, render}` 强制；legacy value 契约 `{ok:true,adviceId,text}|{ok:false,code,reason}` 不变；双顾问 value 增 `{batchId,results}`，每家成功或失败独立，render 以 `Advisor (model)` 分块并附各自 adviceId 或失败标记。
   - 工具面守卫（R-01-001/AC-09、AC-10；C-025）：execute 前判定调用方会话——hard 模式拒绝一切调用（`TOOL_FACE_CLOSED`）；soft 模式拒绝审核类子会话与已登记顾问子会话（`SESSION_EXEMPT`）；守卫失败 fail-open 放行（沿用引擎禁用与预算路径）；拒绝计数入状态快照。
 - 代码位置: lib/tools/ask-advisor.js；lib/tool-guard.js
 - 实现: 单端（宿主）
@@ -531,13 +535,14 @@ flowchart TD
 
 ### 命令面
 - 职责: `/advisor-manual`、`/advisor status|gates|on|off|toggle` 命令挂载（承接 R-01-002、R-02-003）
-- 关键内部结构: manual 并发替换（新请求 abort 在飞）；失败 steer 通告；status 含逐次明细/剩余次数/决策统计。
+- 关键内部结构: manual 并发替换（新请求 abort 在飞，双顾问两家同时收束）；双顾问按模型分别 steer 成功意见或失败标记，不做汇总；status 含主副路由、按顾问与批次合计用量、逐次明细/剩余次数/决策统计。
 - 代码位置: lib/commands.js
 - 实现: 单端（宿主）
 
 ### web 设置卡
 - 职责: 插件管理页 Advisor Flow 配置卡（模型路由、门矩阵、新配置键、隐私档位、风险提示），值流走宿主 configForms 管线（承接 R-02-001 的 GUI 面）
 - 关键内部结构: 挂点为插件管理页 keyed 槽 `plugins.bundle.config`（key = 包名 = `dsh-advisor-flow`；与 dsh-context 同构，C-029），组件渲染于 bundle 详情页 `detailSections`；注册整体活在 `ctx.effect` 内且仅当宿主 `configForms.whileServed(['advisor-flow'])` 判定本命名空间被服务（apply 同步帧绝不触碰 slots，C-029）。值流：读经 `configForms.get(ns)` 控制器快照订阅（宿主 describe 镜像，revision 栅栏与自愈由宿主承载）；写经保存时一次 `form.mutate(全量脏字段 set ops)`（宿主正规写缝 `settings.mutate` → volatile write → profile patch → volatile-update live re-apply）；自有 gateway RPC 保留模型目录（`llm/listProviders`、`session/modelCatalog`）与模型声明值查询（`advisor-flow/modelInfo`，T-034：目录快照不携带模型 limits——宿主 `session/modelCatalog` 只透出 provider/id/name/inputModalities，maxTokens 占位数值经 `ctx.llm.resolveModelInfo` 解析的 `defaultMaxTokens` 透传，未声明/通道失败回退原文，按 provider+model 对正负缓存、通道失败一次性降级）。旧键迁移提示；redactSecrets=false 风险提示（C-008 ②）；顾问区数字输入 `advisor.callTimeoutMs`（占位默认 600000）与 `advisor.maxTokens`（占位「跟随所选模型配置」），清空 = 回归缺省。
+  - 副顾问区：复用主顾问 provider/model/effort/maxTokens/callTimeoutMs 控件与目录解析，写入 `secondaryAdvisor`；留空整段即单顾问，主顾问未配置横幅逻辑不变（R-01-010）。
   - 卡片平铺常开: 0.2.0 插件详情页为每插件独享配置面，无折叠交互；保留静态标题行（标题/描述/未保存徽标，不可点），表单常开（C-030）。
   - 未配置提示横幅（唯一表面）: `advisor.provider`/`advisor.model` 任一缺失（含暂存补丁后的生效值）时，整卡置顶呈现 `advisorflow_banner` 提示横幅——不出手的原因可查询、字段照常可编辑，补齐后即时消失；表单内不再叠加第二段近似告警（R-02-001/AC-03/AC-13，C-030）。provider/model 下拉在「目录不可用、provider 目录外或该 provider 无模型声明」时回退自由文本输入，保证路由始终可补齐。
   - 保存控件常驻: footer 按钮组以 sticky 定位常驻滚动视口底部（R-02-001/AC-09；C-024）。
@@ -567,7 +572,7 @@ flowchart TD
 ## 运行时、并发与失败语义
 
 - **门内联等待**：循环门命中时工具调用暂停等待咨询完成（同步 await），上限 `callTimeoutMs`（默认 600s，可配，C-015）；超时按阻断模式处置并记录。
-- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate|turn-review)`），prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
+- **子会话呈现语义**（R-02-007）：`presentation=subagent`（默认）时咨询经 `subagents.start(呈现提供方, {label, prompt, parent, signal, agentOptions, toolFilter})` 以 one-shot 顾问子会话发起——label 标识顾问与入口（`Advisor review (tool|manual|gate|turn-review)`），双顾问批次附加主/副顾问模型路由以便区分，prompt 承载装配素材（六区契约不变），`agentOptions` 覆盖为顾问路由（provider/model/能力门控 effort/maxTokens），`toolFilter={allow:[]}` 零工具（NG-1），协议提示经子会话 persona 承载；结算 `SubagentResult.output` 取意见文本（非文本块过滤），空输出 = 失败（AC-06），`stopReason: 'error'` 映射 ADVISOR_FAILED。呈现提供方「可用」的判定为语义合规：不继承父上下文（素材由 prompt 全量承载，保 R-02-006 契约）且声明 `agentOptions` 与 `toolFilter` 能力——判定先于 start（经 `getProvider`/`subagents.list()` 名单解析），无可用提供方即发布前失败。发布前失败（缝缺失、名单无可用提供方、start 拒绝）降级 llm.stream 直调并记降级原因（AC-03）；发布后的 run 失败（含 `run.result` rejection）映射失败/中止终态、不降级重发（AC-04）。run 句柄在结算或中止后于 finally 无条件 `dispose()`。
 - **失败处置**：无重试——咨询失败（provider 错误、空回复、缺决策行、矛盾决策行、预算耗尽）上抛为门失败类别，按阻断模式处置，原因 info 级留痕。
 - **收口评审语义**（C-021，`mode=hard`）：回合收口前同步评审；评审对象是执行者回合与执行类子会话收口（顾问子会话与审核类子会话豁免见下两条）；proceed 放行收口（意见仅日志留痕），revise/blocked 使意见全文经 steer 送达、执行者带意见续跑（steer 即反对收口）；同回合同一收口事件至多一次评审（已评审标记放行后续派发）；评审失败（超时/空意见/预算耗尽/呈现失败）一律放行收口并留痕；`failureMode` 不适用于收口缝；软模式下会话压缩/重写事件后经 steer 送达一条守则提醒（非阻断、不发起咨询）。
 - **顾问子会话豁免**：
@@ -600,7 +605,7 @@ flowchart TD
   - 否决 reason 三点式（禁令与理由/属预期勿重试/替代路径=以素材作答），计数按工具名累计入 `/advisor status`。
 - **abort 极性**：门咨询遇 caller 中止时按阻断模式处置（warn-and-continue 下放行）；pi 同场景为拦截，该偏离是否对齐待东家裁决。
 - **丢弃可见性**：每次丢弃/处置记录 info 级日志（原因 + 会话 + 入口类型），状态可查。
-- **并发**：同会话咨询串行（FIFO，容量上限，满则丢新）；手动咨询新请求替换在飞；不同会话并行互不影响。
+- **并发**：同会话咨询批次串行（FIFO，容量上限，满则丢新）；双顾问批次内主、副顾问并行，各自 deadline 与 abort，批次等待两家均收敛；一家失败只标记该家，另一家结果保留。手动咨询新请求替换在飞并收束两家；不同会话并行互不影响。
 - **重入防护**：咨询工具自身被循环门豁免；顾问调用不经过工具层（子会话呈现经 `subagents` 服务缝，非工具调用）；工具面守卫对顾问子会话与审核类子会话拒绝工具咨询（第二递归向量不依赖 toolFilter 单点）；子会话执行面守卫在执行边界否决已登记顾问子会话内的一切工具调用（T-035——toolFilter 剥不掉的 own 层委派工具在执行边界被拦，第三防线）。
 - **会话封锁**：block-session 模式下 blocked 决策使会话进入封锁态——`blockOnBlocked`（默认 true）时宿主 `agents.cancel` 尽力停止当前执行，且后续所有工具调用一律拦截（拒绝原因 = 封锁原因），直至会话重建。
 - **恢复**：无独立暂停/停机态；配置 signature 变更原子重建，在飞调用经 dispose 信号收束。

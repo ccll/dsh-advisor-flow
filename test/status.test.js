@@ -129,3 +129,19 @@ test('R-01-009/AC-10 状态快照呈现介入强度与收口评审计数（缺�
     const denyingSnapshot = createStatusProvider({ config: { ...soft, mode: 'hard' }, engine: denying }).snapshot();
     assert.deepEqual(denyingSnapshot.subsessionGuardStats, { denied: 2, byTool: { subagent: 2 } });
 });
+
+test('R-01-010 状态快照含主、副顾问路由与批次合计；未配置副顾问时副路由不可得', () => {
+    const withSecondary = config({
+        enabled: true,
+        advisor: { provider: 'p', model: 'm' },
+        secondaryAdvisor: { provider: 'p2', model: 'm2', callTimeoutMs: 30000 },
+    });
+    const provider = createStatusProvider({ config: withSecondary });
+    const snapshot = provider.snapshot();
+    assert.equal(snapshot.secondaryAdvisor.provider, 'p2');
+    assert.equal(snapshot.secondaryAdvisor.model, 'm2');
+    assert.equal(snapshot.secondaryAdvisor.callTimeoutMs, 30000);
+    assert.deepEqual(snapshot.usageBatches, []); // 无批次时为空清单
+    const legacy = createStatusProvider({ config: config({ enabled: true, advisor: { provider: 'p', model: 'm' } }) }).snapshot();
+    assert.equal(legacy.secondaryAdvisor, undefined); // 旧配置形态不可得（非虚构）
+});
