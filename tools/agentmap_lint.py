@@ -171,6 +171,16 @@ AC_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{2}-\d{3}/AC-\d{2}(?![0-9A-Za-z])")
 C_ID_RE = re.compile(r"(?<![0-9A-Za-z])C-\d{3}[A-Z]?(?![0-9A-Za-z])")
 R_RANGE_RE = re.compile(r"R-(\d{2})-(\d{3})\s*[～~-]\s*(?:R-(\d{2})-)?(\d{3})")
 
+# v5 里程碑仪表区：`## 里程碑` 到下一个 `## ` 标题之间。checkbox 只允许
+# 出现在该区域，防止契约区条目里长出第二个状态表面。
+MILESTONE_ZONE_RE = re.compile(r"^##\s+里程碑\s*$", re.MULTILINE)
+MILESTONE_SECTION_HEADING_RE = re.compile(r"^###\s+(M-\d{3})\s+(\S.*?)\s*$", re.MULTILINE)
+MILESTONE_COUNT_SUFFIX_RE = re.compile(r"[（(](\d+)/(\d+)[）)]\s*$")
+MILESTONE_GOALS_LINE_RE = re.compile(r"^-\s*主推目标:\s*(.+?)\s*$", re.MULTILINE)
+CHECKBOX_ITEM_RE = re.compile(r"^-\s*\[([ xX])\]\s*(R-\d{2}-\d{3})[ \t]+(\S.*?)\s*$", re.MULTILINE)
+REQUIREMENT_TITLE_RE = re.compile(r"^####\s+(R-\d{2}-\d{3})\s+(\S.*?)\s*$", re.MULTILINE)
+GOAL_FIELD_RE = re.compile(r"^-\s*关联目标:\s*(G-\d+)\s*$", re.MULTILINE)
+
 # Near-miss tripwire: malformed ids (R-100-001, C-001AB, T-0001) match none of
 # the reference regexes above, so every traceability check silently ignores
 # them. The loose patterns over-match each id family on purpose; each hit is
@@ -193,12 +203,18 @@ ID_NEAR_MISS_RULES = (
         re.compile(r"(?<![0-9A-Za-z])C-\d{2,}[A-Za-z]*(?![0-9A-Za-z])"),
         "C-NNN or C-NNN + uppercase letter",
     ),
+    (
+        "milestone",
+        re.compile(r"(?<![0-9A-Za-z])M-\d{2,}[0-9A-Za-z]*(?![0-9A-Za-z])"),
+        "M-NNN",
+    ),
 )
 ID_STRICT_VALIDATORS = {
     "task": re.compile(r"T-\d{3}").fullmatch,
     "requirement": re.compile(r"R-(?:\d{3}|\d{2}-\d{3})").fullmatch,
     "acceptance": re.compile(r"R-\d{2}-\d{3}/AC-\d{2}").fullmatch,
     "decision": re.compile(r"C-\d{3}[A-Z]?").fullmatch,
+    "milestone": re.compile(r"M-\d{3}").fullmatch,
 }
 REQUIREMENT_GROUP_RE = re.compile(r"^-\s*需求组\s+(\d{2})\s*[:：]\s*(\S.*?)\s*$", re.MULTILINE)
 SOLUTION_VIEW_RULES = {
@@ -301,7 +317,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "13876f16031b0e6d7d49d88836068b4597935c0d6485a2bd0bf3094ecddadfca",
+    "AGENTS.md": "426b6df41010288c24741a49cabb1f57987af665645006ecca0f4eb2ae80c741",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
@@ -356,8 +372,22 @@ class Result:
     risk_counts: dict[str, int] = field(default_factory=dict)
     legacy_cutoff: date | None = None
     spec_version: int = 0
+    # v4 证据纪律边界（登记值首次达到 ≥4 的提交）与已查标记：直升升级
+    # 链（v2/v3 直跳 ≥4，历史无「规范版本: 4」字面量）的存量 task 豁免
+    # 判定用。None 语义＝已查且边界不存在，用 v4_boundary_checked 区分
+    # 「未查」与「查过无边界」。
+    v4_boundary: str | None = None
+    v4_boundary_checked: bool = False
     # v4 升级边界（升级提交前首次出现的 task），lint() 早期算一次共享。
     legacy_tasks: set[str] = field(default_factory=set)
+    # v5 里程碑仪表区：（M-ID, 名称（不含计数后缀）, 已完成数, 总数），
+    # 供 --report 进度汇总；v4 及以下恒为空。
+    milestones: list[tuple[str, str, int, int]] = field(default_factory=list)
+    # 提及过某 R-ID 的 completed task 集合（累计审计 task 除外），
+    # 勾选对账的 completed 提及腿。
+    completed_task_requirements: set[str] = field(default_factory=set)
+    # v6 方案研判闸口：CONVENTIONS「方案研判」登记解析缓存，None = 未解析。
+    divergence_review: bool | None = None
     # 运行上下文：--staged/--pre-push 场景下累计审计触发的阻断语义
     # 收窄（见 check_v4_tiering），由 lint() 主流程设置。
     staged: bool = False
@@ -1886,6 +1916,8 @@ def check_traceability(root: Path, result: Result) -> None:
         result.errors.append("CONVENTIONS.md: requirement groups must be registered once in 01..nn order")
     for group in sorted({rid[2:4] for rid in requirement_ids} - registered_groups):
         result.errors.append(f"CONVENTIONS.md: missing requirement group {group}")
+    group_of_role = {role: group for group, role in requirement_groups}
+    check_requirement_list_sections(root, prd_plain, group_of_role, result)
     for rid in sorted(set(LEGACY_R_ID_RE.findall(solution_plain))):
         result.errors.append(f"SOLUTION.md: legacy requirement reference {rid} must migrate to R-gg-nnn")
     goal_ids = GOAL_RE.findall(prd_plain)
@@ -2451,7 +2483,7 @@ def code_review_start(root: Path, result: Result) -> int | None:
 
 
 def agentmap_spec_version(root: Path, result: Result) -> int:
-    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档。
+    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档，5 = +PRD 里程碑化（仪表区+契约区），6 = +方案研判闸口。
 
     Result.spec_version 记录首读结果作为缓存，lint() 在 check_system_files
     之前调用一次，后续调用方直接命中缓存。
@@ -2472,12 +2504,12 @@ def agentmap_spec_version(root: Path, result: Result) -> int:
     if match is None:
         result.warnings.append(
             "CONVENTIONS.md: missing agentmap 规范版本, linting with v1 rules; "
-            "bootstrap upgrade registers 规范版本: 4"
+            "bootstrap upgrade registers 规范版本: 6"
         )
         return 1
     version = int(match.group(1))
-    if version not in (1, 2, 3, 4):
-        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3 or 4")
+    if version not in (1, 2, 3, 4, 5, 6):
+        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5 or 6")
         return 1
     result.spec_version = version
     return version
@@ -2706,12 +2738,14 @@ def window_semantic_lines(
     if not text.strip():
         return 0
     # split_commits 把每提交累计 push 进 commit_totals 后归零 total：
-    # 窗口口径取逐提交之和（含开头首个 commit 行 append 的 0），total
-    # 只剩输出最末节（倒序下最早提交）的行数，不能直接用。
+    # 窗口口径取逐提交之和。倒序输出下首个 commit 行 append 的是 0，
+    # per_commit 各元素为中间各节累计；EOF 后 flush 留在 total 里的
+    # 恰是最末节（倒序下最早提交）的行数——必须并入总和，否则最老
+    # 提交被系统性丢计（T-120 审计 B-1）。
     total, _files, per_commit = parse_semantic_diff(
         text, exclude_globs, split_commits=True
     )
-    return sum(per_commit) if per_commit else total
+    return (sum(per_commit) + total) if per_commit else total
 
 
 def spec_version_origin_commit(root: Path, result: Result) -> str | None:
@@ -2756,6 +2790,90 @@ def v4_effective_commit(root: Path, result: Result) -> str | None:
         git_data_error(result, "v4 origin lookup failed", error)
         return None
     return shas[0] if shas else None
+
+
+def registered_version_at(root: Path, sha: str) -> int | None:
+    """Registered `agentmap 规范版本` value in the given commit's CONVENTIONS.md."""
+    try:
+        text = run_git(root, ["show", f"{sha}:CONVENTIONS.md"])
+    except GitCommandError:
+        return None
+    match = re.search(r"^-\s*agentmap 规范版本:\s*(\d+)\s*$", text, re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
+def v4_evidence_boundary(root: Path, result: Result) -> str | None:
+    """Commit where the registered 规范版本 first reached 4 or higher.
+
+    语义行数等 v4 证据行纪律的追溯边界。与 v4_effective_commit（pickaxe
+    只认「规范版本: 4」字面量）互补：直升升级链（值从 2/3 直接跳到 5/6）
+    的历史中没有 4 字面量，pickaxe 命中不了，但「升级不追溯」对存量 task
+    的豁免同样成立——fmocr 直升 v6 时 8 个 v2 时代终态 task 被错误追责
+    即此缝隙。实现按版本行变更提交逐个读取登记值，首个 ≥4 即边界；从未
+    达到 4（直升改动尚未入史）返回 None。
+
+    pickaxe 用 -G 而非 -S：版本行值变更（2→4、4→6）是等长替换，字符串
+    出现次数不变，-S 不命中；-G 按 diff 行内容匹配，内容变更必命中。
+    """
+    if result.v4_boundary_checked:
+        return result.v4_boundary
+    try:
+        shas = run_git(
+            root,
+            [
+                "log", "--reverse", "--format=%H",
+                "-G", "agentmap 规范版本", "--", "CONVENTIONS.md",
+            ],
+        ).split()
+    except GitCommandError as error:
+        git_data_error(result, "v4 evidence boundary lookup failed", error)
+        result.v4_boundary_checked = True
+        return None
+    boundary = None
+    for sha in shas:
+        value = registered_version_at(root, sha)
+        if value is not None and value >= 4:
+            boundary = sha
+            break
+    result.v4_boundary = boundary
+    result.v4_boundary_checked = True
+    return boundary
+
+
+def task_predates_v4_evidence_boundary(
+    root: Path, result: Result, rel_path: str
+) -> bool:
+    """True when the task file settled before the v4 evidence-discipline boundary.
+
+    定格点＝task 文件最后一次入史的提交；工作树存在未提交改动或文件尚未
+    跟踪时，定格点视为当前（晚于一切已提交边界，不豁免）——负例校验与
+    staged 自查因此不受影响。边界不存在（历史从未登记值 ≥4）时，定格于
+    已提交历史的 task 全部早于边界，豁免成立。
+    """
+    boundary = v4_evidence_boundary(root, result)
+    try:
+        status = run_git(
+            root, ["status", "--porcelain", "--", rel_path], expected=(0, 1)
+        ).strip()
+    except GitCommandError:
+        return False
+    if status:
+        return False
+    try:
+        last = run_git(root, ["log", "-1", "--format=%H", "--", rel_path]).strip()
+    except GitCommandError:
+        return False
+    if not last:
+        return False
+    if boundary is None:
+        return True
+    try:
+        count_text = run_git(
+            root, ["rev-list", "--count", f"{boundary}..{last}"]
+        ).strip()
+    except GitCommandError:
+        return False
+    return int(count_text or "0") == 0
 
 
 def parse_commit_log_z(text: str) -> dict[str, tuple[str, list[str]]]:
@@ -2897,7 +3015,7 @@ def agentmap_v4_params(root: Path, result: Result) -> dict | None:
     params = {
         "line_threshold": number("语义行阈值", 50),
         "task_interval": number("累计审计 task 间隔", 10),
-        "line_interval": number("累计审计行数间隔", 300),
+        "line_interval": number("累计审计行数间隔", 800),
         "exclude_globs": glob_list("语义行排除路径", False),
         "critical_globs": glob_list("关键路径", True),
     }
@@ -2930,7 +3048,7 @@ RISK_FACE_WORDS = ("契约", "资金", "数据迁移", "对外接口", "鉴权")
 
 DOC_PATH_PREFIXES = (
     "tasks/", "PRD.md", "SOLUTION.md", "DOMAIN.md", "CONVENTIONS.md",
-    "AGENTS.md", "RATIONALE.md", "README", "docs/",
+    "AGENTS.md", "RATIONALE.md", "RATIONALE/", "TODO.md", "README", "docs/",
 )
 
 
@@ -2980,6 +3098,7 @@ def check_v4_tiering(root: Path, result: Result) -> None:
     task_states: dict[str, str] = {}
     task_texts: dict[str, str] = {}
     task_evidence: dict[str, str] = {}
+    task_paths: dict[str, str] = {}
     task_risk: dict[str, str] = {}
     audit_tasks: set[str] = set()
     for path in sorted(tasks_dir.rglob("*.md")):
@@ -2992,6 +3111,7 @@ def check_v4_tiering(root: Path, result: Result) -> None:
             continue
         task_texts[task_id] = text
         task_states[task_id] = task_state(text) or ""
+        task_paths[task_id] = path.relative_to(root).as_posix()
         task_risk[task_id] = ""
         risk_match = re.search(r"^风险等级:\s*(minor|major)\s*$", text, re.MULTILINE)
         if risk_match:
@@ -3084,13 +3204,19 @@ def check_v4_tiering(root: Path, result: Result) -> None:
         commit_files[sha] = files
 
     # 引用/短路纪律是 v4 引入的，扫描范围限 v4 生效点之后——v3 历史
-    # 提交无此纪律，全史扫描会对存量仓库刷误报。生效点=pickaxe 命中
-    # 的 v4 升级提交；升级未提交时（fallback HEAD）为 HEAD 本身，纪律
-    # 窗口为空。注意与累计审计窗口（复位点起算）相互独立：后者有意
-    # 把升级前积累的改动计入，前者只约束 v4 生效后的新提交。
+    # 提交无此纪律，全史扫描会对存量仓库刷误报。升级路径仓库的生效点
+    # =pickaxe 命中的 v4 升级提交。v5 原生仓库（bootstrap 直接装 v5）
+    # 历史上从无「规范版本: 4」行可 pickaxe，纪律自规范版本源点生效，
+    # 与 legacy_tasks 检测同源；源点查找失败（git 数据异常）时保持
+    # HEAD 兜底（窗口为空，不对 v3 历史刷误报）。注意与累计审计窗口
+    # （复位点起算）相互独立：后者有意把升级前积累的改动计入，前者
+    # 只约束纪律生效后的新提交。
     v4_origin = v4_effective_commit(root, result)
     if v4_origin is None:
-        v4_origin = head
+        if agentmap_spec_version(root, result) >= 5:
+            v4_origin = spec_version_origin_commit(root, result)
+        if v4_origin is None:
+            v4_origin = head
     try:
         discipline_shas = set(
             run_git(root, ["rev-list", f"{v4_origin}..{head}"]).split()
@@ -3153,8 +3279,12 @@ def check_v4_tiering(root: Path, result: Result) -> None:
             r"^-\s*语义行数:\s*(\d+)\s*$", evidence, re.MULTILINE
         )
         if declared_lines is None:
-            # v3 存量 task（升级边界前）无 v4 证据行纪律，不追溯。
-            if task_id not in result.legacy_tasks:
+            # v3 存量 task（升级边界前）无 v4 证据行纪律，不追溯。直升
+            # 升级链（历史从未登记值 ≥4）的存量 task 同理，见
+            # task_predates_v4_evidence_boundary。
+            if task_id not in result.legacy_tasks and not task_predates_v4_evidence_boundary(
+                root, result, task_paths.get(task_id, "")
+            ):
                 result.errors.append(
                     f"tasks/{task_id}-*: completed task needs 语义行数: <n> evidence"
                 )
@@ -3452,6 +3582,13 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 result.risk_counts[risk[0] if len(risk) == 1 else "未标注"] = (
                     result.risk_counts.get(risk[0] if len(risk) == 1 else "未标注", 0) + 1
                 )
+            if current_state == "completed" and not is_audit:
+                # 勾选对账的 completed 提及腿：宽松必要条件——completed task
+                # 文本提及该 R-ID 即计入。累计审计 task 的提及是审计范围而不
+                # 是交付证据，排除以免漏勾提醒催熟假勾选。
+                result.completed_task_requirements.update(
+                    R_ID_RE.findall(strip_code_fences(text))
+                )
             require_matrix = within_scope
             require_review = review_start is not None and int(task_id[2:]) >= review_start
             if spec_version >= 4 and not legacy_v3:
@@ -3492,6 +3629,21 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 if require_review and len(risk) != 1:
                     result.errors.append(f"{task_label}: needs exactly one 风险等级: standard or high")
             check_task_sections(root, result, path, text, require_matrix, risk_level)
+            if (
+                risk_level == "major"
+                and not is_audit
+                and divergence_review_enabled(root, result)
+                and not (old is not None and task_state(old) in TERMINAL_STATES)
+            ):
+                plan = re.search(r"^## 收敛方案\s*$([\s\S]*?)(?=^##\s|\Z)", text, re.MULTILINE)
+                if plan is None or not (
+                    re.search(r"^\s*(?:-\s*)?无分叉点:", plan.group(1), re.MULTILINE)
+                    or "命中: 研判标准" in plan.group(1)
+                ):
+                    result.errors.append(
+                        f"{task_label}: major task 收敛方案 needs divergence evidence "
+                        "(无分叉点: line or 命中: 研判标准 entry)"
+                    )
             if old is None:
                 new_task_ids.append(task_id)
             if require_matrix and current_state not in TERMINAL_STATES:
@@ -3950,6 +4102,330 @@ def check_runtime_contract(root: Path, result: Result) -> None:
             result.errors.append("tools/agentmap_lint.py: staged content differs from the running canonical lint")
 
 
+def check_milestones(root: Path, result: Result, strict_anchors: bool) -> None:
+    """v5 里程碑仪表区：结构、双向对账与勾选谓词；v4 及以下不检查。
+
+    勾选是进度视图不是验收判定。勾选的机械必要条件是存在提及该需求的
+    completed task（累计审计 task 除外）；追溯行与 AC 锚点由各自的全局
+    检查按既有档位把关。齐备而未勾的给漏勾提醒：此时正确动作就是勾选，
+    提醒不构成催熟假勾选的压力（齐备判定本身已排除未交付需求）。
+    """
+    if agentmap_spec_version(root, result) < 5:
+        return
+    prd_path = root / "PRD.md"
+    if not prd_path.is_file():
+        return
+    text = read_text_checked(prd_path, result, "PRD.md")
+    if text is None:
+        return
+    plain = strip_code_fences(text)
+    zone_match = MILESTONE_ZONE_RE.search(plain)
+    if zone_match is None:
+        result.errors.append(
+            "PRD.md: missing 里程碑 section; v5 requires the milestone dashboard "
+            "(see AGENTS 文件规范 PRD 章)"
+        )
+        return
+    zone_start = zone_match.end()
+    next_zone = re.search(r"^##\s+", plain[zone_start:], re.MULTILINE)
+    zone_end = zone_start + next_zone.start() if next_zone else len(plain)
+    zone = plain[zone_start:zone_end]
+    outside = plain[: zone_match.start()] + plain[zone_end:]
+    for match in CHECKBOX_ITEM_RE.finditer(outside):
+        line = plain.count("\n", 0, match.start()) + 1
+        result.errors.append(
+            f"PRD.md:{line}: task checkbox outside the 里程碑 dashboard; "
+            "requirement checkboxes belong to the milestone zone only"
+        )
+    body_titles = {rid: title for rid, title in REQUIREMENT_TITLE_RE.findall(plain)}
+    headings = list(MILESTONE_SECTION_HEADING_RE.finditer(zone))
+    seen_milestones: set[str] = set()
+    ordered_milestones: list[tuple[int, str]] = []
+    parsed: list[tuple[str, str, list[tuple[str, bool, str]], set[str], tuple[int, int] | None]] = []
+    zone_entries: list[tuple[str, bool, str]] = []
+    for index, match in enumerate(headings):
+        mid, raw_name = match.group(1), match.group(2).strip()
+        count_match = MILESTONE_COUNT_SUFFIX_RE.search(raw_name)
+        name = MILESTONE_COUNT_SUFFIX_RE.sub("", raw_name).strip()
+        if mid in seen_milestones:
+            result.errors.append(f"PRD.md: duplicate milestone id {mid}")
+        seen_milestones.add(mid)
+        ordered_milestones.append((int(mid[2:]), mid))
+        block_start = match.end()
+        block_end = headings[index + 1].start() if index + 1 < len(headings) else len(zone)
+        block = zone[block_start:block_end]
+        rows = [
+            (rid, ticked.lower() == "x", title)
+            for ticked, rid, title in CHECKBOX_ITEM_RE.findall(block)
+        ]
+        goal_lines = MILESTONE_GOALS_LINE_RE.findall(block)
+        if len(goal_lines) > 1:
+            result.errors.append(f"PRD.md: {mid} has more than one 主推目标 line")
+        declared_goals = {
+            token.strip() for token in goal_lines[0].split(",") if token.strip()
+        } if goal_lines else set()
+        parsed.append(
+            (
+                mid,
+                name,
+                rows,
+                declared_goals,
+                (int(count_match.group(1)), int(count_match.group(2))) if count_match else None,
+            )
+        )
+        zone_entries.extend(rows)
+    if ordered_milestones != sorted(ordered_milestones):
+        result.errors.append("PRD.md: milestone ids must appear in ascending M-nnn order")
+    zone_ids = [rid for rid, _, _ in zone_entries]
+    for rid in sorted(set(zone_ids)):
+        if zone_ids.count(rid) > 1:
+            result.errors.append(
+                f"PRD.md: requirement {rid} appears in more than one milestone index row"
+            )
+    for rid, _, title in zone_entries:
+        if rid not in body_titles:
+            result.errors.append(
+                f"PRD.md: milestone index references missing requirement {rid}"
+            )
+        elif title != body_titles[rid]:
+            result.errors.append(
+                f"PRD.md: milestone index title for {rid} does not match the "
+                f"requirement heading ({title!r} != {body_titles[rid]!r})"
+            )
+    for rid in sorted(set(body_titles) - set(zone_ids)):
+        result.errors.append(f"PRD.md: requirement {rid} is not listed in any milestone index")
+    goal_ids = set(GOAL_RE.findall(plain))
+    requirement_bodies = sections(plain, R_HEADING_RE)
+    requirement_goal: dict[str, str] = {}
+    for rid, body in requirement_bodies.items():
+        found = GOAL_FIELD_RE.findall(body)
+        if len(found) == 1:
+            requirement_goal[rid] = found[0]
+    solution_path = resolve_map_file(root, "SOLUTION.md")
+    traced: set[str] | None = None
+    if solution_path is not None and solution_path.is_file():
+        solution_text = read_text_checked(solution_path, result, solution_path.name)
+        if solution_text is not None:
+            trace_body = solution_trace_body(strip_code_fences(solution_text))
+            if trace_body is not None:
+                traced = {rid for rid, *_ in solution_trace_rows(trace_body)}
+    milestone_stats: list[tuple[str, str, int, int]] = []
+    for mid, name, rows, declared_goals, declared_count in parsed:
+        done = sum(1 for _, ticked, _ in rows if ticked)
+        total = len(rows)
+        if declared_count and declared_count != (done, total):
+            result.errors.append(
+                f"PRD.md: {mid} heading count {declared_count[0]}/{declared_count[1]} "
+                f"does not match actual {done}/{total}"
+            )
+        if rows:
+            derived = sorted({requirement_goal[rid] for rid, _, _ in rows if rid in requirement_goal})
+            for goal in sorted(declared_goals - goal_ids):
+                result.errors.append(f"PRD.md: {mid} 主推目标 references missing goal {goal}")
+            if declared_goals != set(derived):
+                result.errors.append(
+                    f"PRD.md: {mid} 主推目标 {sorted(declared_goals)} does not equal the "
+                    f"union of member requirement goals {derived}"
+                )
+        elif declared_goals:
+            result.errors.append(
+                f"PRD.md: {mid} has no member requirements; drop 主推目标 or add members"
+            )
+        milestone_stats.append((mid, name, done, total))
+    result.milestones = milestone_stats
+    for rid, ticked, _ in zone_entries:
+        if ticked:
+            if rid not in result.completed_task_requirements:
+                result.errors.append(
+                    f"PRD.md: milestone checkbox {rid} is ticked but no completed task "
+                    "mentions it; tick only after the task delivering this requirement "
+                    "is completed"
+                )
+        else:
+            legs = [
+                rid in result.completed_task_requirements,
+                traced is not None and rid in traced,
+            ]
+            if strict_anchors:
+                rid_acs = {
+                    f"{rid}/{ac}"
+                    for ac in re.findall(
+                        r"^-\s*(AC-\d{2})\b", requirement_bodies.get(rid, ""), re.MULTILINE
+                    )
+                }
+                legs.append(bool(rid_acs) and rid_acs <= result.test_anchored_acceptance_criteria)
+            if all(legs) and traced is not None:
+                result.warnings.append(
+                    f"PRD.md: {rid} looks delivered (trace row, anchors and a completed "
+                    "task are all present) but its milestone checkbox is unticked; tick "
+                    "it in the same change"
+                )
+
+
+def check_requirement_list_sections(
+    root: Path,
+    prd_plain: str,
+    group_of_role: dict[str, str],
+    result: Result,
+) -> None:
+    """v5：需求清单按需求组分节（`### <角色>`），分节承载组映射的文档真相。
+
+    CONVENTIONS 的 `需求组 gg: 角色` 行降为编号账本——承载编号不复用的
+    退役记忆，不再是对外可读的映射文档；活跃组分节名必须与登记角色一致，
+    不一致时以 PRD 分节为准修正账本。
+    """
+    if agentmap_spec_version(root, result) < 5:
+        return
+    requirement_ids = R_HEADING_RE.findall(prd_plain)
+    if not requirement_ids:
+        return
+    list_match = re.search(r"^##\s+需求清单\s*$", prd_plain, re.MULTILINE)
+    if list_match is None:
+        result.errors.append("PRD.md: missing 需求清单 section")
+        return
+    start = list_match.end()
+    next_h2 = re.search(r"^##\s+", prd_plain[start:], re.MULTILINE)
+    end = start + next_h2.start() if next_h2 else len(prd_plain)
+    body = prd_plain[start:end]
+    used_groups = {rid[2:4] for rid in requirement_ids}
+    current_role: str | None = None
+    ordered_sections: list[tuple[int, str]] = []
+    seen_roles: set[str] = set()
+    section_counts: dict[str, int] = {}
+    for match in re.finditer(r"^(###|####)\s+(.+?)\s*$", body, re.MULTILINE):
+        level, title = match.group(1), match.group(2).strip()
+        if level == "###":
+            current_role = title
+            if title in seen_roles:
+                result.errors.append(f"PRD.md: duplicate requirement group section {title}")
+                continue
+            seen_roles.add(title)
+            group = group_of_role.get(title)
+            if group is None:
+                result.errors.append(
+                    f"PRD.md: requirement section {title} is not a registered 需求组; "
+                    "register it in CONVENTIONS or rename the section to the registered role"
+                )
+                continue
+            ordered_sections.append((int(group), title))
+            section_counts[title] = 0
+            continue
+        rid_match = re.match(r"(R-\d{2}-\d{3})(?![0-9A-Za-z])", title)
+        if rid_match is None:
+            continue
+        rid = rid_match.group(1)
+        if current_role is None:
+            result.errors.append(
+                f"PRD.md: requirement {rid} sits outside a requirement-group section; "
+                "group entries under ### <角色> headings inside 需求清单"
+            )
+            continue
+        section_counts[current_role] = section_counts.get(current_role, 0) + 1
+        section_group = group_of_role.get(current_role)
+        if section_group is not None and rid[2:4] != section_group:
+            result.errors.append(
+                f"PRD.md: requirement {rid} does not belong to group section {current_role} "
+                f"({rid[2:4]} != {section_group})"
+            )
+    if ordered_sections != sorted(ordered_sections):
+        result.errors.append("PRD.md: requirement group sections must appear in ascending gg order")
+    sectioned_groups = {group for group, _ in ordered_sections}
+    for group in sorted({int(g) for g in used_groups} - sectioned_groups):
+        result.errors.append(
+            f"PRD.md: requirement group {group:02d} has no 需求清单 section; "
+            "group its entries under ### <角色> (see CONVENTIONS 需求组 ledger)"
+        )
+    for role, count in sorted(section_counts.items()):
+        if count == 0 and role in group_of_role:
+            result.errors.append(
+                f"PRD.md: requirement group section {role} has no requirements; "
+                "register the group with its first requirement (same change)"
+            )
+
+
+DEPENDENCY_MANIFEST_NAMES = frozenset({
+    "package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Gemfile",
+    "pom.xml", "build.gradle", "build.gradle.kts", "composer.json",
+    "pubspec.yaml", "mix.exs",
+})
+# requirements*.txt / requirements*.in 由依赖闸门的 basename 特判覆盖，
+# lockfile 与生成物不在此列（依赖声明才是研判对象）。
+
+
+def divergence_review_enabled(root: Path, result: Result) -> bool:
+    """v6 方案研判闸口开关：CONVENTIONS 登记「方案研判: 开启|关闭」。
+
+    v5 及以下无此参数，恒为 False；v6 起缺登记报 error（bootstrap 补登
+    保证登记行存在），非法取值报 error 并按关闭处理。
+    """
+    if result.divergence_review is not None:
+        return result.divergence_review
+    result.divergence_review = False
+    if agentmap_spec_version(root, result) < 6:
+        return False
+    conventions = root / "CONVENTIONS.md"
+    if not conventions.is_file():
+        return False
+    text = read_text_checked(conventions, result, "CONVENTIONS.md")
+    if text is None:
+        return False
+    match = re.search(r"^-\s*方案研判:\s*(\S.*)$", text, re.MULTILINE)
+    if not match:
+        result.errors.append("CONVENTIONS.md: missing 方案研判: 开启 or 关闭")
+        return False
+    # 登记行允许行尾 HTML 注释（模板与升级登记都带说明），解析前剥掉。
+    value = re.sub(r"<!--.*?-->", "", match.group(1)).strip()
+    if value not in ("开启", "关闭"):
+        result.errors.append("CONVENTIONS.md: 方案研判 must be 开启 or 关闭")
+        return False
+    result.divergence_review = value == "开启"
+    return result.divergence_review
+
+
+def check_dependency_decisions(root: Path, result: Result, changed: set[str]) -> None:
+    """v6 依赖引入闸门：依赖声明文件变更须有含「依赖决策:」行的 active task 承接。
+
+    触发机械可判定（变更文件 basename 命中内置清单）；--staged 只看暂存
+    变更，工作树模式并入 untracked；pre-push 不复检（outgoing 历史由
+    commit-msg 轴覆盖，pre-commit 的 lint 已拦过）。
+    """
+    if result.pre_push:
+        return
+    if not divergence_review_enabled(root, result):
+        return
+
+    def hits_manifest(path: str) -> bool:
+        name = path.rsplit("/", 1)[-1]
+        return (
+            name in DEPENDENCY_MANIFEST_NAMES
+            or (name.startswith("requirements") and name.endswith((".txt", ".in")))
+        )
+
+    candidates = set(changed)
+    if not result.staged:
+        candidates.update(git_untracked_paths(root, result))
+    hits = sorted(path for path in candidates if hits_manifest(path))
+    if not hits:
+        return
+    tasks_dir = root / "tasks"
+    if tasks_dir.is_dir():
+        for task_path in sorted(tasks_dir.glob("*.md")):
+            text = read_text_checked(
+                task_path, result, task_path.relative_to(root).as_posix()
+            )
+            if text is None:
+                continue
+            if not re.search(r"^\s*(?:-\s*)?依赖决策:", text, re.MULTILINE):
+                continue
+            task_id = re.search(r"^id:\s*(T-\d{3})", text, re.MULTILINE)
+            if task_id and result.task_states.get(task_id.group(1)) == "active":
+                return
+    result.errors.append(
+        f"{hits[0]}: dependency manifest change needs an active task "
+        "recording a 依赖决策: line"
+    )
+
+
 def strict_test_anchors(root: Path, result: Result, forced: bool) -> bool:
     conventions = root / "CONVENTIONS.md"
     if not conventions.is_file():
@@ -3989,10 +4465,20 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
         # 升级刚落盘尚未提交（bootstrap 对齐版本后立即 lint 的窗口）时
         # v4_effective_commit 返回 None：v4 生效点视为下一个提交，HEAD
         # tree 里的已提交 task 均按存量放行，未提交的新 task 仍按 v4 强制。
+        # v5 原生仓库（规范版本行首次入史即 ≥5、历史中从未登记 规范版本:
+        # 4）不存在升级前存量：HEAD 兜底会把根提交自带的 task 永久判为
+        # v3 legacy，令 minor|major 两档制失效，故登记过版本行时不兜底。
         upgrade_commit = v4_effective_commit(root, result)
-        result.legacy_tasks = tasks_present_at_upgrade(
-            root, result, upgrade_commit or "HEAD"
-        )
+        if upgrade_commit is None and result.spec_version >= 5:
+            origin = spec_version_origin_commit(root, result)
+            if origin is not None:
+                result.legacy_tasks = set()
+            else:
+                result.legacy_tasks = tasks_present_at_upgrade(root, result, "HEAD")
+        else:
+            result.legacy_tasks = tasks_present_at_upgrade(
+                root, result, upgrade_commit or "HEAD"
+            )
     check_system_files(root, result, changed)
     check_todo_entries(root, result)
     check_id_formats(root, result)
@@ -4002,10 +4488,13 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
     check_traceability(root, result)
     check_core_document_budget(root, result)
     check_tasks(root, result, changed)
+    check_dependency_decisions(root, result, changed)
     check_v4_tiering(root, result)
     check_receipts(root, result, changed)
-    check_test_anchors(root, result, strict_test_anchors(root, result, strict_tests))
+    strict_anchor_mode = strict_test_anchors(root, result, strict_tests)
+    check_test_anchors(root, result, strict_anchor_mode)
     check_code_anchors(root, result, code_anchors_enabled(root, result))
+    check_milestones(root, result, strict_anchor_mode)
     check_hooks(root, result)
     check_runtime_contract(root, result)
     return result
@@ -4039,6 +4528,21 @@ def print_result(result: Result, report: bool) -> None:
                 f"{distribution} (共 {sum(result.risk_counts.values())} task；"
                 "等级由语义行数与升档条件机械定档，minor 免验证矩阵，此分布是抽查抓手)"
             )
+        if result.milestones:
+            # v5 进度汇总：状态按文件序派生（第一个含未勾条目的里程碑为
+            # 进行中，其前全勾为已达成，其后为规划中），不落成文件字段。
+            seen_open = False
+            for mid, name, done, total in result.milestones:
+                if total == 0:
+                    state = "规划中"
+                elif done == total and not seen_open:
+                    state = "已达成"
+                elif not seen_open:
+                    state = "进行中"
+                    seen_open = True
+                else:
+                    state = "规划中"
+                print(f"AgentMap 里程碑: {mid} {name} {done}/{total} {state}")
     if result.warnings:
         print("agentmap lint warnings:")
         for warning in result.warnings:
@@ -4169,9 +4673,10 @@ owner: agent
     }
     for name, content in docs.items():
         (root / name).write_text(content, encoding="utf-8")
-    source = Path(__file__).read_text(encoding="utf-8")
     (root / "tools").mkdir()
-    (root / "tools/agentmap_lint.py").write_text(source, encoding="utf-8")
+    # Byte-exact copy: text mode would translate \n to os.linesep on Windows,
+    # and check_runtime_contract compares the fixture copy byte-for-byte.
+    (root / "tools/agentmap_lint.py").write_bytes(Path(__file__).read_bytes())
     agents_template = Path(__file__).parents[1] / "AGENTS.md.tmpl"
     if not agents_template.is_file():
         agents_template = Path(__file__).parents[1] / "AGENTS.md"
@@ -4914,6 +5419,52 @@ mutation: lifecycle
         assert not exempt.errors, exempt.errors
 
 
+def self_test_v5_native_repo() -> None:
+    """v5 原生仓库回归：根提交即登记 规范版本: 5 并自带 task。
+
+    修复前：v4_effective_commit 的 pickaxe 找不到 规范版本: 4 登记提交，
+    以 HEAD 兜底把根提交 tree 里的 task 判为 v3 存量——minor 档报
+    "needs exactly one 风险等级: micro, standard or high"，两档制失效。
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        write_fixture(root)
+        conventions = root / "CONVENTIONS.md"
+        conventions_text = conventions.read_text(encoding="utf-8").replace(
+            "agentmap 规范版本: 2",
+            "agentmap 规范版本: 5\n- 语义行阈值: 50\n- 累计审计 task 间隔: 10\n"
+            "- 累计审计行数间隔: 800\n- 关键路径: 无\n- 累计审计复位点: 起点",
+        )
+        conventions.write_text(conventions_text, encoding="utf-8")
+        prd = root / "PRD.md"
+        prd.write_text(
+            prd.read_text(encoding="utf-8").replace(
+                "## 需求清单",
+                "## 里程碑\n\n### M-001 搜索上线\n方向: 搜索能力进入首个可交付切片。\n"
+                "- 主推目标: G-1\n- [ ] R-01-001 Search\n\n## 需求清单\n\n### User",
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "agentmap@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "AgentMap"], cwd=root, check=True)
+        task = root / "tasks/T-001-20260801-search.md"
+        task.write_text(
+            task.read_text(encoding="utf-8").replace("风险等级: high", "风险等级: minor"),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "born at v5"],
+            cwd=root,
+            check=True,
+        )
+        result = lint(root)
+        assert result.legacy_tasks == set(), result.legacy_tasks
+        assert result.risk_counts == {"minor": 1}, result.risk_counts
+        assert not result.errors, result.errors
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -5240,6 +5791,7 @@ def self_test() -> None:
     self_test_terminal_evidence_repair()
     self_test_risk_tiers()
     self_test_upgrade_compat_regressions()
+    self_test_v5_native_repo()
     print("agentmap lint self-test passed")
 
 
