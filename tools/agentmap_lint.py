@@ -117,7 +117,7 @@ RECEIPT_DECLARE_RE = re.compile(r"^实证验收:\s*是\s*$", re.MULTILINE)
 LEGACY_DETAIL_TITLES = ("方案细化清单", "设计细化清单")
 LEGACY_READINESS_NAMES = {"重大设计选择已收敛": "重大方案选择已收敛"}
 # Commit hashes mix digits and hex letters a-f. Requiring at least one of
-# each rejects the prose tokens \b[0-9a-f]{7,40} swallowed: pure-letter
+# each rejects the prose hash citations \b[0-9a-f]{7,40} swallowed: pure-letter
 # English words (defaced) and pure-digit numbers (20260801). Explicit
 # evidence lines (- commit:) stay in the lenient form and are verified
 # against git history, so no recall is lost where it matters. The lookarounds
@@ -141,7 +141,7 @@ TERMINAL_STATES = {"completed", "abandoned", "superseded"}
 COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
 # 哈希指称 token：行内任意 7-40 位 hex（非 hex 字符定界）。证据修复豁免用它
 # 对齐行对替换（post-rewrite 同步会改写散文里的引用，形态不限于 - commit:）。
-HEX_TOKEN_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
+HEX_CITED_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
 # Canonical task names are dateless: T-nnn-slug.md. T-ID order already encodes
 # creation order and Git history is the time authority, so a filename date is
 # redundant metadata that only invites fabricated dates. Dated names
@@ -328,7 +328,7 @@ CANONICAL_FILES_SHA256 = {
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
     "tools/agentmap_validate_commit_msg.py": "ca9cec75f23285abdb404b4ff09c51de8a1985b70d5da46b198fc65c73af08bb",
     ".githooks/post-rewrite": "ffb9059f87ee33770c6674416dd3b8caa1b3de06514735758f5beb7a38342561",
-    "tools/agentmap_rewrite_fix.py": "9a1d1ac409dcbda35c01d5aef72cc8a77007bae15a3d04e683e62c37b3df4463",
+    "tools/agentmap_rewrite_fix.py": "c14fe0bbe66acbc558077853260266219ba47e1fbd107cf5918a079329e83d61",
 }
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
 # Same CJK calibration as the id regexes below: \b is blind when CJK touches
@@ -2128,13 +2128,13 @@ def hex_reference_swaps(old_line: str, new_line: str) -> list[tuple[str, str]] |
     的引用，豁免形态据此放宽为任意哈希指称替换；骨架不一致、无哈希或数量
     不齐即不构成指称替换。
     """
-    old_tokens = HEX_TOKEN_RE.findall(old_line)
-    new_tokens = HEX_TOKEN_RE.findall(new_line)
-    if not old_tokens or len(old_tokens) != len(new_tokens):
+    old_citeds = HEX_CITED_RE.findall(old_line)
+    new_citeds = HEX_CITED_RE.findall(new_line)
+    if not old_citeds or len(old_citeds) != len(new_citeds):
         return None
-    if HEX_TOKEN_RE.sub("\x00", old_line) != HEX_TOKEN_RE.sub("\x00", new_line):
+    if HEX_CITED_RE.sub("\x00", old_line) != HEX_CITED_RE.sub("\x00", new_line):
         return None
-    return list(zip(old_tokens, new_tokens))
+    return list(zip(old_citeds, new_citeds))
 
 
 def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
@@ -2900,14 +2900,14 @@ def task_predates_v4_evidence_boundary(
 def parse_commit_log_z(text: str) -> dict[str, tuple[str, list[str]]]:
     """Parse `git log --format=%H%x00%B%x00 --name-only -z` into sha -> (body, files).
 
-    NUL 分隔让 body（可含换行）与文件名各自成为完整 token，避免
+    NUL 分隔让 body（可含换行）与文件名各自成为完整 cited，避免
     `%B` 正文换行与 name-only 换行混排导致的行级错位。
     """
     commits: dict[str, tuple[str, list[str]]] = {}
     sha: str | None = None
     body_seen = False
-    for token in text.split("\x00"):
-        stripped = token.strip()
+    for cited in text.split("\x00"):
+        stripped = cited.strip()
         if re.fullmatch(r"[0-9a-f]{40}", stripped):
             # 新提交的 sha 既出现在流的开头，也出现在上一提交文件列表
             # 之后；两处都必须切换，否则整条历史被并进第一个提交。
@@ -4184,7 +4184,7 @@ def check_milestones(root: Path, result: Result, strict_anchors: bool) -> None:
         if len(goal_lines) > 1:
             result.errors.append(f"PRD.md: {mid} has more than one 主推目标 line")
         declared_goals = {
-            token.strip() for token in goal_lines[0].split(",") if token.strip()
+            cited.strip() for cited in goal_lines[0].split(",") if cited.strip()
         } if goal_lines else set()
         parsed.append(
             (

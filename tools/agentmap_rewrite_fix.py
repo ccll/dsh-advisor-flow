@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HEX_TOKEN_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
+HEX_CITED_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
 EVIDENCE_SECTION_RE = re.compile(r"^## 终态与证据\s*$[\s\S]*?(?=^##\s|\Z)", re.MULTILINE)
 RESET_LINE_RE = re.compile(r"^-\s*累计审计复位点:.*$", re.MULTILINE)
 PAIR_RE = re.compile(r"^([0-9a-f]{7,40})\s+([0-9a-f]{7,40})$")
@@ -128,9 +128,9 @@ def surface_spans(path: Path, text: str) -> list[tuple[int, int]]:
 def rewrite_spans(
     root: Path, text: str, spans: list[tuple[int, int]], targets: dict[str, str]
 ) -> tuple[str, int, list[str]]:
-    """Replace tokens only inside the given spans, merging overlapping ones.
+    """Replace citeds only inside the given spans, merging overlapping ones.
 
-    A token is replaced only when it is unreachable and equals a full mapping
+    A cited is replaced only when it is unreachable and equals a full mapping
     key (or a prefix of exactly one key) whose replacement is reachable.
     Everything else is recorded as stuck and left in place.
     """
@@ -149,16 +149,16 @@ def rewrite_spans(
         chunk = text[start:end]
         out: list[str] = []
         last = 0
-        for match in HEX_TOKEN_RE.finditer(chunk):
-            token = match.group(0)
-            if is_reachable(root, token):
+        for match in HEX_CITED_RE.finditer(chunk):
+            cited = match.group(0)
+            if is_reachable(root, cited):
                 continue
-            new = targets.get(token)
+            new = targets.get(cited)
             if new is None:
-                candidates = [old for old in targets if old.startswith(token)]
+                candidates = [old for old in targets if old.startswith(cited)]
                 new = targets[candidates[0]] if len(candidates) == 1 else None
             if new is None or not is_reachable(root, new):
-                stuck.append(token)
+                stuck.append(cited)
                 continue
             out.append(chunk[last : match.start()])
             out.append(new)
@@ -177,11 +177,11 @@ def check_mode(root: Path) -> int:
         text = path.read_text(encoding="utf-8")
         for start, end in surface_spans(path, text):
             chunk = text[start:end]
-            for match in HEX_TOKEN_RE.finditer(chunk):
-                token = match.group(0)
-                if not is_reachable(root, token):
+            for match in HEX_CITED_RE.finditer(chunk):
+                cited = match.group(0)
+                if not is_reachable(root, cited):
                     line = text.count("\n", 0, start + match.start()) + 1
-                    problems.append(f"{path.relative_to(root)}:{line}: {token} 不可达")
+                    problems.append(f"{path.relative_to(root)}:{line}: {cited} 不可达")
     if problems:
         for problem in problems:
             print(f"rewrite-fix: {problem}")
@@ -203,8 +203,8 @@ def apply_mode(root: Path, pairs: list[tuple[str, str]]) -> int:
         if not spans:
             continue
         new_text, count, stuck = rewrite_spans(root, text, spans, targets)
-        for token in stuck:
-            stuck_all.append((path, token))
+        for cited in stuck:
+            stuck_all.append((path, cited))
         if count:
             path.write_text(new_text, encoding="utf-8")
             total += count
@@ -214,8 +214,8 @@ def apply_mode(root: Path, pairs: list[tuple[str, str]]) -> int:
     if not touched and not stuck_all:
         print("rewrite-fix: 无需替换")
         return 0
-    for path, token in stuck_all:
-        print(f"rewrite-fix: {path.relative_to(root)}: {token} 不可达且无映射，保留待人工核对", file=sys.stderr)
+    for path, cited in stuck_all:
+        print(f"rewrite-fix: {path.relative_to(root)}: {cited} 不可达且无映射，保留待人工核对", file=sys.stderr)
     if stuck_all:
         print("rewrite-fix: 存在无映射的不可达引用，请人工核对（--check 可复查）", file=sys.stderr)
         return 1
