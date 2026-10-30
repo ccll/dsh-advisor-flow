@@ -3983,6 +3983,7 @@ EXECUTABLE_HOOKS = {
     ".githooks/commit-msg",
     ".githooks/pre-commit",
     ".githooks/pre-push",
+    ".githooks/post-rewrite",
     ".githooks/commit-msg.d/50-project.sh",
     ".githooks/pre-commit.d/10-validate-staged.sh",
     ".githooks/pre-commit.d/20-agentmap-lint.sh",
