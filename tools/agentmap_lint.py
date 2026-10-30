@@ -323,7 +323,7 @@ CANONICAL_FILES_SHA256 = {
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
     ".githooks/pre-commit.d/20-agentmap-lint.sh": "95c7df8021cceb8b357c7ea4edafbb2559ddd4179527327f5197ae851d9aa9c4",
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
-    "tools/agentmap_validate_commit_msg.py": "b3672d4c2d4f0aa3bf623742d88e3aba0847ddb84804d3c96f0874840754f477",
+    "tools/agentmap_validate_commit_msg.py": "ca9cec75f23285abdb404b4ff09c51de8a1985b70d5da46b198fc65c73af08bb",
 }
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
 # Same CJK calibration as the id regexes below: \b is blind when CJK touches

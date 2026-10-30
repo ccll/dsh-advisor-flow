@@ -32,6 +32,12 @@ REQUIRED_HEADINGS = {"原因", "影响", "取舍"}
 # touch the id directly, ASCII letters/digits may not (calibration 2026-11).
 TASK_REF_RE = re.compile(r"(?<![0-9A-Za-z])T-\d{3}(?![0-9A-Za-z])")
 CLOSE_TASK_RE = re.compile(r"(?<![0-9A-Za-z])关闭\s*(T-\d{3})(?![0-9A-Za-z])")
+# 前瞻性关闭表述（「通过后按流程关闭 T-006」）描述的是后续动作，不构成本
+# 提交的状态翻正义务；只有把「关闭 T-nnn」用作本提交谓语的直接宣称才要求
+# 同提交翻正（fmocr 07ff937 实证，2026-10-30）。机械口径：所在句内、「关闭」
+# 之前的 12 字窗含前瞻标记词即视为前瞻；窗在句读处截断，越远的标记不算。
+FORWARD_CLOSE_MARK_RE = re.compile(r"(?:将|待|拟|后|以便|用以|准备|计划|通过|经|审批|再)")
+SENTENCE_BREAK_RE = re.compile(r"[。！？；\n]")
 TERMINAL_TASK_RE = re.compile(r"^状态:\s*(?:completed|abandoned|superseded)\s*$", re.MULTILINE)
 
 
@@ -76,6 +82,20 @@ def task_terminal(relative: str, source: str, root: str) -> bool:
     return TERMINAL_TASK_RE.search(output) is not None if output else False
 
 
+def closure_claimed_ids(text: str) -> list[str]:
+    """「关闭 T-nnn」的关闭宣称集合，剔除前瞻表述句的命中。"""
+    claimed: list[str] = []
+    for match in CLOSE_TASK_RE.finditer(text):
+        sentence_start = 0
+        for brk in SENTENCE_BREAK_RE.finditer(text, 0, match.start()):
+            sentence_start = brk.end()
+        window_start = max(sentence_start, match.start() - 12)
+        if FORWARD_CLOSE_MARK_RE.search(text[window_start : match.start()]):
+            continue
+        claimed.append(match.group(1))
+    return sorted(set(claimed))
+
+
 def unfulfilled_task_closures(text: str) -> list[str]:
     """Claimed task closures (关闭 T-nnn) that the commit itself does not fulfil.
 
@@ -89,7 +109,7 @@ def unfulfilled_task_closures(text: str) -> list[str]:
     to flip. Skipped silently when the message cites no closure or git is
     unavailable.
     """
-    wanted = sorted(set(CLOSE_TASK_RE.findall(text)))
+    wanted = closure_claimed_ids(text)
     if not wanted:
         return []
     try:
