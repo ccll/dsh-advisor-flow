@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# AgentMap post-rewrite: 历史改写（rebase/amend/filter-branch）完成时 git 从
+# stdin 给出 <old> <new> 映射对，把 map 文书证据面的不可达哈希引用同步为可达
+# 新值并输出摘要；替换属证据修复豁免，随下一笔提交入库。
+# cherry-pick 不触发本钩子，但其原提交在原分支仍可达，无需映射。
+set -euo pipefail
+export LC_ALL=C
+root="$(git rev-parse --show-toplevel)"
+fixer="$root/tools/agentmap_rewrite_fix.py"
+if [[ ! -f "$fixer" ]]; then
+  exit 0
+fi
+if command -v mise >/dev/null 2>&1; then
+  exec mise x -- python "$fixer" --apply
+else
+  exec python3 "$fixer" --apply
+fi

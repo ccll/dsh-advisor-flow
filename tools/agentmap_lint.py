@@ -139,6 +139,9 @@ DECISION_EVIDENCE_RE = re.compile(
 MUTATIONS = {"living", "append-only", "inbox", "lifecycle"}
 TERMINAL_STATES = {"completed", "abandoned", "superseded"}
 COMMIT_EVIDENCE_LINE_RE = re.compile(r"-\s*commit:\s*(?P<hash>[0-9a-f]{7,40})\s*")
+# 哈希指称 token：行内任意 7-40 位 hex（非 hex 字符定界）。证据修复豁免用它
+# 对齐行对替换（post-rewrite 同步会改写散文里的引用，形态不限于 - commit:）。
+HEX_TOKEN_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
 # Canonical task names are dateless: T-nnn-slug.md. T-ID order already encodes
 # creation order and Git history is the time authority, so a filename date is
 # redundant metadata that only invites fabricated dates. Dated names
@@ -317,13 +320,15 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "426b6df41010288c24741a49cabb1f57987af665645006ecca0f4eb2ae80c741",
+    "AGENTS.md": "794a2aba22fbac7367d180044c56f8e2378c10ddb44d18d07b8cc3d55cb57304",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
     ".githooks/pre-commit.d/20-agentmap-lint.sh": "95c7df8021cceb8b357c7ea4edafbb2559ddd4179527327f5197ae851d9aa9c4",
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
     "tools/agentmap_validate_commit_msg.py": "ca9cec75f23285abdb404b4ff09c51de8a1985b70d5da46b198fc65c73af08bb",
+    ".githooks/post-rewrite": "ffb9059f87ee33770c6674416dd3b8caa1b3de06514735758f5beb7a38342561",
+    "tools/agentmap_rewrite_fix.py": "9a1d1ac409dcbda35c01d5aef72cc8a77007bae15a3d04e683e62c37b3df4463",
 }
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
 # Same CJK calibration as the id regexes below: \b is blind when CJK touches
@@ -2116,6 +2121,22 @@ def task_state(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def hex_reference_swaps(old_line: str, new_line: str) -> list[tuple[str, str]] | None:
+    """哈希指称替换对：两行的非哈希骨架逐字相同、哈希逐位对应替换。
+
+    post-rewrite 同步（agentmap_rewrite_fix）既改 `- commit:` 行也改散文里
+    的引用，豁免形态据此放宽为任意哈希指称替换；骨架不一致、无哈希或数量
+    不齐即不构成指称替换。
+    """
+    old_tokens = HEX_TOKEN_RE.findall(old_line)
+    new_tokens = HEX_TOKEN_RE.findall(new_line)
+    if not old_tokens or len(old_tokens) != len(new_tokens):
+        return None
+    if HEX_TOKEN_RE.sub("\x00", old_line) != HEX_TOKEN_RE.sub("\x00", new_line):
+        return None
+    return list(zip(old_tokens, new_tokens))
+
+
 def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     """True when a terminal-task edit only swaps unreachable commit-evidence
     hashes for reachable ones (audit-chain repair after an upstream amend).
@@ -2124,12 +2145,12 @@ def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     evidence must resolve to commits reachable from HEAD; once an amend
     destroys a referenced commit the two rules cannot both hold. This
     admission resolves that conflict narrowly: same terminal state, same line
-    count, only lines matching the `- commit:` evidence shape may differ and
-    only at identical line positions (evidence lines cannot move between
-    sections), each differing position pairing one unreachable old hash with
-    one reachable new hash. The shape check is line-local and section-blind:
-    any line carrying the evidence shape qualifies wherever it sits in the
-    document, so prose lines that happen to match are inside the coverage too.
+    count, only lines carrying hash citations may differ and only at identical
+    line positions (evidence lines cannot move between sections), each
+    differing position pairing one unreachable old hash with one reachable new
+    hash. The shape check is line-local and section-blind: any line whose
+    non-hash skeleton is unchanged qualifies wherever it sits in the document,
+    so prose citations are inside the coverage too (post-rewrite sync shape).
     """
     old_state = task_state(old_text)
     if old_state is None or old_state not in TERMINAL_STATES:
@@ -2144,11 +2165,10 @@ def is_commit_evidence_repair(root: Path, old_text: str, new_text: str) -> bool:
     for old_line, new_line in zip(old_lines, new_lines):
         if old_line == new_line:
             continue
-        old_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(old_line)
-        new_match = COMMIT_EVIDENCE_LINE_RE.fullmatch(new_line)
-        if not old_match or not new_match:
+        swaps = hex_reference_swaps(old_line, new_line)
+        if not swaps:
             return False
-        replacements.append((old_match["hash"], new_match["hash"]))
+        replacements.extend(swaps)
     if not replacements:
         return False
     for old_hash, new_hash in replacements:
@@ -2616,6 +2636,7 @@ SYSTEM_MANAGED_PATHS = (
     "CONVENTIONS.md",
     "tools/agentmap_lint.py",
     "tools/agentmap_validate_commit_msg.py",
+    "tools/agentmap_rewrite_fix.py",
 )
 
 
@@ -3990,6 +4011,7 @@ def check_hooks(root: Path, result: Result) -> None:
         Path(".githooks/commit-msg"),
         Path(".githooks/pre-commit"),
         Path(".githooks/pre-push"),
+        Path(".githooks/post-rewrite"),
         Path(".githooks/pre-commit.d/20-agentmap-lint.sh"),
         Path(".githooks/pre-push.d/20-agentmap-lint.sh"),
     ):
@@ -4722,7 +4744,9 @@ Run the search test.
         Path(".githooks/commit-msg"),
         Path(".githooks/pre-commit"),
         Path(".githooks/pre-push"),
+        Path(".githooks/post-rewrite"),
         Path("tools/agentmap_validate_commit_msg.py"),
+        Path("tools/agentmap_rewrite_fix.py"),
     ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)

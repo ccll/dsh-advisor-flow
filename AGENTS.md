@@ -255,6 +255,7 @@ CONVENTIONS 是本项目的过程规范入口：记录在这个仓库工作必�
   - `复审结论`: 最终通过结论
 - **验证矩阵**：固定表头为 `维度 | 适用性/理由 | 可执行证据`，至少包含成功、异常、边界配置、副作用四行；从 SOLUTION 适用关注面补充安全、性能、并发、迁移、恢复、兼容性、可观测性等风险维度；仅在存在多个功能等价实现（如多后端、多平台分支）时增加跨实现一致性用例；`minor` 档免验证矩阵。证据格式及充分性纪律保持不变。
 - **累计审计**：自 CONVENTIONS 登记的「累计审计复位点」（T-ID 与 commit，登记动作由审计 task 的收尾提交完成）起，completed task 每累计达到 CONVENTIONS「累计审计 task 间隔」（默认 10）个，或窗口全部提交（含不开 task 的短路改动）语义行合计达到「累计审计行数间隔」（默认 800），先到先触发；必须开 `类型: 累计审计` 的 task 对窗口内全部累计改动做全量双轴审计，并在 CONVENTIONS 登记新复位点后才可关闭下一个 task。审计 task 免风险分级，但证据规格按 major 写死。窗口审计的作用是跨改动视角：单改动审核看不到漂移，逐改动审核替代不了它。
+- **历史改写同步**：rebase、commit --amend、filter-branch 完成时，post-rewrite 钩子自动把 map 文书（task 终态与证据节、CONVENTIONS 复位点行）中不可达的提交哈希引用替换为可达新值并输出替换摘要；该替换属证据修复豁免，随下一笔提交入库，不得手工回退。cherry-pick 不触发该钩子，但其原提交在原分支仍可达，无需映射；删除共享分支前先跑 `python3 tools/agentmap_rewrite_fix.py --check` 确认无悬空引用。若钩子替换被丢弃（checkout -- 等），用 `--check` 排查残留不可达引用。
 - **测试锚定迁移**：新项目使用 `测试锚定模式: strict`；小项目或脚本仓可改用 `lite`（仅对外可观察行为的需求锚定测试；bootstrap 不提供选择参数，安装后直接修改本行）；既有项目只有在 `CONVENTIONS.md` 使用 `测试锚定模式: migration T-nnn` 引用一个 active 技术迁移 task 时才可暂缓缺失锚点错误，补齐后先切回 strict 或 lite 再关闭该 task。
 - **legacy 迁移截止**：旧命名（`YYYYMMDD-描述.md` task、`DESIGN.md`/`DECISIONS.md` map 文件）只是升级过渡，默认永久豁免为警告；在 `CONVENTIONS.md` 本地参数登记 `- legacy 迁移截止: YYYY-MM-DD` 后，到达该日期 lint 即按错误处理，倒逼迁移收口。
 - **T-ID 冲突**：T-ID 创建即固定，允许空号，不因合并或分支顺序重排；两个 branch 撞号时，incoming task 在合入前尚未定稿，由合并方在合并提交中把它改为下一个空号——同步范围限于该 task 文件自身与仍处 active 状态的文档；RATIONALE 与终态 task 不回改，产生的旧号引用在合并提交正文中记录 `旧号 → 新号` 映射，不做历史重写。
