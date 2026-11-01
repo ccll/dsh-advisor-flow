@@ -30,8 +30,17 @@ REQUIRED_HEADINGS = {"原因", "影响", "取舍"}
 # CJK calibration: Python \b is CJK-blind ("修复任务T-001" has no boundary
 # before T), so the boundary is an explicit ASCII-alnum lookaround; CJK may
 # touch the id directly, ASCII letters/digits may not (calibration 2026-11).
-TASK_REF_RE = re.compile(r"(?<![0-9A-Za-z])T-\d{3}(?![0-9A-Za-z])")
-CLOSE_TASK_RE = re.compile(r"(?<![0-9A-Za-z])关闭\s*(T-\d{3})(?![0-9A-Za-z])")
+# The optional `(models)` suffix (C-029) routes the citation to a frozen
+# companion tasks archive; unqualified ids keep resolving against root tasks/.
+TASK_REF_RE = re.compile(r"(?<![0-9A-Za-z])T-\d{3}(?:\(models\))?(?![0-9A-Za-z])")
+# A qualified closure claim (关闭 T-nnn(models)) is not a closure action: the
+# archive layer is frozen and cannot be re-closed, and the bare-id fallback
+# would misattribute the claim to a same-numbered root task (C-029). Such a
+# claim is rejected outright — a closure claim against a frozen task is
+# always a mistake, and silently ignoring it would let a typo aimed at a
+# root task pass unchecked.
+CLOSE_TASK_RE = re.compile(r"(?<![0-9A-Za-z])关闭\s*(T-\d{3})(?!\(models\))(?![0-9A-Za-z])")
+QUALIFIED_CLOSE_TASK_RE = re.compile(r"(?<![0-9A-Za-z])关闭\s*(T-\d{3})\(models\)(?![0-9A-Za-z])")
 # 前瞻性关闭表述（「通过后按流程关闭 T-006」）描述的是后续动作，不构成本
 # 提交的状态翻正义务；只有把「关闭 T-nnn」用作本提交谓语的直接宣称才要求
 # 同提交翻正（fmocr 07ff937 实证，2026-10-30）。机械口径：所在句内、「关闭」
@@ -46,11 +55,30 @@ def fail(message: str) -> int:
     return 1
 
 
+TASK_QUALIFIER_MODELS = "(models)"
+
+
+def task_ref_target(citation: str) -> tuple[str, str]:
+    """(search directory, bare id) for a cited task reference.
+
+    The `(models)` suffix (C-029) routes the citation to the frozen
+    companion tasks archive; unqualified ids resolve against the root
+    tasks/ exactly as before. A qualified citation must never be checked
+    against the root store: the two id spaces reuse T-nnn with different
+    meanings, so the alias would silently misattribute the reference.
+    """
+    if citation.endswith(TASK_QUALIFIER_MODELS):
+        return "models/tasks", citation[: -len(TASK_QUALIFIER_MODELS)]
+    return "tasks", citation
+
+
 def missing_task_files(text: str) -> list[str]:
     """Cited task ids whose task file does not exist in the repository.
 
     Without a repository context (the validator only receives the message
-    file), existence cannot be verified and the check is skipped.
+    file), existence cannot be verified and the check is skipped. Citations
+    are echoed in their original form so a qualified reference is reported
+    as written.
     """
     try:
         root = subprocess.run(
@@ -63,11 +91,12 @@ def missing_task_files(text: str) -> list[str]:
         return []
     if not root:
         return []
-    return [
-        task_id
-        for task_id in sorted(set(TASK_REF_RE.findall(text)))
-        if not any(Path(root).glob(f"tasks/{task_id}-*.md"))
-    ]
+    missing: list[str] = []
+    for citation in sorted(set(TASK_REF_RE.findall(text))):
+        directory, task_id = task_ref_target(citation)
+        if not any(Path(root).glob(f"{directory}/{task_id}-*.md")):
+            missing.append(citation)
+    return missing
 
 
 def _git_output(args: list[str], cwd: str, check: bool = True) -> str:
@@ -191,6 +220,11 @@ def validate(lines: list[str]) -> int:
     closure_problems = unfulfilled_task_closures("\n".join(lines))
     if closure_problems:
         return fail("task closure mismatch: " + "; ".join(closure_problems))
+    frozen_closures = sorted(
+        {match.group(0) for match in QUALIFIED_CLOSE_TASK_RE.finditer("\n".join(lines))}
+    )
+    if frozen_closures:
+        return fail("frozen archive task cannot be closed: " + ", ".join(frozen_closures))
     return 0
 
 

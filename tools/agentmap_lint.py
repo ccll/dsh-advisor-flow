@@ -172,6 +172,31 @@ C_HEADING_RE = re.compile(r"^#{1,3}\s+(C-\d{3}[A-Z]?)(?![0-9A-Za-z])", re.MULTIL
 R_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{2}-\d{3}(?![0-9A-Za-z])")
 AC_ID_RE = re.compile(r"(?<![0-9A-Za-z])R-\d{2}-\d{3}/AC-\d{2}(?![0-9A-Za-z])")
 C_ID_RE = re.compile(r"(?<![0-9A-Za-z])C-\d{3}[A-Z]?(?![0-9A-Za-z])")
+# Qualified citation suffix (C-029): `C-nnn(models)` points at a frozen
+# companion decision store (e.g. mailai's models/). The stores reuse the
+# C-nnn numbering with different meanings, so a qualified citation must
+# never resolve against the root store.
+C_MODELS_SUFFIX = "(models)"
+
+
+def split_c_references(text: str) -> tuple[set[str], set[str]]:
+    """Split C references into (root bare ids, models-qualified tokens).
+
+    Single position-aware scan over C_ID_RE: a match immediately followed by
+    the `(models)` suffix is a qualified citation routed to the frozen
+    companion store; every other match stays a root citation, so the same id
+    may legitimately be cited against both namespaces in one text. Malformed
+    qualifier forms (fullwidth parentheses, stray spacing) degrade to bare
+    citations and are judged by the root existence check.
+    """
+    qualified: set[str] = set()
+    bare: set[str] = set()
+    for match in C_ID_RE.finditer(text):
+        if text[match.end(): match.end() + len(C_MODELS_SUFFIX)] == C_MODELS_SUFFIX:
+            qualified.add(f"{match.group(0)}{C_MODELS_SUFFIX}")
+        else:
+            bare.add(match.group(0))
+    return bare, qualified
 R_RANGE_RE = re.compile(r"R-(\d{2})-(\d{3})\s*[～~-]\s*(?:R-(\d{2})-)?(\d{3})")
 
 # v5 里程碑仪表区：`## 里程碑` 到下一个 `## ` 标题之间。checkbox 只允许
@@ -326,7 +351,7 @@ CANONICAL_FILES_SHA256 = {
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
     ".githooks/pre-commit.d/20-agentmap-lint.sh": "95c7df8021cceb8b357c7ea4edafbb2559ddd4179527327f5197ae851d9aa9c4",
     ".githooks/pre-push.d/20-agentmap-lint.sh": "8151ed2cccbb2077f5fafc0a784269fa89815e1a173845c0de90b8563fee6f7d",
-    "tools/agentmap_validate_commit_msg.py": "ca9cec75f23285abdb404b4ff09c51de8a1985b70d5da46b198fc65c73af08bb",
+    "tools/agentmap_validate_commit_msg.py": "34ce134fd1f4924b3f9b818a524ab18ba63c32ea593b5586310586bed8fc67d2",
     ".githooks/post-rewrite": "ffb9059f87ee33770c6674416dd3b8caa1b3de06514735758f5beb7a38342561",
     "tools/agentmap_rewrite_fix.py": "c14fe0bbe66acbc558077853260266219ba47e1fbd107cf5918a079329e83d61",
 }
@@ -740,6 +765,46 @@ def store_decision_ids(store: dict[str, str]) -> set[str]:
         else:
             ids.update(C_HEADING_RE.findall(decision_entries(text)))
     return ids
+
+
+def models_decision_store(root: Path, result: Result) -> tuple[set[str], dict[str, str]]:
+    """(decision ids, superseded map) of a frozen companion decision store.
+
+    The archive keeps the v3 directory form under models/; ids come from
+    entry filenames and supersession from the same two channels the root
+    store uses (prose 废弃 declarations and frontmatter supersedes fields).
+    Absent store degrades to an empty namespace; unreadable entries are
+    skipped with a warning — their supersession declarations stay invisible
+    to qualified-citation checks, so the silence is reported rather than
+    silent.
+    """
+    directory = root / "models" / RATIONALE_DIR
+    if not directory.is_dir():
+        return set(), {}
+    ids: set[str] = set()
+    superseded: dict[str, str] = {}
+    for path in sorted(directory.rglob("*.md")):
+        if path.name in DECISION_STORE_NON_ENTRIES:
+            continue
+        entry_match = DECISION_ENTRY_FILE_RE.match(path.name)
+        if not entry_match:
+            continue
+        cid = entry_match.group(1)
+        ids.add(cid)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            result.warnings.append(
+                f"models/{RATIONALE_DIR}/{path.name}: unreadable entry skipped; "
+                "its supersession declarations are not visible to qualified-citation checks"
+            )
+            continue
+        for target in SUPERSEDED_DECLARATION_RE.findall(text):
+            superseded.setdefault(target, cid)
+        for declaration in SUPERSEDES_LINE_RE.findall(text):
+            for target in re.findall(DECISION_CID_PATTERN, declaration):
+                superseded.setdefault(target, cid)
+    return ids, superseded
 
 
 def decision_migration_failure(
@@ -1856,6 +1921,41 @@ def check_writing_style(root: Path, result: Result, changed: set[str]) -> None:
                 )
 
 
+def check_c_references(
+    owner: str,
+    text: str,
+    result: Result,
+    decision_ids: set[str],
+    superseded: dict[str, str],
+    models_ids: set[str],
+    models_superseded: dict[str, str],
+) -> None:
+    """Validate C citations with namespace routing (C-029 qualified form).
+
+    Bare ids resolve against the root store exactly as before; qualified
+    tokens resolve against the frozen models store and are never checked
+    against root ids, which would silently alias same-numbered decisions
+    with different meanings.
+    """
+    bare, qualified = split_c_references(text)
+    for cid in sorted(bare):
+        if cid not in decision_ids:
+            result.errors.append(f"{owner}: references missing decision {cid}")
+        elif cid in superseded:
+            result.errors.append(
+                f"{owner}: references superseded decision {cid} superseded by {superseded[cid]}"
+            )
+    for token in sorted(qualified):
+        cid = token[: -len(C_MODELS_SUFFIX)]
+        if cid not in models_ids:
+            result.errors.append(f"{owner}: references missing decision {token} (models store)")
+        elif cid in models_superseded:
+            result.errors.append(
+                f"{owner}: references superseded decision {token} superseded by "
+                f"{models_superseded[cid]}{C_MODELS_SUFFIX}"
+            )
+
+
 def check_traceability(root: Path, result: Result) -> None:
     prd_path = root / "PRD.md"
     solution_path = resolve_map_file(root, "SOLUTION.md")
@@ -1929,6 +2029,7 @@ def check_traceability(root: Path, result: Result) -> None:
     non_goal_ids = NON_GOAL_RE.findall(prd_plain)
     result.goals = set(goal_ids)
     result.decision_ids = set(decision_ids)
+    models_ids, models_superseded = models_decision_store(root, result)
 
     superseded: dict[str, str] = {}
     entry_matches = list(C_HEADING_RE.finditer(decisions_plain))
@@ -2072,26 +2173,29 @@ def check_traceability(root: Path, result: Result) -> None:
             result.errors.append(
                 f"PRD.md: {rid} contains implementation evidence; keep code, tests, tasks, and commits below SOLUTION"
             )
-        for cid in C_ID_RE.findall(
-            "\n".join(re.findall(r"^- 出处:\s*(.+)$", body, re.MULTILINE))
-        ):
-            if cid not in decision_ids:
-                result.errors.append(f"PRD.md: {rid} references missing decision {cid}")
-            elif cid in superseded:
-                result.errors.append(
-                    f"PRD.md: {rid} references superseded decision {cid} superseded by {superseded[cid]}"
-                )
+        check_c_references(
+            f"PRD.md: {rid}",
+            "\n".join(re.findall(r"^- 出处:\s*(.+)$", body, re.MULTILINE)),
+            result,
+            decision_ids,
+            superseded,
+            models_ids,
+            models_superseded,
+        )
 
     for goal in sorted(result.goals - used_goals):
         result.errors.append(f"PRD.md: {goal} has no requirement")
     for rid in sorted(expand_requirement_ids(solution_plain, result) - result.requirements):
         result.errors.append(f"SOLUTION.md: references missing requirement {rid}")
-    for cid in sorted(set(C_ID_RE.findall(solution_plain)) - set(decision_ids)):
-        result.errors.append(f"SOLUTION.md: references missing decision {cid}")
-    for cid in sorted(set(C_ID_RE.findall(solution_plain)) & set(superseded)):
-        result.errors.append(
-            f"SOLUTION.md: references superseded decision {cid} superseded by {superseded[cid]}"
-        )
+    check_c_references(
+        "SOLUTION.md",
+        solution_plain,
+        result,
+        decision_ids,
+        superseded,
+        models_ids,
+        models_superseded,
+    )
 
 
 def task_state(text: str) -> str | None:
@@ -2390,12 +2494,120 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
     if receipt_failure:
         result.errors.append(f"{commit[:12]}: {receipt_failure}")
 
+    archive_failure = archive_layer_history_failure(root, parent, commit)
+    if archive_failure:
+        result.errors.append(f"{commit[:12]}: {archive_failure}")
+
     if not check_additions:
         return
     for path, text in new_tasks.items():
         if task_state(text) not in TERMINAL_STATES or path in old_tasks:
             continue
+        if re.search(r"^[*-]?\s*类型:\s*累计审计\s*$", text, re.MULTILINE):
+            # 累计审计 task 立项与收口同笔是合法形态：审计由复位点触发、
+            # 单笔承载窗口全量双轴与复位点更新，无独立的 active 期。
+            continue
         result.errors.append(f"{commit[:12]}: {path} was created directly in a terminal state")
+
+
+def archive_layer_dirs(root: Path, result: Result | None = None) -> list[str]:
+    """归档层只增不改登记（C-032 机制）：CONVENTIONS 登记的冻结层目录。
+
+    行格式 `- 归档层只增不改: <dir>, <dir>`；未登记返回空表，所有归档层
+    检查随之 no-op，与登记即启用的其他本地参数同口径。CONVENTIONS 不可读
+    时给 warning（调用方传入 result 时）——防线静默缩水必须可见。
+    """
+    try:
+        text = (root / "CONVENTIONS.md").read_text(encoding="utf-8")
+    except OSError:
+        if result is not None:
+            result.warnings.append(
+                "CONVENTIONS.md unreadable; archive-layer registration not visible, "
+                "the append-only check runs as no-op"
+            )
+        return []
+    match = re.search(r"^- 归档层只增不改:\s*(\S.*)$", text, re.MULTILINE)
+    if not match:
+        return []
+    raw = match.group(1).split("<!--")[0]
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def archive_layer_history_failure(root: Path, parent: str, commit: str) -> str | None:
+    """Replay append-only semantics for registered archive layers per commit.
+
+    A commit may add files to a registered layer; modifying, renaming or
+    removing existing ones breaks the freeze the registration promises.
+    Empty when nothing is registered — layers absent from a ref simply
+    produce an empty diff.
+    """
+    layers = archive_layer_dirs(root)
+    if not layers:
+        return None
+    try:
+        statuses = run_git(
+            root, ["diff", "--name-status", parent, commit, "--", *layers], expected=(0,)
+        ).splitlines()
+    except GitCommandError as error:
+        return f"archive-layer history audit failed: {error}"
+    for line in statuses:
+        parts = line.split("\t")
+        status = parts[0][:1]
+        if status in ("M", "D", "R", "T"):
+            return (
+                f"{parts[1]} was modified or removed ({status}) in a registered "
+                "append-only archive layer"
+            )
+    return None
+
+
+def check_archive_layers(root: Path, result: Result) -> None:
+    """Append-only enforcement for CONVENTIONS-registered archive layers.
+
+    Working-tree mode compares the registered layers against HEAD: additions
+    are allowed, M/D/R/T are violations — this blocks uncommitted or staged
+    tampering at the pre-commit gate. Committed tampering is a different
+    domain: the pre-push replay (archive_layer_history_failure) judges every
+    outgoing commit against its own parent, so a tamper-then-commit sequence
+    cannot slip past either gate. A repository without commits cannot diff
+    against HEAD; that state is reported instead of silenced.
+    """
+    registered = archive_layer_dirs(root, result)
+    layers = [layer for layer in registered if (root / layer).is_dir()]
+    for layer in registered:
+        if (root / layer).is_dir():
+            continue
+        # 登记即承诺：登记路径拼错或整层目录缺失时防线静默缩水，必须
+        # 可见（缺层不阻断提交——冻结层尚未落地的登记形态合法）。
+        result.warnings.append(
+            f"archive layer: {layer} is registered but absent; "
+            "the append-only check does not cover it"
+        )
+    if not layers:
+        # 登记行被删除即整条防线静默关闭（窗口审计指出的 fail-open 开关）。
+        # 合法退役按「同一次变更内同步」纪律应同提交移除登记与目录，因此
+        # 冻结层目录仍在而登记消失在本仓没有合法形态——升级为 error，把
+        # 「删登记行→后续篡改冻结层」的攻击链阻断在第一步。
+        if (root / "models" / RATIONALE_DIR).is_dir():
+            result.errors.append(
+                "archive layer: no 归档层只增不改 registration while models/RATIONALE "
+                "exists; the append-only enforcement is off — restore the registration "
+                "line or remove the frozen layers in the same change"
+            )
+        return
+    try:
+        statuses = run_git(root, ["diff", "--name-status", "HEAD", "--", *layers]).splitlines()
+    except GitCommandError as error:
+        git_data_error(result, "archive-layer audit failed", error)
+        return
+    for line in statuses:
+        parts = line.split("\t")
+        status = parts[0][:1]
+        if status in ("M", "D", "R", "T"):
+            result.errors.append(
+                f"archive layer: {parts[1]} was modified or removed ({status}); "
+                "registered archive layers are append-only"
+            )
 
 
 def check_outgoing_history(root: Path, result: Result, input_text: str) -> None:
@@ -3137,7 +3349,7 @@ def check_v4_tiering(root: Path, result: Result) -> None:
         risk_match = re.search(r"^风险等级:\s*(minor|major)\s*$", text, re.MULTILINE)
         if risk_match:
             task_risk[task_id] = risk_match.group(1)
-        if re.search(r"^类型:\s*累计审计\s*$", text, re.MULTILINE):
+        if re.search(r"^[*-]?\s*类型:\s*累计审计\s*$", text, re.MULTILINE):
             audit_tasks.add(task_id)
         if task_states[task_id] == "completed":
             terminal = re.search(r"^## 终态与证据\s*$([\s\S]*)", text, re.MULTILINE)
@@ -4514,6 +4726,7 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
     check_dependency_decisions(root, result, changed)
     check_v4_tiering(root, result)
     check_receipts(root, result, changed)
+    check_archive_layers(root, result)
     strict_anchor_mode = strict_test_anchors(root, result, strict_tests)
     check_test_anchors(root, result, strict_anchor_mode)
     check_code_anchors(root, result, code_anchors_enabled(root, result))
