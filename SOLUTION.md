@@ -16,7 +16,7 @@ owner: agent 主笔，项目属主审批
 | 系统上下文 | 适用: 插件与宿主、执行者、顾问路由、会话主的边界决定全部接缝 | 系统上下文图 |
 | 一级静态分解 | 适用: 插件由十个能力模块组成，模块归属需先定 | 一级静态分解图 |
 | 内部组件分解 | 适用: 门控判定管线与素材装配管线是正确性、隐私与非阻断性的核心 | 内部组件分解图 |
-| 运行时交互 | 适用: 咨询往返、门阻断与素材出境是三个架构级时序 | 运行时交互图 |
+| 运行时交互 | 适用: 咨询往返、门阻断与素材出境是三个架构级时序；业务旅程判定: 无跨角色端到端业务旅程——PRD 两角色各自独立成环，执行者侧咨询与门评审闭环于单会话内，会话主侧配置与核算是独立运维操作，无任一验收点要求第二角色在同一旅程内接力，故不设旅程图，失败分支由本图与收口评审时序承载 | 运行时交互图 |
 | 数据与领域模型 | 适用: 咨询/意见/用量/门记录/意见台账是跨模块数据契约 | 数据与领域模型图 |
 | 状态与生命周期 | 适用: 咨询生命周期、意见回写生命周期与顾问运行态是失败语义的载体 | 状态与生命周期图 |
 | 数据流与信任边界 | 适用: 会话素材出境与顾问输出入境是隐私设计的主体 | 数据流与信任边界图 |
@@ -29,7 +29,7 @@ owner: agent 主笔，项目属主审批
 | 关注面 | 适用性/理由 | 方案落点 |
 |---|---|---|
 | 边界与对外契约 | 适用: 工具、命令、设置命名空间、注入消息格式是插件对外稳定面 | SOLUTION.md#产品契约 |
-| 核心数据与不变量 | 适用: 咨询/用量/意见账本记录的结构决定核算与诊断能力 | SOLUTION.md#数据视图 |
+| 核心数据与不变量 | 适用: 咨询/用量/意见账本记录的结构决定核算与诊断能力；持久化 schema 版本化与演进属本关注面评估内容，评估落「数据视图」版本化条目 | SOLUTION.md#数据视图 |
 | 状态与生命周期 | 适用: 咨询终态一次性与意见回写一次性约束失败隔离设计 | SOLUTION.md#运行时、并发与失败语义 |
 | 运行时、并发与失败语义 | 适用: 门内联等待与非阻断保证的相互作用是本方案最大风险点 | SOLUTION.md#运行时、并发与失败语义 |
 | 外部集成 | 适用: LLM 路由、宿主工具层、会话存储、git 四类集成缝 | SOLUTION.md#静态架构 |
@@ -45,7 +45,7 @@ owner: agent 主笔，项目属主审批
 |---|---|---|
 | 边界与契约已明确 | 通过 | SOLUTION.md#产品契约 |
 | 关键不变量已明确 | 通过 | DOMAIN.md#跨模块不变量 |
-| 重大方案选择已收敛 | 通过 | RATIONALE.md |
+| 重大方案选择已收敛 | 通过 | RATIONALE.md#C-008 严格对齐口径与分歧裁决包（文案英文化、默认值、Jev NG、Scout spike 门槛等八项）；RATIONALE.md#C-009 行为对齐基线冻结为 pi-advisor-flow 0.8.2 npm 制品；RATIONALE.md#C-015 咨询超时默认 10 分钟、输出上限缺省跟随宿主模型配置（东家偏离裁决）；RATIONALE.md#C-017 failureMode 默认值偏离 pi：block-session 改为 block-tool（东家翻案裁决）；RATIONALE.md#C-021 介入强度软硬模式：放宽 C-008 严格一致口径（东家翻案裁决）；RATIONALE.md#C-034 零工具契约被宿主 own 层注入击穿，插件侧以执行面否决恢复 NG-1 实质 |
 | 目标实现归属已明确 | 通过 | SOLUTION.md#子系统与模块 |
 | 现状差距已有 task 承接 | 通过 | 无未收敛差距；对 pi 偏离以 C-nnn 记账 |
 | 可派生验证 | 通过 | SOLUTION.md#运行时、并发与失败语义 |
@@ -256,6 +256,8 @@ classDiagram
 
 - 用量缺失项显式记 `unavailable`，不得落零。
 - 素材不出现在意见与用量记录中，只存脱敏摘要与长度计数；回写记录以 HMAC 哈希承载意见原文，不落明文。
+- 持久化 schema 版本化评估: 唯一持久化 schema 是回写台账 JSONL，记录携带显式版本字段 `v: 1`（lib/outcomes.js:132，pi 逐字移植形态）。
+- 台账演进口径: 咨询/用量/意见账本为会话内存态不落盘，仓内无台账读回消费方；结构演进以版本字段递增承载，读取兼容由外部消费方承担。
 
 ### 状态与生命周期图
 
@@ -352,23 +354,32 @@ flowchart TD
 
 ## 产品契约
 
-- **咨询工具** `ask_advisor`（文案与参数面逐字对齐 pi 0.8.2，英文原文）：
+- **咨询工具** `ask_advisor`（承接 R-01-001；文案与参数面逐字对齐 pi 0.8.2，英文原文）：
   - 入参：`question?`、`draft?`、`gitContext?`（none|summary|full，执行者只可收窄）、`includeTrackedFiles?`（tracked 相对路径清单，需顾问点名 + 全局授权）、`includeUntracked?`（新文件清单，需授权）、`force?`（不实现——依附 Jev 筛查，NG-6）。
   - 工具描述/参数描述/pi `promptGuidelines` 文案：从 pi 0.8.2 源程序化提取，逐字等值断言（deviation 零容忍）。
   - 返回：文本 = `Advisor ({model})
 
 {markdown}` + adviceId（UUID 形态）回查行；空意见按失败处置（诊断码）。
   - 失败诊断码：`NO_ADVISOR_MODEL` / `ADVISOR_TIMEOUT` / `ADVISOR_FAILED` / `ADVISOR_GATE_INVALID` / `ADVISOR_BUDGET_EXHAUSTED` / `SESSION_EXEMPT` / `TOOL_FACE_CLOSED`（工具面守卫拒绝码，C-025；reason 明示属预期、勿重试与替代路径）。
-- **回写工具** `record_advisor_outcome`：
+  - 诊断码需求归属（逐码一条）:
+    - `NO_ADVISOR_MODEL`→R-01-001/AC-02。
+    - `ADVISOR_TIMEOUT`/`ADVISOR_FAILED`→R-01-001/AC-03（空意见为 AC-04 诊断码形态）。
+    - `ADVISOR_GATE_INVALID`→R-01-005/AC-04（门失败同型处置）。
+    - `ADVISOR_BUDGET_EXHAUSTED`→R-01-001/AC-08。
+    - `SESSION_EXEMPT`→R-01-001/AC-09。
+    - `TOOL_FACE_CLOSED`→R-01-001/AC-10。
+    - 失败路径同时受 R-02-005 非阻断约束。
+- **回写工具** `record_advisor_outcome`（承接 R-01-008）：
   - 入参：`adviceId`、`adoption`（followed/not-followed/unknown）、`validationStatus`（passed/failed/not-run/unknown）。
   - 一次性语义：reserve→commit 成功；release 失败可重试；未知/已回写/未决 adviceId 报错。
   - 落盘：JSONL + HMAC 哈希（密钥插件生成）+ 跨进程锁 + 1MB 轮转；开关 `outcomeLogging` 默认 false。
 - **命令**：
-  - `/advisor-manual [focus]`：立即咨询；进行中可取消；失败经 steer 送达含原因通告；新请求中止并替换在飞请求。
-  - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要、逐次明细、剩余次数、门决策统计与干预计数。
-  - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。
-  - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 扩展项）。
+  - `/advisor-manual [focus]`：立即咨询；进行中可取消；失败经 steer 送达含原因通告；新请求中止并替换在飞请求。（R-01-002）
+  - `/advisor status`：启用态、模型路由、守则开关与循环门配置、待处理数、最近活动、累计用量摘要、逐次明细、剩余次数、门决策统计与干预计数。（R-02-002/AC-03、AC-04、AC-05；R-02-003/AC-02、AC-03；R-01-009/AC-10 介入强度呈现）
+  - `/advisor gates`：守则开关、循环门阈值与阻断模式只读回读。（R-02-003/AC-02 门控状态查询）
+  - `/advisor on|off|toggle`：会话级临时开关，不写持久配置；裸 `/advisor` 等价 toggle（UX 扩展项，无对应需求条目）。
 - **设置命名空间** `advisor-flow`（profile 行配置 entry config，宿主 SettingsForms 经模块 `Config` 导出驱动 describe/update（C-026）；默认值对齐 pi 0.8.2，C-008；偏离项: failureMode 默认 block-tool，C-017；mode 缺省经 C-032 回归 soft，与 pi 一致）：
+  - 需求归属: 整节承载 R-02-001 配置面；键级关联需求就地标注。
   - 咨询功能启用状态由配置派生：`advisor.provider` 与 `advisor.model` 齐备即启用，任一缺失即整体禁用且状态可查询（R-02-001/AC-03/AC-13；无独立启用开关）；settings.yaml 遗留 `enabled` 键按弃用处理——告警并忽略，停用走宿主插件级开关（C-030）。`advisor.provider`、`advisor.model`、`advisor.reasoningEffort?`、`advisor.maxTokens?`（可选；缺省 = 跟随宿主对所选模型的配置——经 llm.resolveModelInfo 取模型声明值，未声明则省略请求参数；显式配置覆盖）、`advisor.callTimeoutMs`（默认 600000，偏离 pi 180s 记 C-015）（无重试）
   - `contextMaxChars`（默认 15000）、`gitContextMaxChars`（默认 20000）
   - `gates.plan|failure|completion`：`enabled`（默认 true，守则开关）
@@ -381,7 +392,7 @@ flowchart TD
   - `customInvocation`（可选字符串：自定义触发条件）
   - `modelWhitelist`（可选清单：顾问模型白名单，门/手动/轮询入口检查）
   - `toolPolicies`（工具名 → full|summary|exclude，per-tool 披露策略，默认 full）
-  - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`、`privacy.toolResultMaxLines`、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
+  - `privacy.repoContext(off|summary|full，默认 summary)`、`privacy.toolResultMaxBytes`（默认 8192）、`privacy.toolResultMaxLines`（未配置 = 200 运行时兜底，东家裁决记档待联调对照核定，T-012）、`privacy.fileContent(默认 false，tracked)`、`privacy.untrackedContent(默认 false)`、`privacy.trackedFileContent(默认 false，tracked 移交授权，R-01-001/AC-07)`、`privacy.redactSecrets(默认 false，对齐 pi；开启时六类形状替换)`
 - `userPreferences`（可选非空字符串，缺省=无偏好区；素材装配偏好区来源，R-02-006/AC-05）
 - `scout.enabled`（默认 false；Scout 策展二次调用开关）与 `scout.timeoutMs`（缺省 = 不限，接线层兜底 30s）
 - `presentation`：`subagent`（默认；咨询经 `ctx.subagents.start` one-shot 顾问子会话发起，会话界面出现顾问子会话条目，R-02-007）/ `direct`（保持 llm.stream 直调，无子会话条目）；非法值按库纪律拒绝（invalid-value-rejected，与 failureMode 同型），配置被拒时功能禁用且原因可查；子会话缝缺失或发布前发起失败时自动降级 direct 并显性化（R-02-007/AC-03，运行时语义）
@@ -389,12 +400,12 @@ flowchart TD
   - `outcomeLogging`（默认 false）
   - 旧键迁移：`privacy.history(off|delta|window)`、`privacy.repoContext(none|summary|patch)`、`privacy.toolResults(off|capped)` 为旧键，警告保留不生效，卡片提供迁移提示；未知键警告保留；`enabled` 弃用键告警并忽略（启用派生，C-030）；缺 provider/model 时整体禁用且状态可查询。
 - **注入消息格式**：
-  - 门命中预通告：`Automatic Advisor loop review`（含阈值说明，steer）。
+  - 门命中预通告：`Automatic Advisor loop review`（含阈值说明，steer）。（R-01-005/AC-09）
   - 门结果：`**Decision: {proceed|revise|blocked}**
 
-{markdown}`（steer）。
-  - 门失败：`**Advisor gate failure ({category}):** {message}`（steer，含 warn-and-continue 放行路径）。
-  - 按需咨询意见走工具返回值（不注入），文本附 adviceId 回查行；手动失败通告：`Manual Advisor consultation failed: {message}`。
+{markdown}`（steer）。（R-01-005/AC-02）
+  - 门失败：`**Advisor gate failure ({category}):** {message}`（steer，含 warn-and-continue 放行路径）。（R-01-005/AC-04；R-02-003/AC-01）
+  - 按需咨询意见走工具返回值（不注入），文本附 adviceId 回查行；手动失败通告：`Manual Advisor consultation failed: {message}`。（R-01-001/AC-05；R-01-002/AC-03）
 - **顾问请求素材契约**（R-02-006）：单条 user 消息，六区结构 `<conversation>` → `<repository_changes note=…>` → `<untracked_files>` → `<tracked_files>` → `<user_preferences>` → `<draft>`，末尾 `Targeted focus:{question}`；除仓库变更区外全部经转义；各带 pi 原文相同的不可信注记；空素材兜底文案与 pi 一致。
 
 ## 需求追溯索引

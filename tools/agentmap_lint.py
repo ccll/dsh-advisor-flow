@@ -46,10 +46,20 @@ def run_git(root: Path, args: list[str], *, expected: tuple[int, ...] = (0,)) ->
     unreadable, which must abort loudly instead of degrading the audit into
     a silent pass (fail-open). Callers that must keep scanning record the
     GitCommandError on the Result themselves; the rest let it reach main().
+
+    core.quotepath is disabled for every invocation: the default escaping
+    turns non-ASCII paths into \\350\\275... octal runs that the diff--git
+    and path parsers cannot match, silently dropping whole files from line
+    counts and name listings (a CJK-pathed commit counted zero). Raw UTF-8
+    paths flow straight into the parsers instead.
     """
     try:
         completed = subprocess.run(
-            ["git", *args], cwd=root, capture_output=True, text=True, check=False
+            ["git", "-c", "core.quotepath=false", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
     except OSError as error:
         raise GitCommandError(f"git unavailable: {error}") from error
@@ -62,13 +72,41 @@ def run_git(root: Path, args: list[str], *, expected: tuple[int, ...] = (0,)) ->
     return completed.stdout
 
 
+def repo_has_commits(root: Path) -> bool:
+    """零提交仓库探测：unborn 分支（无任何 ref 指向提交）返回 False。
+
+    探测用 for-each-ref 而不是 rev-parse HEAD：后者在损坏仓库上同样失败，
+    会把真实损坏误判为无提交而降级。探测本身失败时按「有提交」处理，
+    保持 git_data_error 的 fail-closed 语义——降级只适用于确认无历史对象
+    的情形。
+    """
+    completed = subprocess.run(
+        ["git", "for-each-ref", "--count=1", "--format=%(objectname)"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return True
+    return bool(completed.stdout.strip())
+
+
 def git_data_error(result: Result, label: str, error: GitCommandError) -> None:
     """Record a git infrastructure failure as a lint error (fail closed).
 
     Used by checks that would otherwise continue with an empty result set;
     the recorded error still fails the run, so the degraded scan cannot
     turn into a silent pass.
+
+    零提交仓库例外：git init 后未提交时所有 HEAD 探查必然 128 失败，而
+    历史类审计的对象本就是空集——此时降级为 warning，否则每个新项目的
+    首次提交都会被自己的 lint 拦死。降级在输出中显式留痕，不静默。
     """
+    root = getattr(result, "root", None)
+    if root is not None and not repo_has_commits(Path(root)):
+        result.warnings.append(f"{label} skipped: repository has no commits yet")
+        return
     result.errors.append(f"{label}: {error}; fix the repository state, then rerun")
 
 SYSTEM_FILES = {
@@ -123,7 +161,10 @@ LEGACY_READINESS_NAMES = {"重大设计选择已收敛": "重大方案选择已�
 # against git history, so no recall is lost where it matters. The lookarounds
 # replace \b because Python \b is CJK-blind ("提交abcdef1于仓库" has no
 # boundary around the hash when CJK touches it).
-HEXISH_TOKEN = r"(?<![0-9A-Za-z])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9A-Za-z])"
+# The token stays case-sensitive on purpose: git hashes are lowercase, and an
+# IGNORECASE wrapper (DECISION_EVIDENCE_RE compiles with re.IGNORECASE) would
+# otherwise turn algorithm names like Ed25519 into hexish false positives.
+HEXISH_TOKEN = r"(?<![0-9A-Za-z])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])(?-i:[0-9a-f]{7,40})(?![0-9A-Za-z])"
 IMPLEMENTATION_EVIDENCE_RE = re.compile(
     rf"(?:\b(?:src|tests?|tasks)/|{HEXISH_TOKEN}|`[^`]+\.(?:py|rs|go|js|ts|java|kt|rb|sh)`)",
     re.IGNORECASE,
@@ -345,7 +386,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "794a2aba22fbac7367d180044c56f8e2378c10ddb44d18d07b8cc3d55cb57304",
+    "AGENTS.md": "d44a34578d6d1445f74b859de9580db40c37e34106be67ad9cf0fede699b602f",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
@@ -381,6 +422,29 @@ CORE_SPLIT_PLAN_RE = re.compile(r"^- 核心文档分片方案:\s*\S", re.MULTILI
 # open-ended "待定" registration, which turns the hatch into a permanent waiver.
 CORE_SPLIT_DEADLINE_RE = re.compile(r"截止[:：]\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE)
 SUPERSEDED_DECLARATION_RE = re.compile(r"^\s*-\s*废弃[:：]\s*(C-\d{3}[A-Z]?)\s*$", re.MULTILINE)
+# v7 迁移账本：CONVENTIONS「AgentMap 本地参数」登记的迁移欠账状态行
+# `- 规范迁移: <版本> 未清零;截止: YYYY-MM-DD`。冒号/分号全半角均容忍
+# （与 CORE_SPLIT_DEADLINE_RE 同口径）；行在即欠账在，清零的规范动作是
+# 删除登记行，因此严格形态只认「未清零」，残缺行给 warning 不做到期裁决。
+MIGRATION_LEDGER_LOOSE_RE = re.compile(r"^-\s*规范迁移[:：]\s*(\S.*?)\s*$", re.MULTILINE)
+MIGRATION_LEDGER_VALUE_RE = re.compile(r"^(v?\d+)\s+未清零\s*[;；]\s*截止[:：]\s*(\d{4}-\d{2}-\d{2})$")
+# 产品契约 REST 端点行：`GET /v1/items` 形态。路径字符集刻意排除 CJK 与
+# 全角符号——表格行常把中文说明与端点同格书写（`GET /v1/items 查询`），
+# 路径 token 必须在首个非 ASCII 字符处截断，否则说明文字混进检索串。
+REST_ENDPOINT_RE = re.compile(r"^(GET|POST|PUT|DELETE|PATCH)\s+(/[A-Za-z0-9_{}.\-/:~]+)")
+# 错误码行首 token：围栏内以 ASCII 标识符开头的行才视为错误码行；长度与
+# 大小写/分隔符过滤把围栏内英文说明的首词（The/Note）挡在清单外。
+ERROR_CODE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+# doctor A6：SOLUTION 中的代码位置引用 `path.ext:NN` / `path.ext:NN-NN`。
+# 扩展名限定字母，排除 127.0.0.1:8080 与「核对日期: 2026-08-01」一类冒号
+# 噪声；路径字符集含 ./- 覆盖 src/bin/fmlicd.rs 形态；CJK 邻接由前后
+# [0-9A-Za-z] 显式界定（Python \b 对 CJK 失明），前视再排除 `/` 防止把
+# URL 的 host 段当成仓库相对路径。
+DOCTOR_CODE_LOCATION_RE = re.compile(
+    r"(?<![0-9A-Za-z./-])"
+    r"([A-Za-z0-9_.][A-Za-z0-9_./+-]*\.[A-Za-z]{1,8})"
+    r":(\d{1,6})(?:\s*-\s*(\d{1,6}))?"
+)
 
 
 @dataclass
@@ -418,6 +482,13 @@ class Result:
     completed_task_requirements: set[str] = field(default_factory=set)
     # v6 方案研判闸口：CONVENTIONS「方案研判」登记解析缓存，None = 未解析。
     divergence_review: bool | None = None
+    # AC-ID → 锚点它的测试文件相对路径集合（供 --report 追溯矩阵）。
+    test_anchor_files: dict[str, set[str]] = field(default_factory=dict)
+    # v7 契约覆盖对照：(种类, 条目, covered, 覆盖文件)。None ＝ SOLUTION
+    # 无「产品契约」节（报告端输出「未找到产品契约」）；报告级，不进门禁。
+    contract_coverage: list[tuple[str, str, bool, tuple[str, ...]]] | None = None
+    # v7 迁移账本登记：(版本或原文, 未清零|残缺, 截止日或空串)，供 --report。
+    migration_ledger: list[tuple[str, str, str]] = field(default_factory=list)
     # 运行上下文：--staged/--pre-push 场景下累计审计触发的阻断语义
     # 收窄（见 check_v4_tiering），由 lint() 主流程设置。
     staged: bool = False
@@ -1613,6 +1684,67 @@ def check_core_document_budget(root: Path, result: Result) -> None:
         )
 
 
+def check_migration_ledger(root: Path, result: Result) -> None:
+    """v7 迁移账本：登记行即欠账，截止日已过升 error（本批唯一的门禁级新增）。
+
+    未登记＝未启用迁移账本，不报——登记行缺失是常态而非缺陷。登记行存在
+    但字段残缺时给 warning 且不做到期判定（欠账状态不可判时不裁决，修复
+    登记形态后恢复）；严格形态 `- 规范迁移: <版本> 未清零;截止: YYYY-MM-DD`
+    在截止日前仅 warning（存量仓升级前的机械兜底口径），截止日已过升
+    error（fail-closed，与 legacy 迁移截止同形）。登记了账本但规范版本
+    < 7 时提示先升级版本——账本是规范 7 引入的登记形态。
+    """
+    path = root / "CONVENTIONS.md"
+    if not path.is_file():
+        return
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return
+    section = document_section_body(text, "AgentMap 本地参数")
+    if section is None:
+        return
+    today = date.today()
+    for line_match in MIGRATION_LEDGER_LOOSE_RE.finditer(section):
+        value = re.sub(r"<!--.*?-->", "", line_match.group(1)).strip()
+        match = MIGRATION_LEDGER_VALUE_RE.match(value)
+        if match:
+            version, deadline_text = match.group(1), match.group(2)
+            try:
+                deadline = date.fromisoformat(deadline_text)
+            except ValueError:
+                # 形如日期但不是合法日期（2026-13-01）：按残缺口径 warning。
+                result.warnings.append(
+                    f"CONVENTIONS.md: 规范迁移 截止日 {deadline_text} 不是有效日期, "
+                    'expect "- 规范迁移: <版本> 未清零;截止: YYYY-MM-DD"'
+                )
+                result.migration_ledger.append((value, "残缺", ""))
+                continue
+            if today > deadline:
+                result.errors.append(
+                    f"CONVENTIONS.md: 规范迁移 {version} 欠账到期未清零 (截止 {deadline_text} 已过) — "
+                    "完成迁移并删除登记行,或与东家商定新截止日重新登记"
+                )
+            else:
+                result.warnings.append(
+                    f"CONVENTIONS.md: 规范迁移 {version} 未清零,截止 {deadline_text}"
+                    f" (剩余 {(deadline - today).days + 1} 天)"
+                )
+            result.migration_ledger.append((version, "未清零", deadline_text))
+            continue
+        # 残缺登记：一条 warning 说明期望形态并整行重登记；欠账状态不可判
+        # 时不做到期裁决（报告行以 残缺 显示，修复登记行后恢复判定）。
+        result.warnings.append(
+            'CONVENTIONS.md: 规范迁移 登记形态无法解析, expect "- 规范迁移: <版本> 未清零;截止: YYYY-MM-DD"'
+        )
+        result.migration_ledger.append((value, "残缺", ""))
+    if result.migration_ledger:
+        version = agentmap_spec_version(root, result)
+        if version < 7:
+            result.warnings.append(
+                f"CONVENTIONS.md: 规范迁移 登记于规范版本 {version}(< 7), 先升级规范版本再启用迁移账本"
+            )
+
+
 def id_scan_files(root: Path) -> list[Path]:
     paths: list[Path] = []
     for canonical in SYSTEM_FILES:
@@ -2343,7 +2475,10 @@ def git_merge_head(root: Path) -> str | None:
 def task_paths_at_ref(root: Path, ref: str) -> list[Path]:
     try:
         names = subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", ref, "--", "tasks"],
+            [
+                "git", "-c", "core.quotepath=false",
+                "ls-tree", "-r", "--name-only", ref, "--", "tasks",
+            ],
             cwd=root,
             check=True,
             capture_output=True,
@@ -2715,7 +2850,7 @@ def code_review_start(root: Path, result: Result) -> int | None:
 
 
 def agentmap_spec_version(root: Path, result: Result) -> int:
-    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档，5 = +PRD 里程碑化（仪表区+契约区），6 = +方案研判闸口。
+    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档，5 = +PRD 里程碑化（仪表区+契约区），6 = +方案研判闸口，7 = +升级迁移账本（迁移欠账到期 fail-closed），8 = +证据契约（三标签收敛），9 = +并行会话红线（单执行会话与并行批次交接文书）。
 
     Result.spec_version 记录首读结果作为缓存，lint() 在 check_system_files
     之前调用一次，后续调用方直接命中缓存。
@@ -2740,14 +2875,26 @@ def agentmap_spec_version(root: Path, result: Result) -> int:
         )
         return 1
     version = int(match.group(1))
-    if version not in (1, 2, 3, 4, 5, 6):
-        result.errors.append("CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5 or 6")
+    if version not in (
+        1, 2, 3, 4, 5, 6, 7, V8_EVIDENCE_VERSION, V9_PARALLEL_SESSION_VERSION,
+    ):
+        result.errors.append(
+            "CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5, 6, 7, 8 or 9"
+        )
         return 1
     result.spec_version = version
     return version
 
 
 REVIEW_EVIDENCE_LABELS = ("审核方", "目的理解", "执行方式", "问题与修复", "复审结论")
+# v8 证据契约边界（登记规范版本 ≥ 此值生效）：语义行数自报退役、major
+# review 必填标签收敛为三标签；审核方与执行方式降为可选登记。
+V8_EVIDENCE_VERSION = 8
+REVIEW_EVIDENCE_LABELS_V8 = ("目的理解", "问题与修复", "复审结论")
+
+# v9 并行会话纪律边界（登记规范版本 ≥ 此值生效）：AGENTS「全局纪律」承载
+# 单执行会话红线与并行批次交接文书要求；属流程纪律，无 lint 机械校验。
+V9_PARALLEL_SESSION_VERSION = 9
 
 V4_REVIEW_LINE_RE = re.compile(
     r"^-[ \t]*review:[ \t]*([^｜\n]+)｜([^｜\n]+)｜(\S.*)$"
@@ -3168,6 +3315,29 @@ def tasks_present_at_upgrade(root: Path, result: Result, upgrade_sha: str) -> se
     return legacy
 
 
+def evidence_commit_hashes(evidence: str) -> list[str]:
+    """终态证据 `- commit:` 行里的引用哈希（每行取首个哈希形 token）。"""
+    hashes: list[str] = []
+    for line in re.findall(r"^-\s*commit:\s*(\S.*)$", evidence, re.MULTILINE):
+        match = re.match(r"[0-9a-f]{7,40}\b", line)
+        if match:
+            hashes.append(match.group(0))
+    return hashes
+
+
+def positions_in_order(order: list[str], hashes: list[str]) -> list[int]:
+    """引用哈希在 rev-list 序列中的下标（前缀双向匹配容忍短/全哈希）；
+    序列外的哈希跳过。"""
+    positions: list[int] = []
+    for cited in hashes:
+        sha_value = cited.strip()
+        for index, sha in enumerate(order):
+            if sha.startswith(sha_value) or sha_value.startswith(sha):
+                positions.append(index)
+                break
+    return positions
+
+
 def task_commit_span(root: Path, task_id: str, evidence: str) -> tuple[str, str] | None:
     """(base, close) for a task: parent of its earliest cited commit, and that
     commit itself.
@@ -3176,23 +3346,14 @@ def task_commit_span(root: Path, task_id: str, evidence: str) -> tuple[str, str]
     自身 name 下的改动，到关闭提交为止），窗口区间是 `close..HEAD`（复位
     点收尾提交之后的新增）。返回 None 表示证据里没有可解析的 commit。
     """
-    hashes = []
-    for line in re.findall(r"^-\s*commit:\s*(\S.*)$", evidence, re.MULTILINE):
-        match = re.match(r"[0-9a-f]{7,40}\b", line)
-        if match:
-            hashes.append(match.group(0))
+    hashes = evidence_commit_hashes(evidence)
     if not hashes:
         return None
     try:
         order = run_git(root, ["rev-list", "--topo-order", "--reverse", "HEAD"]).split()
     except GitCommandError:
         return None
-    positions = []
-    for cited in hashes:
-        for index, sha in enumerate(order):
-            if sha.startswith(cited) or cited.startswith(sha):
-                positions.append(index)
-                break
+    positions = positions_in_order(order, hashes)
     if not positions:
         return None
     earliest = order[min(positions)]
@@ -3201,6 +3362,42 @@ def task_commit_span(root: Path, task_id: str, evidence: str) -> tuple[str, str]
     except GitCommandError:
         base = EMPTY_TREE_SHA  # root commit: window starts from the empty tree
     return base, earliest
+
+
+def reset_window_close(root: Path, task_id: str, evidence: str) -> str | None:
+    """累计审计复位点的窗口 close：复位点登记提交（首选）或引用退路，取最晚者。
+
+    首选 `git log -S "累计审计复位点: <task_id>" -- CONVENTIONS.md` 的最新
+    命中＝登记（收口）提交本身：登记行在场时，该子串出现次数的最后一次
+    变更就是登记。仅凭提交正文 grep 会把「后继提交在行文中提及旧 T-ID」
+    也算作基线右移，真实后继提交因此逃出下一窗口（mailai 实测窗口被正文
+    提及推成 0，欠审计）；登记行在场时正文提及不得移动基线。pickaxe 无
+    命中（登记行格式变体、行已换代或 staged 收口）时退回「正文引用该
+    task 的提交 ∪ 证据引用提交」的最晚者——存量仓退化路径；该退路在
+    格式变体叠加后继正文提及时仍会把基线右移（欠审计方向），是格式受限
+    下的次优近似而非保守保证。两者皆无返回 None（fail-closed 上抛，与
+    task_commit_span 的 None 语义一致）。
+    """
+    cited = evidence_commit_hashes(evidence)
+    order = run_git(root, ["rev-list", "--topo-order", "HEAD"]).split()
+    registered = run_git(
+        root,
+        ["log", "--format=%H", f"-S累计审计复位点: {task_id}", "--", "CONVENTIONS.md"],
+    ).splitlines()
+    registered_positions = positions_in_order(order, registered)
+    if registered_positions:
+        # 登记提交在场：基线钉在登记本身，正文提及不右移。
+        return order[min(registered_positions)]
+    positions: list[int] = []
+    for group in (
+        run_git(root, ["log", "--format=%H", f"--grep={task_id}"]).splitlines(),
+        cited,
+    ):
+        positions.extend(positions_in_order(order, group))
+    if not positions:
+        return None
+    # rev-list 无 --reverse 时输出新在先：最晚引用者取最小下标。
+    return order[min(positions)]
 
 
 def agentmap_v4_params(root: Path, result: Result) -> dict | None:
@@ -3231,19 +3428,14 @@ def agentmap_v4_params(root: Path, result: Result) -> dict | None:
         return default
 
     def glob_list(key: str, required: bool) -> list[str]:
-        match = re.search(rf"^-\s*{key}:\s*(\S.*)$", text, re.MULTILINE)
-        if not match:
+        values = convention_globs_from_text(
+            text, key, separator=",", handle_none=True, strip_quotes=True
+        )
+        if values is None:
             if required:
                 result.errors.append(f"CONVENTIONS.md: missing {key} (v4 registers it)")
             return []
-        value = HTML_COMMENT_RE.sub("", match.group(1)).strip()
-        if value.startswith("无"):
-            return []
-        return [
-            item.strip().strip("`").strip("'").strip('"')
-            for item in value.split(",")
-            if item.strip().strip("`").strip("'").strip('"')
-        ]
+        return values
 
     params = {
         "line_threshold": number("语义行阈值", 50),
@@ -3378,15 +3570,15 @@ def check_v4_tiering(root: Path, result: Result) -> None:
 
     # 窗口语义行：复位点（或起点）以来全部提交的逐提交累计。
     if reset_valid and reset_task is not None:
-        reset_span = task_commit_span(root, reset_task, task_evidence.get(reset_task, ""))
-        if reset_span is None:
+        reset_close = reset_window_close(root, reset_task, task_evidence.get(reset_task, ""))
+        if reset_close is None:
             result.errors.append(
                 f"CONVENTIONS.md: 累计审计复位点 {reset_task} has no resolvable commit"
             )
             base = EMPTY_TREE_SHA
         else:
             # 窗口自复位点收尾提交之后起算（close..HEAD 不含收尾提交本身）。
-            base = reset_span[1]
+            base = reset_close
     else:
         base = spec_version_origin_commit(root, result)
         if base is None:
@@ -3511,7 +3703,12 @@ def check_v4_tiering(root: Path, result: Result) -> None:
         declared_lines = re.search(
             r"^-\s*语义行数:\s*(\d+)\s*$", evidence, re.MULTILINE
         )
-        if declared_lines is None:
+        if result.spec_version >= V8_EVIDENCE_VERSION:
+            # v8 退役自报：终态 task 不可变，历史自报行成为惰性描述文字，
+            # 不要求也不比对；定档抽查由上方 declared 风险等级 vs 实测
+            # 行数的档位一致性检查继续承载。
+            pass
+        elif declared_lines is None:
             # v3 存量 task（升级边界前）无 v4 证据行纪律，不追溯。直升
             # 升级链（历史从未登记值 ≥4）的存量 task 同理，见
             # task_predates_v4_evidence_boundary。
@@ -3589,7 +3786,12 @@ def check_review_evidence(root: Path, result: Result, path: Path, evidence: str)
             break
         lines.append(line)
     section = "\n".join(lines)
-    for label in REVIEW_EVIDENCE_LABELS:
+    labels = (
+        REVIEW_EVIDENCE_LABELS_V8
+        if result.spec_version >= V8_EVIDENCE_VERSION
+        else REVIEW_EVIDENCE_LABELS
+    )
+    for label in labels:
         if not re.search(rf"^[ \t]+-[ \t]*{re.escape(label)}:[ \t]*\S", section, re.MULTILINE):
             result.errors.append(
                 f"{path.relative_to(root)}: review evidence needs {label}"
@@ -4007,6 +4209,39 @@ def parse_frontmatter_text(text: str) -> dict[str, str]:
     return fields
 
 
+def convention_globs_from_text(
+    text: str,
+    key: str,
+    separator: str = ";",
+    *,
+    handle_none: bool = False,
+    strip_quotes: bool = False,
+) -> list[str] | None:
+    """CONVENTIONS 登记行的 glob 列表解析（三处参数解析的单一实现）。
+
+    登记行允许行尾 HTML 注释（模板与升级登记都带说明），解析前剥掉；
+    `handle_none` 时值为「无」的登记值视为未登记（逐值跳过）；`strip_quotes`
+    剥值项首尾的反引号与引号（语义行排除路径/关键路径族用）。返回 None
+    表示登记行缺失，由调用方定夺 required 报错或静默空表。
+    """
+    matches = re.findall(rf"^-\s*{key}:\s*(\S.*)$", text, re.MULTILINE)
+    if not matches:
+        return None
+    patterns: list[str] = []
+    for value in matches:
+        cleaned = re.sub(r"<!--.*?-->", "", value).strip()
+        for item in cleaned.split(separator):
+            item = item.strip()
+            if strip_quotes:
+                item = item.strip("`").strip("'").strip('"')
+            if handle_none and item == "无":
+                # 「无」为未登记标记，逐项跳过（与其他值混写时收其余值）。
+                continue
+            if item:
+                patterns.append(item)
+    return patterns
+
+
 def test_anchor_patterns(root: Path, result: Result) -> list[str]:
     path = root / "CONVENTIONS.md"
     if not path.is_file():
@@ -4014,10 +4249,25 @@ def test_anchor_patterns(root: Path, result: Result) -> list[str]:
     text = read_text_checked(path, result, "CONVENTIONS.md")
     if text is None:
         return []
-    values = re.findall(
-        r"^-\s*测试锚点路径:\s*(.+?)\s*$", text, re.MULTILINE
+    values = convention_globs_from_text(text, "测试锚点路径", separator=";")
+    return values if values is not None else []
+
+
+def test_anchor_exclusions(root: Path, result: Result) -> list[str]:
+    """CONVENTIONS 本地参数「测试锚点排除路径」：命中的文件不参与测试锚点扫
+    描与契约覆盖语料。镜像目录、申报材料副本等复制体携带与正式测试相同的锚
+    点文本，会把验收点与契约伪造成已覆盖；登记 glob 列表后整体排除。写法与
+    「测试锚点路径」一致：分号分隔；值为「无」表示未登记。"""
+    path = root / "CONVENTIONS.md"
+    if not path.is_file():
+        return []
+    text = read_text_checked(path, result, "CONVENTIONS.md")
+    if text is None:
+        return []
+    values = convention_globs_from_text(
+        text, "测试锚点排除路径", separator=";", handle_none=True
     )
-    return [pattern.strip() for value in values for pattern in value.split(";") if pattern.strip()]
+    return values if values is not None else []
 
 
 def is_test_file(path: Path, patterns: list[str]) -> bool:
@@ -4065,11 +4315,18 @@ def tracked_candidates(root: Path) -> list[Path]:
 def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
     anchored: set[str] = set()
     legacy_anchored: dict[Path, set[str]] = {}
+    # AC-ID → 锚点它的测试文件（追溯矩阵的锚点文件引用列），纯增记录，
+    # 不参与既有判定。
+    anchor_files: dict[str, set[str]] = {}
     candidates = tracked_candidates(root)
     patterns = test_anchor_patterns(root, result)
+    exclusions = test_anchor_exclusions(root, result)
     for relative in candidates:
         path = root / relative
         if not path.is_file():
+            continue
+        if any(fnmatchcase(relative.as_posix(), pattern) for pattern in exclusions):
+            # 测试锚点排除路径：镜像/申报副本不参与锚点扫描，防止复制体伪造覆盖。
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -4077,7 +4334,10 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
             continue
         anchor_text = test_anchor_text(relative, text, patterns)
         if anchor_text is not None:
-            anchored.update(AC_ID_RE.findall(anchor_text))
+            hits = set(AC_ID_RE.findall(anchor_text))
+            anchored.update(hits)
+            for ac_id in hits:
+                anchor_files.setdefault(ac_id, set()).add(relative.as_posix())
             legacy = set(LEGACY_R_ID_RE.findall(anchor_text))
             if legacy:
                 legacy_anchored[relative] = legacy
@@ -4100,6 +4360,7 @@ def check_test_anchors(root: Path, result: Result, strict: bool) -> None:
     result.test_anchored = {item.split("/", 1)[0] for item in anchored & acceptance_ids}
     result.acceptance_criteria = acceptance_ids
     result.test_anchored_acceptance_criteria = anchored & acceptance_ids
+    result.test_anchor_files = anchor_files
     missing = sorted(acceptance_ids - anchored)
     unknown = sorted(anchored - acceptance_ids)
     target = result.errors if strict else result.warnings
@@ -4170,6 +4431,162 @@ def check_code_anchors(root: Path, result: Result, enabled: bool) -> None:
                 result.errors.append(
                     f"{relative.as_posix()}: code anchor references missing task {tid}"
                 )
+
+
+def solution_contract_items(text: str | None) -> list[tuple[str, str]] | None:
+    """Extract contract items (kind, key) from the SOLUTION 产品契约 body.
+
+    端点取自表格行或独立行（`GET /v1/items` 形态，单元格与整行都试），
+    错误码取自「稳定错误码」小节围栏内以标识符开头的行。项目自写契约
+    形态有差异，解析保持宽容：识别不了的行静默跳过，识别到的条目才进
+    覆盖对照。None ＝ 无「产品契约」节，由报告端输出「未找到产品契约」。
+    """
+    if text is None:
+        return None
+    body = document_section_body(text, "产品契约")
+    if body is None:
+        return None
+    items: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, key: str) -> None:
+        pair = (kind, key)
+        if pair not in seen:
+            seen.add(pair)
+            items.append(pair)
+
+    inside_fence = False
+    error_zone = False
+    error_level = 0
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            inside_fence = not inside_fence
+            continue
+        if not inside_fence:
+            heading_match = re.match(r"^(#{1,6})\s+", line)
+            if heading_match:
+                if "稳定错误码" in stripped:
+                    error_zone = True
+                    error_level = len(heading_match.group(1))
+                elif error_zone and len(heading_match.group(1)) <= error_level:
+                    # 同级或更高级的小节标题结束错误码清单的收集范围。
+                    error_zone = False
+                continue
+            # 端点行：表格行拆单元格、纯文本行整行、列表项加内联代码三种
+            # 形态同权重。列表项形态（`- \`POST /v1/x\`: 说明`）先剥列表
+            # 标记与行首反引号再匹配——产品契约以列表书写的仓此前被扫描
+            # 器整节放过，覆盖对照永久空转。
+            cells = (
+                [cell.strip() for cell in stripped.strip("|").split("|")]
+                if stripped.startswith("|")
+                else [stripped]
+            )
+            for cell in cells:
+                candidate = re.sub(r"^[-*]\s+", "", cell).lstrip("`")
+                endpoint_match = REST_ENDPOINT_RE.match(candidate)
+                if endpoint_match:
+                    add("端点", endpoint_match.group(1) + " " + endpoint_match.group(2))
+            continue
+        if error_zone:
+            token_match = ERROR_CODE_TOKEN_RE.match(stripped)
+            if token_match:
+                token = token_match.group(0)
+                # 长度与形态过滤：纯说明行的英文首词（The/Note）不是错误码。
+                if len(token) >= 3 and ("_" in token or "-" in token or token.isupper()):
+                    add("错误码", token)
+    return items
+
+
+def contract_test_corpus(root: Path) -> list[tuple[str, str]]:
+    """仓库测试文件语料：(相对路径, 文本)。发现口径与 test_anchor_patterns
+    一致（CONVENTIONS 测试锚点路径优先，缺登记回落到命名启发式）；
+    「测试锚点排除路径」命中的文件同样不计入语料。"""
+    shared_result = Result()
+    patterns = test_anchor_patterns(root, shared_result)
+    exclusions = test_anchor_exclusions(root, shared_result)
+    corpus: list[tuple[str, str]] = []
+    for relative in tracked_candidates(root):
+        path = root / relative
+        if not path.is_file() or not is_test_file(relative, patterns):
+            continue
+        if any(fnmatchcase(relative.as_posix(), pattern) for pattern in exclusions):
+            # 测试锚点排除路径：镜像/申报副本不计入契约覆盖语料。
+            continue
+        try:
+            corpus.append((relative.as_posix(), path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return corpus
+
+
+def contract_coverage_rows(
+    items: list[tuple[str, str]], corpus: list[tuple[str, str]]
+) -> list[tuple[str, str, bool, tuple[str, ...]]]:
+    """对每个契约条目在测试文件文本中查出现；出现于 ≥1 个测试文件即 covered。
+
+    端点按路径子串查（查去前导斜杠形态即可同时命中 `/v1/items` 与
+    `v1/items`——客户端路由表常省略前导斜杠）；错误码用 [0-9A-Za-z_-]
+    界定查找，防止 E_SEARCH 被更长的 E_SEARCH_NOT_FOUND 前缀吞没造成假覆盖。
+    """
+    rows: list[tuple[str, str, bool, tuple[str, ...]]] = []
+    for kind, key in items:
+        files: list[str] = []
+        if kind == "端点":
+            path = key.split(None, 1)[1]
+            needle = path[1:] if path.startswith("/") else path
+            for name, file_text in corpus:
+                if needle in file_text:
+                    files.append(name)
+        else:
+            pattern = re.compile(rf"(?<![0-9A-Za-z_-]){re.escape(key)}(?![0-9A-Za-z_-])")
+            for name, file_text in corpus:
+                if pattern.search(file_text):
+                    files.append(name)
+        rows.append((kind, key, bool(files), tuple(files)))
+    return rows
+
+
+def contract_coverage_scan(
+    root: Path,
+) -> list[tuple[str, str, bool, tuple[str, ...]]] | None:
+    """契约覆盖扫描：SOLUTION 无「产品契约」节（或不可读）时返回 None。
+
+    报告级对照——本函数永不产生 error/warning，也不影响退出码；契约缺位
+    是文档现状，由报告端输出「未找到产品契约」，不是裁决对象。
+    """
+    solution_path = resolve_map_file(root, "SOLUTION.md")
+    text: str | None = None
+    if solution_path is not None and solution_path.is_file():
+        try:
+            text = normalize_text(solution_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            text = None
+    items = solution_contract_items(text)
+    if items is None:
+        return None
+    return contract_coverage_rows(items, contract_test_corpus(root))
+
+
+def check_contract_coverage(root: Path, result: Result) -> None:
+    """v7 契约覆盖对照：把扫描结果挂到 Result，供 --report 渲染。"""
+    result.contract_coverage = contract_coverage_scan(root)
+
+
+def format_contract_coverage(
+    entries: list[tuple[str, str, bool, tuple[str, ...]]],
+) -> list[str]:
+    """契约覆盖段行文本（不带段前缀），--report 与 --doctor 共用同一渲染。"""
+    endpoints = [row for row in entries if row[0] == "端点"]
+    codes = [row for row in entries if row[0] == "错误码"]
+    lines = [
+        f"端点 {len(endpoints)} 项(covered {sum(1 for row in endpoints if row[2])}),"
+        f"错误码 {len(codes)} 项(covered {sum(1 for row in codes if row[2])})"
+    ]
+    for kind, key, covered, files in entries:
+        detail = f" ({' '.join(files)})" if files else ""
+        lines.append(f"{kind} {key}: {'covered' if covered else 'uncovered'}{detail}")
+    return lines
 
 
 def git_index_mode(root: Path, relative: Path) -> int | None:
@@ -4689,6 +5106,7 @@ def strict_test_anchors(root: Path, result: Result, forced: bool) -> bool:
 def lint(root: Path, strict_tests: bool = False, staged: bool = False,
          pre_push: bool = False) -> Result:
     result = Result()
+    result.root = root
     result.staged = staged
     result.pre_push = pre_push
     changed = git_changed_paths(root, result)
@@ -4722,6 +5140,7 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
     check_revision_discipline(root, result, changed)
     check_traceability(root, result)
     check_core_document_budget(root, result)
+    check_migration_ledger(root, result)
     check_tasks(root, result, changed)
     check_dependency_decisions(root, result, changed)
     check_v4_tiering(root, result)
@@ -4729,11 +5148,76 @@ def lint(root: Path, strict_tests: bool = False, staged: bool = False,
     check_archive_layers(root, result)
     strict_anchor_mode = strict_test_anchors(root, result, strict_tests)
     check_test_anchors(root, result, strict_anchor_mode)
+    check_contract_coverage(root, result)
     check_code_anchors(root, result, code_anchors_enabled(root, result))
     check_milestones(root, result, strict_anchor_mode)
     check_hooks(root, result)
     check_runtime_contract(root, result)
     return result
+
+
+def print_traceability_matrix(result: Result) -> None:
+    """v7 追溯矩阵：每个 R-gg-nnn 一行（AC 总数、有锚点数、锚点文件引用）。
+
+    复用 check_test_anchors 已解析的 test_anchored 数据；无锚点的 AC 以
+    missing 标出，锚点文件按相对路径空格分隔（多 AC 共用同一测试文件时
+    去重）。按 R-ID 升序输出。
+    """
+    if not result.requirements:
+        return
+    groups: dict[str, list[str]] = {}
+    for ac in result.acceptance_criteria:
+        groups.setdefault(ac.split("/", 1)[0], []).append(ac)
+    for rid in sorted(result.requirements):
+        acs = sorted(groups.get(rid, ()))
+        anchored = [ac for ac in acs if ac in result.test_anchored_acceptance_criteria]
+        missing = [
+            ac.split("/", 1)[1] for ac in acs if ac not in result.test_anchored_acceptance_criteria
+        ]
+        files: set[str] = set()
+        for ac in acs:
+            files.update(result.test_anchor_files.get(ac, ()))
+        line = f"AgentMap 追溯矩阵: {rid} AC={len(acs)} 锚点={len(anchored)}"
+        if missing:
+            line += " missing=" + ",".join(missing)
+        line += " 测试锚点=" + (" ".join(sorted(files)) if files else "-")
+        print(line)
+
+
+def print_contract_coverage(
+    entries: list[tuple[str, str, bool, tuple[str, ...]]] | None,
+) -> None:
+    if entries is None:
+        print("AgentMap 契约覆盖: 未找到产品契约(SOLUTION.md 无「产品契约」节)")
+        return
+    for line in format_contract_coverage(entries):
+        print(f"AgentMap 契约覆盖: {line}")
+
+
+def print_migration_ledger(entries: list[tuple[str, str, str]]) -> None:
+    """迁移进度汇总：无登记也明示（与 --check-all 的「迁移: 无登记」同口径）。"""
+    if not entries:
+        print("AgentMap 迁移: 无登记")
+        return
+    today = date.today()
+    for version, status, deadline in entries:
+        if status != "未清零":
+            print(f"AgentMap 迁移: 登记残缺({version})")
+            continue
+        try:
+            overdue = (today - date.fromisoformat(deadline)).days
+        except ValueError:
+            overdue = 0
+        if overdue > 0:
+            print(
+                f"AgentMap 迁移: 规范 {version} 未清零,截止 {deadline},"
+                f"已到期 {overdue} 天(欠账到期 lint 已报 error)"
+            )
+        else:
+            print(
+                f"AgentMap 迁移: 规范 {version} 未清零,截止 {deadline},"
+                f"剩余 {max(0, (date.fromisoformat(deadline) - today).days + 1)} 天"
+            )
 
 
 def print_result(result: Result, report: bool) -> None:
@@ -4779,6 +5263,9 @@ def print_result(result: Result, report: bool) -> None:
                 else:
                     state = "规划中"
                 print(f"AgentMap 里程碑: {mid} {name} {done}/{total} {state}")
+        print_traceability_matrix(result)
+        print_contract_coverage(result.contract_coverage)
+        print_migration_ledger(result.migration_ledger)
     if result.warnings:
         print("agentmap lint warnings:")
         for warning in result.warnings:
@@ -6475,6 +6962,72 @@ def doctor_task_staleness(root: Path) -> list[str]:
     return lines
 
 
+DOCTOR_CODE_LOCATION_LIMIT = DOCTOR_DUPLICATE_LIMIT
+
+
+def doctor_code_locations(root: Path) -> list[str]:
+    """A6: SOLUTION 代码位置引用（file:line / file:line-line）可达性。
+
+    只描述不裁决：文件存在性与行号范围逐条核对，不可达/越界条目计数并
+    列出（封顶显示，附 SOLUTION 行号便于回查）。SOLUTION 是唯一扫描对象
+    （沿用 DOCTOR_LIVING_DOCS 的豁免口径：AGENTS 哈希钉死、RATIONALE 是
+    不可变档案）。围栏内容跳过——图与示例块里的 path:line 是示意图材，
+    不是位置引用。
+    """
+    solution = root / "SOLUTION.md"
+    if not solution.is_file():
+        return []
+    try:
+        text = normalize_text(solution.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+    problems: list[tuple[int, str, str]] = []
+    total = 0
+    inside_fence = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("```"):
+            inside_fence = not inside_fence
+            continue
+        if inside_fence:
+            # 围栏内是示例与图表，不是仓库现状的引用；行号计数随之跳过，
+            # 产出里的 SOLUTION 行号始终是原文行号。
+            continue
+        for match in DOCTOR_CODE_LOCATION_RE.finditer(line):
+            total += 1
+            relative, start_text, end_text = match.group(1), match.group(2), match.group(3)
+            reference = match.group(0)
+            if ".." in relative.split("/"):
+                problems.append((number, reference, "路径越出仓库(引用须为仓库根相对路径)"))
+                continue
+            target = root / relative
+            if not target.is_file():
+                reason = "文件不存在" if not target.exists() else "引用指向目录而非文件"
+                problems.append((number, reference, reason))
+                continue
+            try:
+                line_count = len(target.read_text(encoding="utf-8").splitlines())
+            except (OSError, UnicodeDecodeError):
+                problems.append((number, reference, "文件不可读"))
+                continue
+            start = int(start_text)
+            end = int(end_text) if end_text else start
+            if start < 1 or end < start:
+                problems.append((number, reference, f"行号区间错形({start}-{end})"))
+            elif end > line_count:
+                problems.append((number, reference, f"行号越界(文件当前 {line_count} 行)"))
+    if not problems:
+        return []
+    lines: list[str] = []
+    for number, reference, reason in problems[:DOCTOR_CODE_LOCATION_LIMIT]:
+        lines.append(f"[A6 代码位置] SOLUTION.md:{number} {reference} {reason}")
+    if len(problems) > DOCTOR_CODE_LOCATION_LIMIT:
+        lines.append(f"(另有 {len(problems) - DOCTOR_CODE_LOCATION_LIMIT} 处未列出)")
+    lines.append(
+        f"(A6 仅计数供人判:SOLUTION.md 代码位置引用共 {total} 处,可达 {total - len(problems)} 处;不参与门禁)"
+    )
+    return lines
+
+
 def run_doctor(root: Path, out: IO[str]) -> int:
     """Document-quality checkup: measurable decay signals, report-only.
 
@@ -6518,6 +7071,14 @@ def run_doctor(root: Path, out: IO[str]) -> int:
         print(f"  {line}", file=out)
     for line in doctor_task_staleness(root):
         print(f"  {line}", file=out)
+    for line in doctor_code_locations(root):
+        print(f"  {line}", file=out)
+    contract_entries = contract_coverage_scan(root)
+    if contract_entries is None:
+        print("  [契约覆盖] 未找到产品契约(SOLUTION.md 无「产品契约」节)", file=out)
+    else:
+        for line in format_contract_coverage(contract_entries):
+            print(f"  [契约覆盖] {line}", file=out)
     return 0
 
 
