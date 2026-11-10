@@ -24,7 +24,7 @@ owner: agent 主笔，项目属主审批
 
 ## AgentMap 本地参数
 
-- agentmap 规范版本: 9
+- agentmap 规范版本: 10
 - 方案研判: 关闭 <!-- 方案研判闸口：开启后 major 档 task 立项前须按研判标准向东家展示分叉点清单并停等确认；lint 校验 major 档 task 收敛方案含分叉点条目或「无分叉点:」行，依赖声明文件变更须有含「依赖决策:」行的 task 承接 -->
 - 语义行阈值: 50 <!-- 代码审核分档阈值：task 的语义行数（剥离注释与空行后的 diff 增删合计）≤此值为 minor 档 -->
 - 语义行排除路径: `*-lock.*`, `yarn.lock`, `*.min.js`, `*.min.css`, `dist/`, `build/`, `*.snap`, `*.pb.go`, `*_pb2.py` <!-- 语义行数不计入这些 lockfile 与生成物路径（glob） -->；另约定：系统托管文件（AGENTS.md、CONVENTIONS.md、tools/agentmap_lint.py、tools/agentmap_validate_commit_msg.py、.githooks/**）免计语义行（内置豁免，防升级提交自触发累计审计窗口；见 C-035）

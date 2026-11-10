@@ -386,7 +386,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "d44a34578d6d1445f74b859de9580db40c37e34106be67ad9cf0fede699b602f",
+    "AGENTS.md": "df94aba995d34f6cda190d520a280a16316bd3ad9b520ff472e22219fa380056",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
@@ -396,6 +396,13 @@ CANONICAL_FILES_SHA256 = {
     ".githooks/post-rewrite": "ffb9059f87ee33770c6674416dd3b8caa1b3de06514735758f5beb7a38342561",
     "tools/agentmap_rewrite_fix.py": "c14fe0bbe66acbc558077853260266219ba47e1fbd107cf5918a079329e83d61",
 }
+# 累计审计 task 的类型行：裸行 `类型: 累计审计` 与仓内登记的括注后缀
+# 形态 `类型: 累计审计（免风险分级，证据规格按 major 写死）` 都是合法
+# 登记；匹配必须覆盖两种形态，否则豁免对存量 task 静默失效（T-158）。
+# 所有调用点必须经由本常量，禁止就地另写类型行正则（一致性由测试锚定）。
+CUMULATIVE_AUDIT_TYPE_RE = re.compile(
+    r"^[*-]?\s*类型:\s*累计审计(?:[（(][^）)\n]*[）)])?\s*$", re.MULTILINE
+)
 HOOK_NAME_PATTERN = re.compile(r"^(?P<order>[0-9]{2})-[a-z0-9][a-z0-9-]*\.sh$")
 # Same CJK calibration as the id regexes below: \b is blind when CJK touches
 # the ASCII token ("评估TODO项" would evade \bTODO\b), so the lookaround set
@@ -2638,7 +2645,7 @@ def check_history_transition(root: Path, result: Result, parent: str, commit: st
     for path, text in new_tasks.items():
         if task_state(text) not in TERMINAL_STATES or path in old_tasks:
             continue
-        if re.search(r"^[*-]?\s*类型:\s*累计审计\s*$", text, re.MULTILINE):
+        if CUMULATIVE_AUDIT_TYPE_RE.search(text):
             # 累计审计 task 立项与收口同笔是合法形态：审计由复位点触发、
             # 单笔承载窗口全量双轴与复位点更新，无独立的 active 期。
             continue
@@ -2877,9 +2884,10 @@ def agentmap_spec_version(root: Path, result: Result) -> int:
     version = int(match.group(1))
     if version not in (
         1, 2, 3, 4, 5, 6, 7, V8_EVIDENCE_VERSION, V9_PARALLEL_SESSION_VERSION,
+        V10_RATIONALE_PRODUCT_SCOPE_VERSION,
     ):
         result.errors.append(
-            "CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5, 6, 7, 8 or 9"
+            "CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5, 6, 7, 8, 9 or 10"
         )
         return 1
     result.spec_version = version
@@ -2895,6 +2903,13 @@ REVIEW_EVIDENCE_LABELS_V8 = ("目的理解", "问题与修复", "复审结论")
 # v9 并行会话纪律边界（登记规范版本 ≥ 此值生效）：AGENTS「全局纪律」承载
 # 单执行会话红线与并行批次交接文书要求；属流程纪律，无 lint 机械校验。
 V9_PARALLEL_SESSION_VERSION = 9
+
+# v10 决策档案与里程碑分级边界（登记规范版本 ≥ 此值生效）：RATIONALE 收窄为
+# 产品决策档案（判门槛域约束：改动落在 PRD/SOLUTION/DOMAIN 才可立条，产品决策
+# 锚定产品层 ID 不锚定里程碑号）；未实施里程碑（仅方向句）可改号、改名、重排与
+# 解散且编号可复用，已实现里程碑（达成，全勾）整节冻结；属写作与流程纪律，
+# 无 lint 机械校验。
+V10_RATIONALE_PRODUCT_SCOPE_VERSION = 10
 
 V4_REVIEW_LINE_RE = re.compile(
     r"^-[ \t]*review:[ \t]*([^｜\n]+)｜([^｜\n]+)｜(\S.*)$"
@@ -3541,7 +3556,7 @@ def check_v4_tiering(root: Path, result: Result) -> None:
         risk_match = re.search(r"^风险等级:\s*(minor|major)\s*$", text, re.MULTILINE)
         if risk_match:
             task_risk[task_id] = risk_match.group(1)
-        if re.search(r"^[*-]?\s*类型:\s*累计审计\s*$", text, re.MULTILINE):
+        if CUMULATIVE_AUDIT_TYPE_RE.search(text):
             audit_tasks.add(task_id)
         if task_states[task_id] == "completed":
             terminal = re.search(r"^## 终态与证据\s*$([\s\S]*)", text, re.MULTILINE)
@@ -4000,9 +4015,7 @@ def check_tasks(root: Path, result: Result, changed: set[str]) -> None:
                 allowed_risk = "micro|standard|high"
             else:
                 allowed_risk = "standard|high"
-            is_audit = spec_version >= 4 and bool(
-                re.search(r"^类型:\s*累计审计\s*$", text, re.MULTILINE)
-            )
+            is_audit = spec_version >= 4 and bool(CUMULATIVE_AUDIT_TYPE_RE.search(text))
             risk = re.findall(rf"^风险等级:\s*({allowed_risk})\s*$", text, re.MULTILINE)
             if is_audit:
                 # 累计审计 task 免分档（无风险等级行），但证据规格按
