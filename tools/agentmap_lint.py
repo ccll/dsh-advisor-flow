@@ -386,7 +386,7 @@ IGNORED_PARTS = {
     "tmp",
 }
 CANONICAL_FILES_SHA256 = {
-    "AGENTS.md": "df94aba995d34f6cda190d520a280a16316bd3ad9b520ff472e22219fa380056",
+    "AGENTS.md": "57759e5ace6f3cb6d010260117088e1368da7da9f989caaebd0d85a888dcc6bb",
     ".githooks/commit-msg": "8fdca988a521f36cd012041217e14ab9d1847de5bd12ab81f2d2904c645b89e0",
     ".githooks/pre-commit": "83cfb74e7792ed1cf1264105941249d06a37872455faf83297220eb4268325fa",
     ".githooks/pre-push": "d56ca3ca801088cc4d58f11d53d33a646710389bcb7937eff091c3d2ea7b0e99",
@@ -2857,7 +2857,7 @@ def code_review_start(root: Path, result: Result) -> int | None:
 
 
 def agentmap_spec_version(root: Path, result: Result) -> int:
-    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档，5 = +PRD 里程碑化（仪表区+契约区），6 = +方案研判闸口，7 = +升级迁移账本（迁移欠账到期 fail-closed），8 = +证据契约（三标签收敛），9 = +并行会话红线（单执行会话与并行批次交接文书）。
+    """CONVENTIONS 登记的规范版本：1 = 全量矩阵与独立审核，2 = micro/standard/high 分级，3 = +RATIONALE 目录化，4 = minor/major 两档语义行分档，5 = +PRD 里程碑化（仪表区+契约区），6 = +方案研判闸口，7 = +升级迁移账本（迁移欠账到期 fail-closed），8 = +证据契约（三标签收敛），9 = +并行会话红线（单执行会话与并行批次交接文书），10 = +决策档案产品化与里程碑冻结面收窄，11 = +测试先行纪律（行为变更先失败测试后实现）。
 
     Result.spec_version 记录首读结果作为缓存，lint() 在 check_system_files
     之前调用一次，后续调用方直接命中缓存。
@@ -2885,9 +2885,10 @@ def agentmap_spec_version(root: Path, result: Result) -> int:
     if version not in (
         1, 2, 3, 4, 5, 6, 7, V8_EVIDENCE_VERSION, V9_PARALLEL_SESSION_VERSION,
         V10_RATIONALE_PRODUCT_SCOPE_VERSION,
+        V11_TEST_FIRST_VERSION,
     ):
         result.errors.append(
-            "CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5, 6, 7, 8, 9 or 10"
+            "CONVENTIONS.md: agentmap 规范版本 must be 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 or 11"
         )
         return 1
     result.spec_version = version
@@ -2910,6 +2911,11 @@ V9_PARALLEL_SESSION_VERSION = 9
 # 解散且编号可复用，已实现里程碑（达成，全勾）整节冻结；属写作与流程纪律，
 # 无 lint 机械校验。
 V10_RATIONALE_PRODUCT_SCOPE_VERSION = 10
+
+# v11 测试先行纪律边界（登记规范版本 ≥ 此值生效）：行为变更先写锚定 R-ID/AC-ID
+# 的失败测试再写实现，缺陷修复先落复现测试并确认失败；属流程纪律，无 lint
+# 机械校验。
+V11_TEST_FIRST_VERSION = 11
 
 V4_REVIEW_LINE_RE = re.compile(
     r"^-[ \t]*review:[ \t]*([^｜\n]+)｜([^｜\n]+)｜(\S.*)$"
